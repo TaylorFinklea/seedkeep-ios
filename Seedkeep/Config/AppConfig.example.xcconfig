@@ -1,0 +1,19 @@
+// Example config — copy to AppConfig.local.xcconfig and wire it as the
+// base configuration for the Seedkeep target if you need per-developer
+// overrides. The committed defaults already build on a fresh checkout.
+
+// Bundle identifier. Override per developer to avoid sharing provisioning
+// profiles across machines.
+PRODUCT_BUNDLE_IDENTIFIER = com.example.seedkeep
+
+// Keychain service used for the Bearer-token store. Defaults to the bundle
+// id so different environments don't collide.
+KEYCHAIN_SERVICE = $(PRODUCT_BUNDLE_IDENTIFIER)
+
+// Default backend URL the app uses on first launch. The user can override
+// this in Settings; it's also overridable per build via xcconfig.
+//
+// IMPORTANT: xcconfig values that look like URLs need the leading `//`
+// escaped. We split scheme/host across two vars and recombine in code.
+SEEDKEEP_API_SCHEME = http
+SEEDKEEP_API_HOST = localhost:8787

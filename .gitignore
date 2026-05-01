@@ -1,0 +1,29 @@
+# Xcode
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+*.xcuserstate
+
+# XcodeGen — the .xcodeproj is generated from project.yml
+# Generated project file. Regenerate with `xcodegen generate`.
+Seedkeep.xcodeproj/
+
+# Local config overrides
+Config/AppConfig.local.xcconfig
+.dev.vars
+
+# Swift Package
+.build/
+Package.resolved
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp

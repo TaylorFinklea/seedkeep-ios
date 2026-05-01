@@ -1,0 +1,90 @@
+name: Seedkeep
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "18.0"
+  developmentLanguage: en
+  groupSortPosition: top
+  generateEmptyDirectories: true
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+configs:
+  Debug: debug
+  Release: release
+
+packages:
+  SeedkeepKit:
+    path: SeedkeepKit
+
+targets:
+  Seedkeep:
+    type: application
+    platform: iOS
+    sources:
+      - path: Seedkeep
+        excludes:
+          - "Config/AppConfig.local.xcconfig"
+    resources:
+      - Seedkeep/Resources
+    info:
+      path: Seedkeep/Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleDisplayName: Seedkeep
+        UILaunchScreen:
+          UIColorName: ""
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSCameraUsageDescription: "Seedkeep needs the camera to scan seed-packet barcodes and capture front/back photos for AI catalog extraction."
+        NSPhotoLibraryUsageDescription: "Seedkeep can attach photos from your library to seed entries."
+        # Surfaced from xcconfig — `AppEnvironment` reads these at launch.
+        SeedkeepAPIScheme: "$(SEEDKEEP_API_SCHEME)"
+        SeedkeepAPIHost: "$(SEEDKEEP_API_HOST)"
+        KeychainService: "$(KEYCHAIN_SERVICE)"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER)
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_EMIT_LOC_STRINGS: YES
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+    dependencies:
+      - package: SeedkeepKit
+    configFiles:
+      Debug: Seedkeep/Config/AppConfig.example.xcconfig
+      Release: Seedkeep/Config/AppConfig.example.xcconfig
+    entitlements:
+      path: Seedkeep/Seedkeep.entitlements
+      properties:
+        com.apple.developer.applesignin:
+          - Default
+        com.apple.developer.associated-domains:
+          - "applinks:seedkeep.app"
+
+  SeedkeepTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - SeedkeepTests
+    dependencies:
+      - target: Seedkeep
+      - package: SeedkeepKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER).tests
