@@ -183,6 +183,46 @@ public actor SeedkeepClient {
         try await getJSON(path: "/api/seeds/\(id)")
     }
 
+    /// Uploads a single packet photo for an existing seed. The server
+    /// stores the bytes in R2 and inserts a `seed_photos` row.
+    public func uploadSeedPhoto(
+        seedID: String,
+        role: PhotoRole,
+        jpegData: Data
+    ) async throws -> SeedPhotoDTO {
+        struct PhotoOne: Codable, Sendable { let photo: SeedPhotoDTO }
+
+        var components = URLComponents(
+            url: configuration.baseURL.appendingPathComponent("/api/seeds/\(seedID)/photos"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [.init(name: "role", value: role.rawValue)]
+        guard let url = components?.url else {
+            throw SeedkeepError(code: "bad_url", message: "Could not construct upload URL")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = jpegData
+        let res: PhotoOne = try await perform(req)
+        return res.photo
+    }
+
+    /// Fetches a single photo's binary content. The Worker streams from R2;
+    /// the response body is the raw JPEG bytes (no envelope).
+    public func fetchSeedPhotoData(photoID: String) async throws -> Data {
+        let url = configuration.baseURL.appendingPathComponent("/api/photos/\(photoID)")
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await configuration.session.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw SeedkeepError(code: "fetch_failed", message: "Could not fetch photo bytes")
+        }
+        return data
+    }
+
     public struct CreateSeedInput: Codable, Sendable {
         public var id: String?
         public var catalog_id: String?

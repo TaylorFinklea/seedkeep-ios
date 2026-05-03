@@ -93,22 +93,77 @@ public final class SyncEngine {
             sortBy: [SortDescriptor(\.createdAt, order: .forward)]
         )
         let pending = try context.fetch(descriptor)
+        let now = Self.nowMs()
         for write in pending {
+            // Skip dead-lettered rows and rows whose backoff window
+            // hasn't elapsed.
+            if write.isDeadLettered { continue }
+            if write.nextAttemptAt > now { continue }
+
             do {
                 try await dispatch(write)
                 context.delete(write)
                 try context.save()
             } catch let err as SeedkeepError {
-                write.attemptCount += 1
-                write.lastError = "\(err.code): \(err.message)"
-                try? context.save()
-                // Don't loop on the same broken row in this pass.
+                handleFailure(write, message: "\(err.code): \(err.message)", in: context)
             } catch {
-                write.attemptCount += 1
-                write.lastError = error.localizedDescription
-                try? context.save()
+                handleFailure(write, message: error.localizedDescription, in: context)
             }
         }
+    }
+
+    private func handleFailure(_ write: LocalPendingWrite, message: String, in context: ModelContext) {
+        write.attemptCount += 1
+        write.lastError = message
+        if write.attemptCount >= LocalPendingWrite.maxAttempts {
+            write.isDeadLettered = true
+        } else {
+            let backoff = LocalPendingWrite.backoffMillis(forAttempt: write.attemptCount)
+            write.nextAttemptAt = Self.nowMs() + backoff
+        }
+        try? context.save()
+    }
+
+    /// Diagnostics view used by Settings → Pending writes.
+    public struct PendingWriteSummary: Sendable, Equatable {
+        public let total: Int
+        public let active: Int
+        public let deadLettered: Int
+    }
+
+    public func pendingWriteSummary() -> PendingWriteSummary {
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalPendingWrite>()
+        let rows = (try? context.fetch(descriptor)) ?? []
+        let dead = rows.filter { $0.isDeadLettered }.count
+        return PendingWriteSummary(
+            total: rows.count,
+            active: rows.count - dead,
+            deadLettered: dead
+        )
+    }
+
+    /// Resets a single dead-lettered row so it retries on the next sync.
+    public func retryPendingWrite(id: String) {
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalPendingWrite>(predicate: #Predicate { $0.id == id })
+        guard let row = try? context.fetch(descriptor).first else { return }
+        row.isDeadLettered = false
+        row.attemptCount = 0
+        row.lastError = nil
+        row.nextAttemptAt = Self.nowMs()
+        try? context.save()
+    }
+
+    /// Drops a pending write entirely. Used when the user decides a stuck
+    /// write should be abandoned (the local optimistic state stays — only
+    /// the queued push is dropped).
+    public func forgetPendingWrite(id: String) {
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalPendingWrite>(predicate: #Predicate { $0.id == id })
+        guard let row = try? context.fetch(descriptor).first else { return }
+        context.delete(row)
+        try? context.save()
     }
 
     private func dispatch(_ write: LocalPendingWrite) async throws {
@@ -408,6 +463,62 @@ public final class SyncEngine {
             }
         }
         try context.save()
+    }
+
+    /// Refreshes a seed's photo rows from `GET /api/seeds/:id`. Used after
+    /// a photo upload so the detail view sees the new entry. Cheap — the
+    /// detail endpoint returns the seed plus its photos.
+    public func refreshSeedPhotos(seedID: String, householdID: String) async throws {
+        let detail = try await client.seed(id: seedID)
+        let context = ModelContext(container)
+
+        // Update the seed itself in case its updated_at changed.
+        try upsertSeeds([detail.seed])
+
+        // Replace the photo set for this seed: delete locals not in the
+        // server response, upsert ones that are.
+        let serverIDs = Set(detail.photos.map(\.id))
+        let descriptor = FetchDescriptor<LocalSeedPhoto>(
+            predicate: #Predicate { $0.seedID == seedID }
+        )
+        for local in (try? context.fetch(descriptor)) ?? [] {
+            if !serverIDs.contains(local.id) {
+                context.delete(local)
+            }
+        }
+        for dto in detail.photos {
+            let id = dto.id
+            let descriptor = FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id })
+            if let existing = try? context.fetch(descriptor).first {
+                existing.r2Key = dto.r2_key
+                existing.role = dto.role
+                existing.width = dto.width
+                existing.height = dto.height
+                existing.byteSize = dto.byte_size
+                existing.capturedAt = dto.captured_at
+            } else {
+                context.insert(LocalSeedPhoto(
+                    id: dto.id,
+                    seedID: dto.seed_id,
+                    householdID: dto.household_id,
+                    r2Key: dto.r2_key,
+                    role: dto.role,
+                    width: dto.width,
+                    height: dto.height,
+                    byteSize: dto.byte_size,
+                    capturedAt: dto.captured_at
+                ))
+            }
+        }
+        try context.save()
+    }
+
+    /// Convenience wrapper called by views: upload a photo and refresh
+    /// the seed's photo list. Online-only in Phase 1; offline photo
+    /// queueing is deferred (see `.docs/ai/roadmap.md`).
+    public func uploadPhoto(seedID: String, role: PhotoRole, jpegData: Data, householdID: String) async throws {
+        _ = try await client.uploadSeedPhoto(seedID: seedID, role: role, jpegData: jpegData)
+        try await refreshSeedPhotos(seedID: seedID, householdID: householdID)
     }
 
     private func upsertSeeds(_ items: [SeedDTO]) throws {

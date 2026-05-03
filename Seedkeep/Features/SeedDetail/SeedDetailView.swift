@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 import SeedkeepKit
 
 /// Detail + edit view. The view loads the matching `LocalSeed` via id so
@@ -11,6 +12,7 @@ struct SeedDetailView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.dismiss) private var dismiss
     @Query private var seedQuery: [LocalSeed]
+    @Query private var photoQuery: [LocalSeedPhoto]
 
     @Query(filter: #Predicate<LocalLocation> { $0.deletedAt == nil },
            sort: \.sortOrder, order: .forward)
@@ -21,11 +23,19 @@ struct SeedDetailView: View {
     private var tags: [LocalTag]
 
     @State private var pendingDelete = false
+    @State private var pickedPhoto: PhotosPickerItem?
+    @State private var uploadingPhoto = false
+    @State private var uploadError: String?
 
     init(seedID: String) {
         self.seedID = seedID
         let id = seedID
         _seedQuery = Query(filter: #Predicate<LocalSeed> { $0.id == id })
+        _photoQuery = Query(
+            filter: #Predicate<LocalSeedPhoto> { $0.seedID == id },
+            sort: \.capturedAt,
+            order: .forward
+        )
     }
 
     var body: some View {
@@ -33,6 +43,7 @@ struct SeedDetailView: View {
             if let seed = seedQuery.first {
                 Form {
                     headerSection(seed)
+                    photosSection(seed)
                     lifecycleSection(seed)
                     if seed.state != .wishlist {
                         quantitySection(seed)
@@ -44,6 +55,13 @@ struct SeedDetailView: View {
                 }
                 .navigationTitle(seed.customName ?? "Seed")
                 .navigationBarTitleDisplayMode(.inline)
+                .task(id: seed.id) {
+                    // Refresh photos on first appearance so the grid is
+                    // current even if the local store predates new uploads.
+                    if case .signedIn(_, let household) = appEnv.auth.state {
+                        try? await appEnv.sync.refreshSeedPhotos(seedID: seed.id, householdID: household.id)
+                    }
+                }
             } else {
                 ContentUnavailableView(
                     "Seed unavailable",
@@ -55,6 +73,96 @@ struct SeedDetailView: View {
     }
 
     // MARK: - Sections
+
+    @ViewBuilder
+    private func photosSection(_ seed: LocalSeed) -> some View {
+        Section("Photos") {
+            if photoQuery.isEmpty {
+                Text("No photos yet")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(photoQuery, id: \.id) { photo in
+                            AuthedImage(photoID: photo.id, contentMode: .fill)
+                                .frame(width: 96, height: 96)
+                                .clipped()
+                                .clipShape(.rect(cornerRadius: 10))
+                                .overlay(alignment: .bottomLeading) {
+                                    Text(photo.role.rawValue)
+                                        .font(.caption2.weight(.medium))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(.black.opacity(0.6), in: .capsule)
+                                        .foregroundStyle(.white)
+                                        .padding(4)
+                                }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            HStack {
+                PhotosPicker(
+                    selection: $pickedPhoto,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Label(uploadingPhoto ? "Uploading…" : "Add photo", systemImage: "photo.badge.plus")
+                }
+                .disabled(uploadingPhoto)
+                if uploadingPhoto {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            if let uploadError {
+                Text(uploadError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+        .onChange(of: pickedPhoto) { _, item in
+            guard let item else { return }
+            Task { await uploadPicked(item, seedID: seed.id) }
+        }
+    }
+
+    private func uploadPicked(_ item: PhotosPickerItem, seedID: String) async {
+        uploadingPhoto = true
+        uploadError = nil
+        defer { uploadingPhoto = false; pickedPhoto = nil }
+
+        guard case .signedIn(_, let household) = appEnv.auth.state else {
+            uploadError = "Not signed in."
+            return
+        }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                uploadError = "Couldn't read the selected photo."
+                return
+            }
+            let jpeg = jpegEncode(originalData: data) ?? data
+            try await appEnv.sync.uploadPhoto(
+                seedID: seedID,
+                role: .extra,
+                jpegData: jpeg,
+                householdID: household.id
+            )
+        } catch let err as SeedkeepError {
+            uploadError = "\(err.code): \(err.message)"
+        } catch {
+            uploadError = error.localizedDescription
+        }
+    }
+
+    /// Convert HEIC/PNG bytes from the photo picker into a reasonably-sized
+    /// JPEG so the upload body stays manageable. ~75% quality balances
+    /// quality vs. wire size for packet photos.
+    private func jpegEncode(originalData: Data) -> Data? {
+        guard let image = UIImage(data: originalData) else { return nil }
+        return image.jpegData(compressionQuality: 0.75)
+    }
 
     @ViewBuilder
     private func headerSection(_ seed: LocalSeed) -> some View {

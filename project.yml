@@ -51,6 +51,13 @@ targets:
         SeedkeepAPIScheme: "$(SEEDKEEP_API_SCHEME)"
         SeedkeepAPIHost: "$(SEEDKEEP_API_HOST)"
         KeychainService: "$(KEYCHAIN_SERVICE)"
+        # Custom URL scheme for development invite links
+        # (`seedkeep://invite/<code>`). Universal links use the
+        # `applinks:seedkeep.app` entitlement.
+        CFBundleURLTypes:
+          - CFBundleURLName: app.seedkeep.invite
+            CFBundleURLSchemes:
+              - seedkeep
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER)

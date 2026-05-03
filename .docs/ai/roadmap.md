@@ -30,9 +30,10 @@ iOS client for Seedkeep. Phase 1: a household seed library with offline-first in
 - [x] D5: Scan toolbar button in LibraryView opens ScanFlow as fullScreenCover; result populates AddSeedView
 
 ### Next
-- [ ] C-ios: Library with delta sync — locations, tags, seeds CRUD against the API
-- [ ] D-ios: Scan flow — camera, barcode, front/back photo capture, extraction trigger
-- [ ] E: Universal-link invite accept + offline polish (queued writes, retry photo uploads)
+- [x] E1: Universal-link invite accept (`seedkeep://invite/<code>` + `https://seedkeep.app/invite/<code>`); InviteAcceptView refreshes household after success
+- [x] E2: Write-queue retry hardening — exponential backoff, dead-letter at 6 attempts, Pending Writes diagnostic view in Settings (retry / forget actions)
+- [x] E3: Photo attach to seed (online-only) — PhotosPicker → JPEG → /api/seeds/:id/photos → refresh seed photos; AuthedImage view for Bearer-aware fetches
+- [ ] **Deferred to post-Phase-1**: offline photo upload queue with byte-storage in SwiftData; HEIC pass-through; thumbnail server-side
 
 ### Later
 - [ ] Phase 2 — Garden plan with WeatherKit + extension calendars

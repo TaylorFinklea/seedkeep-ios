@@ -32,6 +32,26 @@
 
 **Rationale**: Local Keychain is the standard. Sync would mean a token issued on iPhone could authenticate on iPad — fine on its face, but couples session lifetime to iCloud account state. We can revisit if cross-device convenience becomes a complaint.
 
+## [2026-05-03] Pending-write retry: exponential backoff with dead-lettering
+
+**Context**: The Phase 1 sync engine retried failed pending writes on every `syncAll()` pass with no backoff or cap, which would hammer the server during transient outages and deadlock against permanent failures.
+
+**Decision**: Each `LocalPendingWrite` carries `nextAttemptAt` and `isDeadLettered`. `flushPending()` skips rows whose backoff window hasn't elapsed and ignores dead-lettered rows. Backoff is `2 * 2^(attempt-1) seconds`, doubled up to attempt 9, capped at 5 minutes. After 6 failed attempts the row is dead-lettered until the user manually retries it from Settings → Pending writes.
+
+**Alternatives considered**: Linear backoff; immediate dead-letter on any 4xx; permanent retry forever.
+
+**Rationale**: 6 attempts × exponential progression covers ~2 minutes of cumulative wait — enough to ride through brief network blips without being so aggressive that a permanent failure runs forever. Surfacing the dead-letter state in Settings keeps the user in control without blocking the rest of the app.
+
+## [2026-05-03] Online-only photo attach for Phase 1
+
+**Context**: Seed photos are multi-MB and can't fit comfortably in the existing `LocalPendingWrite` JSON payload. Building an offline photo upload queue (separate `@Model`, byte storage, retry orchestration) is real work.
+
+**Decision**: Phase 1 photo attach is online-only. The PhotosPicker → JPEG → `uploadSeedPhoto` flow surfaces an inline error if offline. Catalog-extraction photos (the AI flow) are unaffected because they're inherently online.
+
+**Alternatives considered**: Build the offline queue now; defer photo attach entirely until v1.1.
+
+**Rationale**: The high-leverage offline cases are inventory edits (the "I'm in the seed aisle" job), not attaching photos to existing seeds. Document the gap, ship Phase 1, revisit if real users complain.
+
 ## [2026-05-02] SwiftData stays in the app target, not in SeedkeepKit
 
 **Context**: Where should the `@Model` types live? Inside `SeedkeepKit` (so other targets could share them) or inside the app target?

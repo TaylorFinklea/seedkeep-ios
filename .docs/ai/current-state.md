@@ -10,11 +10,12 @@
 
 **Date**: 2026-05-03
 
-- Continued through Phase 1 step D (scan + catalog) on iOS.
-- `SeedkeepClient.submitExtraction` now does multipart upload to `/api/extractions`; envelope test added (6 kit tests passing).
-- New `Seedkeep/Features/Scan/` module: `CameraView` (AVCaptureSession + barcode metadata + photo capture, Swift 6 nonisolated delegates) and `ScanFlow` (state machine: scan → catalog lookup → catalog hit OR fallback to two-shot photo capture → /api/extractions).
-- `AddSeedView` now accepts a `Prefill` (catalog hit or AI extraction); shows a review banner when AI-sourced. Library toolbar gets a Scan (viewfinder) button alongside "+".
-- Conflict policy unchanged (last-write-wins by `updated_at`).
+- Shipped Phase 1 steps D (scan flow) and E (polish) on iOS in the same session.
+- D-ios: `submitExtraction` multipart upload, `CameraView` over AVFoundation, `ScanFlow` state machine, `AddSeedView` Prefill banner, viewfinder toolbar button on Library.
+- E1: universal-link + custom-URL-scheme invite handling. `seedkeep://invite/<code>` and `https://seedkeep.app/invite/<code>` both route to a presentable `InviteAcceptView` that calls `acceptInvite` and refreshes the household state.
+- E2: write-queue hardening. `LocalPendingWrite` carries `nextAttemptAt` and `isDeadLettered`; `flushPending()` skips backed-off and dead-lettered rows. Settings → Pending writes lists every queue row with last error + retry/forget actions. Backoff: 2/4/8/16/32/64s capped at 5 min, dead-letter after 6 attempts.
+- E3: online-only photo attach. `SeedkeepClient.uploadSeedPhoto` posts raw JPEG; `fetchSeedPhotoData` streams binary. `SyncEngine.refreshSeedPhotos` fetches `GET /api/seeds/:id` and reconciles `LocalSeedPhoto` rows. `AuthedImage` renders with Bearer header (since `AsyncImage` can't add it). SeedDetailView gets a horizontal photo strip + PhotosPicker → JPEG (75% quality) → upload.
+- Offline photo queue is **deferred** post-Phase-1; documented in roadmap.
 
 ## Build Status
 
@@ -36,4 +37,8 @@
 
 ## Next concrete step
 
-E — Phase 1 polish: universal-link invite accept screen (`/invite/<code>`), write-queue retry hardening (exponential backoff + dead-letter visibility in Settings), photo upload queue for seed-attached photos, and a two-device live test against a real backend.
+Phase 1 is feature-complete on the iOS side. Remaining work before declaring v1 ready:
+
+1. Live two-device test with real Sign in with Apple — needs your Apple bundle ID + provisioning profile in `AppConfig.local.xcconfig`.
+2. Live extraction smoke test in the iOS app (needs `ANTHROPIC_API_KEY` configured in the backend `.dev.vars`).
+3. Decide whether offline-photo queueing ships in v1 or is a fast-follow.

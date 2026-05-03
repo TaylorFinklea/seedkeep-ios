@@ -73,6 +73,11 @@ struct SettingsView: View {
                             .font(.footnote)
                             .foregroundStyle(.red)
                     }
+                    NavigationLink {
+                        PendingWritesView()
+                    } label: {
+                        Label("Pending writes", systemImage: "tray.full")
+                    }
                 }
             }
             .navigationTitle("Settings")
