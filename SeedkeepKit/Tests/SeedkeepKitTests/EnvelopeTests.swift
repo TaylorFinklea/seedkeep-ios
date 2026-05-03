@@ -62,6 +62,21 @@ struct EnvelopeTests {
         }
     }
 
+    @Test func decodesDeleteResult() throws {
+        let json = #"""
+        { "ok": true, "data": { "id": "loc_1", "deleted_at": 1777577200927 } }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<SeedkeepClient.DeleteResult>.self, from: json)
+        switch env {
+        case .ok(let result, _):
+            #expect(result.id == "loc_1")
+            #expect(result.deleted_at == 1777577200927)
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
     @Test func decodesSeedDTOWithTagIds() throws {
         let json = #"""
         {

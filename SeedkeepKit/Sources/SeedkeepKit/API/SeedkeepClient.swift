@@ -89,6 +89,23 @@ public actor SeedkeepClient {
         return res.location
     }
 
+    public func updateLocation(id: String, name: String? = nil, sortOrder: Int? = nil) async throws -> LocationDTO {
+        struct Body: Encodable {
+            let name: String?
+            let sort_order: Int?
+        }
+        let res: WireResponses.LocationOne = try await patchJSON(
+            path: "/api/locations/\(id)",
+            body: Body(name: name, sort_order: sortOrder)
+        )
+        return res.location
+    }
+
+    @discardableResult
+    public func deleteLocation(id: String) async throws -> DeleteResult {
+        try await deleteJSON(path: "/api/locations/\(id)")
+    }
+
     // MARK: - Tags
 
     public func tags(since: Int64 = 0, limit: Int? = nil) async throws -> DeltaPage<TagDTO> {
@@ -102,6 +119,38 @@ public actor SeedkeepClient {
             body: Body(name: name, color: color)
         )
         return res.tag
+    }
+
+    public func updateTag(id: String, name: String? = nil, color: String?? = nil) async throws -> TagDTO {
+        // `color: String??` lets callers express "leave alone" (nil), "set null"
+        // (.some(nil)), or "set to value" (.some(v)). Mirrors PATCH semantics.
+        struct Body: Encodable {
+            let name: String?
+            let color: String?
+            let _setColor: Bool
+
+            enum CodingKeys: String, CodingKey { case name, color }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                if let name { try c.encode(name, forKey: .name) }
+                if _setColor { try c.encode(color, forKey: .color) }
+            }
+        }
+        let body = Body(
+            name: name,
+            color: color.flatMap { $0 },
+            _setColor: color != nil
+        )
+        let res: WireResponses.TagOne = try await patchJSON(
+            path: "/api/tags/\(id)",
+            body: body
+        )
+        return res.tag
+    }
+
+    @discardableResult
+    public func deleteTag(id: String) async throws -> DeleteResult {
+        try await deleteJSON(path: "/api/tags/\(id)")
     }
 
     // MARK: - Seeds
@@ -134,7 +183,7 @@ public actor SeedkeepClient {
         try await getJSON(path: "/api/seeds/\(id)")
     }
 
-    public struct CreateSeedInput: Encodable, Sendable {
+    public struct CreateSeedInput: Codable, Sendable {
         public var id: String?
         public var catalog_id: String?
         public var state: SeedState
@@ -182,6 +231,59 @@ public actor SeedkeepClient {
         return res.seed
     }
 
+    /// All-optional patch payload for `PATCH /api/seeds/:id`. Encoder skips
+    /// nil keys so the server receives only the fields the caller wants
+    /// to change.
+    public struct UpdateSeedInput: Codable, Sendable {
+        public var catalog_id: String?
+        public var state: SeedState?
+        public var packet_count: Int?
+        public var location_id: String?
+        public var year_packed: Int?
+        public var source: SeedSource?
+        public var custom_name: String?
+        public var custom_variety: String?
+        public var custom_company: String?
+        public var notes: String?
+        public var tag_ids: [String]?
+
+        public init(
+            catalog_id: String? = nil,
+            state: SeedState? = nil,
+            packet_count: Int? = nil,
+            location_id: String? = nil,
+            year_packed: Int? = nil,
+            source: SeedSource? = nil,
+            custom_name: String? = nil,
+            custom_variety: String? = nil,
+            custom_company: String? = nil,
+            notes: String? = nil,
+            tag_ids: [String]? = nil
+        ) {
+            self.catalog_id = catalog_id
+            self.state = state
+            self.packet_count = packet_count
+            self.location_id = location_id
+            self.year_packed = year_packed
+            self.source = source
+            self.custom_name = custom_name
+            self.custom_variety = custom_variety
+            self.custom_company = custom_company
+            self.notes = notes
+            self.tag_ids = tag_ids
+        }
+    }
+
+    public func updateSeed(id: String, _ patch: UpdateSeedInput) async throws -> SeedDTO {
+        let res: WireResponses.SeedOne = try await patchJSON(path: "/api/seeds/\(id)", body: patch)
+        return res.seed
+    }
+
+    @discardableResult
+    public func deleteSeed(id: String) async throws -> DeleteResult {
+        try await deleteJSON(path: "/api/seeds/\(id)")
+    }
+
     public func randomSeed() async throws -> SeedDTO? {
         struct SeedEnvelope: Codable, Sendable { let seed: SeedDTO? }
         do {
@@ -198,6 +300,12 @@ public actor SeedkeepClient {
         struct Body: Codable, Sendable { let catalog_seed: CatalogSeedDTO? }
         let res: Body = try await getJSON(path: "/api/catalog/lookup", query: [.init(name: "barcode", value: barcode)])
         return res.catalog_seed
+    }
+
+    /// Server response for any DELETE that soft-deletes a per-household row.
+    public struct DeleteResult: Decodable, Sendable, Equatable {
+        public let id: String
+        public let deleted_at: Int64?
     }
 
     // MARK: - Internals
@@ -230,12 +338,38 @@ public actor SeedkeepClient {
         path: String,
         body: Body
     ) async throws -> T {
+        try await sendJSON(method: "POST", path: path, body: body)
+    }
+
+    private func patchJSON<Body: Encodable, T: Decodable & Sendable>(
+        path: String,
+        body: Body
+    ) async throws -> T {
+        try await sendJSON(method: "PATCH", path: path, body: body)
+    }
+
+    private func sendJSON<Body: Encodable, T: Decodable & Sendable>(
+        method: String,
+        path: String,
+        body: Body
+    ) async throws -> T {
         let url = configuration.baseURL.appendingPathComponent(path)
         var req = URLRequest(url: url)
-        req.httpMethod = "POST"
+        req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        req.httpBody = try JSONEncoder().encode(body)
+        let encoder = JSONEncoder()
+        // Skip nil-valued optional fields so PATCH only sends what changed.
+        encoder.outputFormatting = []
+        req.httpBody = try encoder.encode(body)
+        return try await perform(req)
+    }
+
+    private func deleteJSON<T: Decodable & Sendable>(path: String) async throws -> T {
+        let url = configuration.baseURL.appendingPathComponent(path)
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         return try await perform(req)
     }
 
