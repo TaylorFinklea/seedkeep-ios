@@ -10,9 +10,19 @@ iOS client for Seedkeep. Phase 1: a household seed library with offline-first in
 
 ### Now
 - [x] B1: seedkeep-ios repo bootstrap (.gitignore, README, .docs/ai/, project.yml)
-- [x] B2: SeedkeepKit Swift package — Envelope, SeedState, Wire DTOs, SeedkeepClient (4 tests passing)
+- [x] B2: SeedkeepKit Swift package — Envelope, SeedState, Wire DTOs, SeedkeepClient (5 tests passing)
 - [x] B3: Xcode app target — Sign in with Apple, AppConfig.example.xcconfig, /api/me + household round-trip wired
 - [x] B4: Household auto-create rolled into AuthController; empty Library tab + You tab placeholders ship
+- [x] C1: SeedkeepClient extended with PATCH + DELETE (locations/tags/seeds), DeleteResult envelope, UpdateSeedInput patch
+- [x] C2: SwiftData @Model layer — LocalLocation, LocalTag, LocalSeed, LocalSeedPhoto, LocalSyncCursor, LocalPendingWrite + DTO mapping
+- [x] C3: SyncEngine — pulls deltas with cursor watermarks, drains pending writes, optimistic-local enqueueCreate/Update/Delete
+- [x] C4: ModelContainer + SyncEngine wired into AppEnvironment; sync triggers on sign-in transition
+- [x] C5: LibraryView — @Query of LocalSeed by state, search, age badge, pull-to-refresh, swipe-delete, "+" → AddSeedView
+- [x] C6: AddSeedView — manual entry sheet (state, name, variety, company, packet count, location, tags, year, source, notes)
+- [x] C7: SeedDetailView — every field editable with optimistic local + queued push
+- [x] C8: RandomPickView — calls /api/seeds/random, big card UI, empty state
+- [x] C9: Settings tab — Locations CRUD + Tags CRUD with color palette + sync-now action
+- [x] C10: MainTabView promoted to 5 tabs (Library / Plan / Random / Settings / You); YouView slimmed to identity + sign-out
 
 ### Next
 - [ ] C-ios: Library with delta sync — locations, tags, seeds CRUD against the API

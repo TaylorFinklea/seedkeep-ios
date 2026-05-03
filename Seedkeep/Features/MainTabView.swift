@@ -1,9 +1,8 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Root tab navigation. Library and "You" are populated in B-step;
-/// Plan and Random tabs are deliberate placeholders so the navigation
-/// shape is set in stone before C-ios fills them in.
+/// Five-tab root: Library / Plan / Random / Settings / You. Plan is still
+/// a placeholder (Phase 2). Random and Settings are real in C-ios.
 struct MainTabView: View {
     var body: some View {
         TabView {
@@ -14,9 +13,11 @@ struct MainTabView: View {
                 .foregroundStyle(.secondary)
                 .tabItem { Label("Plan", systemImage: "calendar") }
 
-            Text("Random — pulls a packet for you")
-                .foregroundStyle(.secondary)
+            RandomPickView()
                 .tabItem { Label("Random", systemImage: "shuffle") }
+
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape") }
 
             YouView()
                 .tabItem { Label("You", systemImage: "person.crop.circle") }

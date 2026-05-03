@@ -8,30 +8,31 @@
 
 ## Last Session Summary
 
-**Date**: 2026-04-30
+**Date**: 2026-05-02
 
-- Bootstrapped `seedkeep-ios` repo as the iOS client for the `seedkeep` Workers backend.
-- Project file generated from `project.yml` via XcodeGen (chosen by the user as the bootstrap path).
-- Bundle ID, server URL, and other deployment knobs live in `Seedkeep/Config/AppConfig.example.xcconfig`.
+- Bootstrapped `seedkeep-ios` repo (commit `5cfc739`) and shipped the C-ios slice (commits `7d5198a` + this one).
+- C-ios now end-to-end: SwiftData mirror of the wire DTOs, SyncEngine for delta pull + queued push, full UI for Library / Add / SeedDetail / Random / Settings / Locations / Tags.
+- Optimistic local writes go through `enqueueCreate / enqueueUpdate / enqueueDelete` and drain on next sync (or immediately via `flushPending()`).
+- Conflict policy: last-write-wins by `updated_at` (server values overwrite local on next pull). No conflict UI in Phase 1.
 
 ## Build Status
 
-- Repo: initialized; first commit pending.
-- `xcodebuild -scheme Seedkeep -destination 'generic/platform=iOS Simulator' build` → **BUILD SUCCEEDED** (Debug, simulator, code-signing disabled).
-- `swift test` in `SeedkeepKit/` → 4/4 passing (Envelope decode + DeltaPage + SeedDTO round-trips).
-- App target wired:
-  - `SeedkeepApp` SwiftUI entry → `RootView` (auth state machine) → `MainTabView` (Library / Plan / Random / You).
-  - `AppEnvironment` resolves base URL + keychain service from Info.plist, instantiates `SeedkeepClient` and `AuthController`.
-  - `SignInView` runs Sign in with Apple, exchanges the id_token at `/api/auth/sign-in/social`, and stashes the Bearer token via `KeychainTokenStore`.
-  - `AuthController.loadIdentity()` calls `/api/me` then idempotently `POST /api/households` so a fresh user always lands inside a household.
-  - `YouView` shows identity + household + creates household invites via `/api/households/me/invites`.
-  - `LibraryView` is a placeholder with the four-state segmented picker locked in.
+- `xcodebuild -scheme Seedkeep -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO` → **BUILD SUCCEEDED**.
+- `cd SeedkeepKit && swift test` → 5/5 tests passing.
+- Backend round-trips verified via curl + synthetic Bearer tokens: PATCH `/api/seeds/:id`, PATCH `/api/tags/:id`, DELETE `/api/tags/:id` all return correct envelopes.
+- C-ios surface area:
+  - `Seedkeep/Core/Models/` — six `@Model` types + `Mapping.swift`.
+  - `Seedkeep/Core/Sync/SyncEngine.swift` — `syncAll(householdID:)` and `flushPending()`; optimistic enqueue methods.
+  - `Seedkeep/Features/Library/{LibraryView, SeedRow}.swift`, `SeedDetail/SeedDetailView.swift`, `Add/AddSeedView.swift`, `Random/RandomPickView.swift`, `Settings/{SettingsView, LocationsView, TagsView}.swift`.
+  - `MainTabView` is now 5 tabs; `YouView` slimmed to identity + sign-out.
+- `AppEnvironment.live()` configures the `ModelContainer` over the six `@Model` types and instantiates the `SyncEngine` once.
+- `SeedkeepApp` triggers `appEnv.syncIfPossible()` from a `.task(id:)` keyed on the auth state, so we sync once per sign-in transition rather than every state change.
 
 ## Blockers
 
-- Sign in with Apple will reject the bundle ID `com.example.seedkeep` outside a real provisioning profile. To run signed: copy `AppConfig.example.xcconfig` → `AppConfig.local.xcconfig`, set a real bundle ID and team ID, regenerate.
+- Sign in with Apple still requires a real bundle ID + provisioning profile to actually log in (the build succeeds; auth round-trip on a real device requires user-supplied keys via `AppConfig.local.xcconfig`).
 - Backend `seedkeep` repo must be running locally for the app to connect (`npm run dev` in `~/git/seedkeep`).
 
 ## Next concrete step
 
-C-ios: replace the Library placeholder with a real list driven by `SeedkeepClient.seeds(...)`. Add the location/tag CRUD UIs in Settings. Wire the Random tab to `SeedkeepClient.randomSeed()`.
+D-ios — scan flow: `VNBarcodeObservation` for barcode, `AVCaptureSession` for the camera, multipart upload to `/api/extractions`, "extracting…" UI, accept-or-edit confirmation that lands in a `LocalSeed`.

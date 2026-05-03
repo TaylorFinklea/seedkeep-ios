@@ -1,13 +1,10 @@
 import SwiftUI
 import SeedkeepKit
 
-/// "You" tab — identity, household, sign out. Phase 1's bare necessities.
+/// Identity tab — who am I, who is my household, sign out. Locations, Tags,
+/// and the household-invite flow live in the Settings tab now.
 struct YouView: View {
     @Environment(AuthController.self) private var auth
-    @Environment(AppEnvironment.self) private var appEnv
-    @State private var inviteCode: String?
-    @State private var isCreatingInvite = false
-    @State private var inviteError: String?
 
     var body: some View {
         NavigationStack {
@@ -19,35 +16,6 @@ struct YouView: View {
                     }
                     Section("Household") {
                         LabeledContent("Name", value: household.name)
-                        LabeledContent("ID", value: household.id)
-                            .font(.caption.monospaced())
-                    }
-                    Section("Invite") {
-                        if let code = inviteCode {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Share this code")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text(code)
-                                    .font(.title3.monospaced())
-                                    .textSelection(.enabled)
-                            }
-                        } else {
-                            Button {
-                                Task { await createInvite() }
-                            } label: {
-                                HStack {
-                                    Text("Create invite link")
-                                    if isCreatingInvite { ProgressView().controlSize(.small) }
-                                }
-                            }
-                            .disabled(isCreatingInvite)
-                        }
-                        if let inviteError {
-                            Text(inviteError)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                        }
                     }
                 }
                 Section {
@@ -57,20 +25,6 @@ struct YouView: View {
                 }
             }
             .navigationTitle("You")
-        }
-    }
-
-    private func createInvite() async {
-        isCreatingInvite = true
-        inviteError = nil
-        defer { isCreatingInvite = false }
-        do {
-            let res = try await appEnv.client.createInvite()
-            inviteCode = res.invite.code
-        } catch let err as SeedkeepError {
-            inviteError = "\(err.code): \(err.message)"
-        } catch {
-            inviteError = error.localizedDescription
         }
     }
 }

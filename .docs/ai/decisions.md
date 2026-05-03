@@ -32,6 +32,26 @@
 
 **Rationale**: Local Keychain is the standard. Sync would mean a token issued on iPhone could authenticate on iPad — fine on its face, but couples session lifetime to iCloud account state. We can revisit if cross-device convenience becomes a complaint.
 
+## [2026-05-02] SwiftData stays in the app target, not in SeedkeepKit
+
+**Context**: Where should the `@Model` types live? Inside `SeedkeepKit` (so other targets could share them) or inside the app target?
+
+**Decision**: SwiftData `@Model` types live in `Seedkeep/Core/Models/`. `SeedkeepKit` stays SwiftData-free.
+
+**Alternatives considered**: Co-locate `@Model` with the wire DTOs inside `SeedkeepKit`.
+
+**Rationale**: `SeedkeepKit` is testable on macOS via `swift test` in 2 seconds. Adding SwiftData would force the kit to depend on a runtime that's only fully realized on iOS, slowing CI and making test-target builds heavier. Mapping at the boundary (`Mapping.swift`) is cheap.
+
+## [2026-05-02] Single `@Query` sort key (not multi-sort) in SwiftData lists
+
+**Context**: Swift 6 + SwiftData's macro-generated `@Query` + multi-`SortDescriptor` arrays + optional-comparison predicates triggered "compiler unable to type-check this expression in reasonable time" failures across multiple views.
+
+**Decision**: Use the single-key `@Query(filter:, sort:, order:)` form. If the screen needs a secondary sort, do it in code after the query returns.
+
+**Alternatives considered**: Tag every property with a `Bool isDeleted` to drop the optional comparison; switch off macros entirely.
+
+**Rationale**: The single-key form is well-tested by Apple and short-circuits the type-checker explosion. The amount of data we sort on the iOS client (per-household) easily fits in memory, so a secondary in-code sort is free.
+
 ## [2026-04-30] Household auto-create on first sign-in
 
 **Context**: After Sign in with Apple, the user has zero households. We can either gate the rest of the app on a "Create or join household" wall, or auto-create one and let them invite later.

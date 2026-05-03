@@ -1,12 +1,16 @@
 import SwiftUI
+import SwiftData
 import SeedkeepKit
 
-/// Phase 1 / B-step placeholder. C-ios will hang the seed list, filters,
-/// and add-flow off this view. We deliberately render empty states for
-/// each lifecycle so the navigation shape is locked in.
+/// Real Library: live list of `LocalSeed` filtered by lifecycle state,
+/// with search, pull-to-refresh, and the "older — check" badge.
 struct LibraryView: View {
-    @Environment(AuthController.self) private var auth
+    @Environment(AppEnvironment.self) private var appEnv
+    @Environment(\.modelContext) private var modelContext
+
     @State private var selectedState: SeedState = .active
+    @State private var searchText: String = ""
+    @State private var showingAdd = false
 
     var body: some View {
         NavigationStack {
@@ -20,18 +24,109 @@ struct LibraryView: View {
                 .pickerStyle(.segmented)
                 .padding()
 
-                Spacer()
-
-                ContentUnavailableView(
-                    "No \(selectedState.rawValue) seeds yet",
-                    systemImage: "leaf",
-                    description: Text("C-ios will list your packets here. Backend is ready.")
+                SeedListContent(
+                    state: selectedState,
+                    searchText: searchText
                 )
-
-                Spacer()
             }
             .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.large)
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search seeds")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingAdd = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add seed")
+                }
+            }
+            .sheet(isPresented: $showingAdd) {
+                AddSeedView()
+            }
+            .refreshable {
+                await appEnv.syncIfPossible()
+            }
+        }
+    }
+}
+
+/// Pulled into its own view so `@Query` can take filter parameters via
+/// the initializer — a SwiftData-friendly pattern for state-scoped lists.
+private struct SeedListContent: View {
+    @Environment(AppEnvironment.self) private var appEnv
+    @Query private var seeds: [LocalSeed]
+    @Query private var locations: [LocalLocation]
+
+    private let searchText: String
+
+    init(state: SeedState, searchText: String) {
+        let raw = state.rawValue
+        let seedDescriptor = FetchDescriptor<LocalSeed>(
+            predicate: #Predicate<LocalSeed> { seed in
+                seed.deletedAt == nil && seed.stateRaw == raw
+            },
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        self._seeds = Query(seedDescriptor)
+
+        let locDescriptor = FetchDescriptor<LocalLocation>(
+            predicate: #Predicate<LocalLocation> { loc in loc.deletedAt == nil }
+        )
+        self._locations = Query(locDescriptor)
+        self.searchText = searchText
+    }
+
+    var body: some View {
+        let filtered = filterBySearch(seeds, query: searchText)
+        let locationByID = Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0.name) })
+        let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
+
+        if filtered.isEmpty {
+            ContentUnavailableView(
+                seeds.isEmpty ? "No seeds yet" : "No matches",
+                systemImage: "leaf",
+                description: Text(seeds.isEmpty
+                    ? "Tap + to add a packet, or pull to refresh from the server."
+                    : "Try a different search term."
+                )
+            )
+        } else {
+            List {
+                ForEach(filtered) { seed in
+                    NavigationLink(value: seed.id) {
+                        SeedRow(
+                            seed: seed,
+                            locationName: seed.locationID.flatMap { locationByID[$0] },
+                            currentYear: currentYear
+                        )
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            try? appEnv.sync.enqueueDeleteSeed(id: seed.id)
+                            Task { try? await appEnv.sync.flushPending() }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .navigationDestination(for: String.self) { seedID in
+                SeedDetailView(seedID: seedID)
+            }
+        }
+    }
+
+    private func filterBySearch(_ all: [LocalSeed], query: String) -> [LocalSeed] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return all }
+        return all.filter { seed in
+            (seed.customName ?? "").lowercased().contains(q)
+            || (seed.customVariety ?? "").lowercased().contains(q)
+            || (seed.customCompany ?? "").lowercased().contains(q)
+            || (seed.notes ?? "").lowercased().contains(q)
         }
     }
 }
