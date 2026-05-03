@@ -8,12 +8,13 @@
 
 ## Last Session Summary
 
-**Date**: 2026-05-02
+**Date**: 2026-05-03
 
-- Bootstrapped `seedkeep-ios` repo (commit `5cfc739`) and shipped the C-ios slice (commits `7d5198a` + this one).
-- C-ios now end-to-end: SwiftData mirror of the wire DTOs, SyncEngine for delta pull + queued push, full UI for Library / Add / SeedDetail / Random / Settings / Locations / Tags.
-- Optimistic local writes go through `enqueueCreate / enqueueUpdate / enqueueDelete` and drain on next sync (or immediately via `flushPending()`).
-- Conflict policy: last-write-wins by `updated_at` (server values overwrite local on next pull). No conflict UI in Phase 1.
+- Continued through Phase 1 step D (scan + catalog) on iOS.
+- `SeedkeepClient.submitExtraction` now does multipart upload to `/api/extractions`; envelope test added (6 kit tests passing).
+- New `Seedkeep/Features/Scan/` module: `CameraView` (AVCaptureSession + barcode metadata + photo capture, Swift 6 nonisolated delegates) and `ScanFlow` (state machine: scan → catalog lookup → catalog hit OR fallback to two-shot photo capture → /api/extractions).
+- `AddSeedView` now accepts a `Prefill` (catalog hit or AI extraction); shows a review banner when AI-sourced. Library toolbar gets a Scan (viewfinder) button alongside "+".
+- Conflict policy unchanged (last-write-wins by `updated_at`).
 
 ## Build Status
 
@@ -35,4 +36,4 @@
 
 ## Next concrete step
 
-D-ios — scan flow: `VNBarcodeObservation` for barcode, `AVCaptureSession` for the camera, multipart upload to `/api/extractions`, "extracting…" UI, accept-or-edit confirmation that lands in a `LocalSeed`.
+E — Phase 1 polish: universal-link invite accept screen (`/invite/<code>`), write-queue retry hardening (exponential backoff + dead-letter visibility in Settings), photo upload queue for seed-attached photos, and a two-device live test against a real backend.

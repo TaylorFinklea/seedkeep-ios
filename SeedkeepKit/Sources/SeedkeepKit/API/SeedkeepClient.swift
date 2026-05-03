@@ -294,6 +294,47 @@ public actor SeedkeepClient {
         }
     }
 
+    // MARK: - Extraction
+
+    /// Submits a packet front + back photo pair to `/api/extractions`.
+    /// The Worker uploads both images to R2, calls the vision LLM, then
+    /// the reviewer LLM, and returns the decision (`published` | `pending`
+    /// | `rejected`) plus the extracted fields. Phase 1 is synchronous —
+    /// expect 8–15 seconds; the iOS client should show a spinner.
+    ///
+    /// `barcode` and `perceptualHash` are optional optimization hints —
+    /// pass them when the camera detected one. The server uses them for
+    /// dedup against existing catalog entries.
+    public func submitExtraction(
+        frontJPEG: Data,
+        backJPEG: Data,
+        barcode: String? = nil,
+        perceptualHash: String? = nil
+    ) async throws -> WireResponses.ExtractionResult {
+        let url = configuration.baseURL.appendingPathComponent("/api/extractions")
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+
+        var body = Data()
+        body.appendField(boundary: boundary, name: "front", filename: "front.jpg",
+                         contentType: "image/jpeg", payload: frontJPEG)
+        body.appendField(boundary: boundary, name: "back", filename: "back.jpg",
+                         contentType: "image/jpeg", payload: backJPEG)
+        if let barcode {
+            body.appendTextField(boundary: boundary, name: "barcode", value: barcode)
+        }
+        if let perceptualHash {
+            body.appendTextField(boundary: boundary, name: "perceptual_hash", value: perceptualHash)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        req.httpBody = body
+        return try await perform(req)
+    }
+
     // MARK: - Catalog
 
     public func catalogLookup(barcode: String) async throws -> CatalogSeedDTO? {
@@ -398,5 +439,30 @@ public actor SeedkeepClient {
         case .failure(let error):
             throw error
         }
+    }
+}
+
+// MARK: - Multipart helpers
+
+private extension Data {
+    mutating func appendField(
+        boundary: String,
+        name: String,
+        filename: String,
+        contentType: String,
+        payload: Data
+    ) {
+        append("--\(boundary)\r\n".data(using: .utf8)!)
+        append("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+        append(payload)
+        append("\r\n".data(using: .utf8)!)
+    }
+
+    mutating func appendTextField(boundary: String, name: String, value: String) {
+        append("--\(boundary)\r\n".data(using: .utf8)!)
+        append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+        append(value.data(using: .utf8)!)
+        append("\r\n".data(using: .utf8)!)
     }
 }

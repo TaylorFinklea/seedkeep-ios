@@ -23,6 +23,11 @@ iOS client for Seedkeep. Phase 1: a household seed library with offline-first in
 - [x] C8: RandomPickView — calls /api/seeds/random, big card UI, empty state
 - [x] C9: Settings tab — Locations CRUD + Tags CRUD with color palette + sync-now action
 - [x] C10: MainTabView promoted to 5 tabs (Library / Plan / Random / Settings / You); YouView slimmed to identity + sign-out
+- [x] D1: SeedkeepClient.submitExtraction multipart POST + envelope test (6 tests passing)
+- [x] D2: CameraView (AVCaptureSession + AVCaptureMetadataOutput + AVCapturePhotoOutput) — Swift 6 nonisolated delegates
+- [x] D3: ScanFlow coordinator — barcode → catalog lookup, fallback front+back capture → /api/extractions
+- [x] D4: AddSeedView accepts Prefill (catalog hit or AI extraction) with review banner
+- [x] D5: Scan toolbar button in LibraryView opens ScanFlow as fullScreenCover; result populates AddSeedView
 
 ### Next
 - [ ] C-ios: Library with delta sync — locations, tags, seeds CRUD against the API

@@ -2,9 +2,25 @@ import SwiftUI
 import SwiftData
 import SeedkeepKit
 
-/// Manual-entry sheet for adding a new seed packet. Scan-driven entry
-/// lives in D-ios; this is the always-available offline-friendly path.
+/// Manual-entry sheet for adding a new seed packet. Used both as the
+/// "+" tap (no prefill) and as the post-scan confirmation screen
+/// (prefilled from a catalog hit or AI extraction; see `Prefill`).
 struct AddSeedView: View {
+    /// Pre-fill source. `.catalog` populates fields from a confirmed
+    /// catalog match; `.extraction` populates them from AI vision and
+    /// renders a "AI-extracted, please review" banner so the user knows
+    /// to spot-check.
+    enum Prefill: Equatable {
+        case catalog(barcode: String?, CatalogSeedDTO)
+        case extraction(WireResponses.ExtractionResult, barcode: String?)
+    }
+
+    let prefill: Prefill?
+
+    init(prefill: Prefill? = nil) {
+        self.prefill = prefill
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(AppEnvironment.self) private var appEnv
 
@@ -27,12 +43,17 @@ struct AddSeedView: View {
     @State private var notes: String = ""
     @State private var source: SeedSource = .store
 
+    @State private var catalogID: String?
     @State private var saving = false
     @State private var saveError: String?
+    @State private var didApplyPrefill = false
 
     var body: some View {
         NavigationStack {
             Form {
+                if prefill != nil {
+                    Section { prefillBanner }
+                }
                 Section("Lifecycle") {
                     Picker("State", selection: $state) {
                         Text("Active").tag(SeedState.active)
@@ -101,8 +122,9 @@ struct AddSeedView: View {
                     }
                 }
             }
-            .navigationTitle("Add seed")
+            .navigationTitle(prefill == nil ? "Add seed" : "Confirm seed")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { applyPrefillIfNeeded() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -120,6 +142,54 @@ struct AddSeedView: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    @ViewBuilder
+    private var prefillBanner: some View {
+        switch prefill {
+        case .catalog:
+            Label {
+                Text("Pre-filled from catalog. Review and confirm.")
+                    .font(.footnote)
+            } icon: {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+            }
+        case .extraction(let result, _):
+            VStack(alignment: .leading, spacing: 4) {
+                Label {
+                    Text("AI-extracted from photos. Please review.")
+                        .font(.footnote.weight(.medium))
+                } icon: {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.orange)
+                }
+                Text("Reviewer score: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private func applyPrefillIfNeeded() {
+        guard !didApplyPrefill, let prefill else { return }
+        didApplyPrefill = true
+        switch prefill {
+        case .catalog(_, let cat):
+            name = cat.common_name
+            variety = cat.variety ?? ""
+            company = cat.company ?? ""
+            notes = cat.instructions ?? ""
+            catalogID = cat.id
+        case .extraction(let result, _):
+            name = result.extraction.common_name ?? ""
+            variety = result.extraction.variety ?? ""
+            company = result.extraction.company ?? ""
+            notes = result.extraction.instructions ?? ""
+            catalogID = result.catalog_seed_id
+        }
+    }
+
     private func save() async {
         saving = true
         saveError = nil
@@ -131,6 +201,7 @@ struct AddSeedView: View {
         }
 
         let input = SeedkeepClient.CreateSeedInput(
+            catalog_id: catalogID,
             state: state,
             packet_count: state == .wishlist ? 0 : packetCount,
             location_id: locationID,

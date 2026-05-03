@@ -62,6 +62,41 @@ struct EnvelopeTests {
         }
     }
 
+    @Test func decodesExtractionResult() throws {
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "extraction_id": "xt_1",
+            "catalog_seed_id": "cs_1",
+            "decision": { "status": "published" },
+            "extraction": {
+              "common_name": "Tomato",
+              "variety": "Cherokee Purple",
+              "company": "Baker Creek",
+              "instructions": "Sow indoors 6–8 weeks before last frost…",
+              "self_confidence": 0.92
+            },
+            "review": { "score": 0.91, "notes": "Plausible heirloom variety; instructions match real planting guidance." },
+            "photo_keys": { "front": "households/h/extractions/xt_1/front-abc.jpg", "back": "households/h/extractions/xt_1/back-def.jpg" }
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<WireResponses.ExtractionResult>.self, from: json)
+        switch env {
+        case .ok(let result, _):
+            #expect(result.extraction_id == "xt_1")
+            #expect(result.catalog_seed_id == "cs_1")
+            #expect(result.decision.status == "published")
+            #expect(result.extraction.variety == "Cherokee Purple")
+            #expect(result.review.score == 0.91)
+            #expect(result.photo_keys.front.hasSuffix("front-abc.jpg"))
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
     @Test func decodesDeleteResult() throws {
         let json = #"""
         { "ok": true, "data": { "id": "loc_1", "deleted_at": 1777577200927 } }

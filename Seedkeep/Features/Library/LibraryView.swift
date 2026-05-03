@@ -11,6 +11,8 @@ struct LibraryView: View {
     @State private var selectedState: SeedState = .active
     @State private var searchText: String = ""
     @State private var showingAdd = false
+    @State private var showingScan = false
+    @State private var scanPrefill: AddSeedView.Prefill?
 
     var body: some View {
         NavigationStack {
@@ -35,6 +37,14 @@ struct LibraryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        showingScan = true
+                    } label: {
+                        Image(systemName: "viewfinder")
+                    }
+                    .accessibilityLabel("Scan packet")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
                         showingAdd = true
                     } label: {
                         Image(systemName: "plus")
@@ -45,9 +55,36 @@ struct LibraryView: View {
             .sheet(isPresented: $showingAdd) {
                 AddSeedView()
             }
+            .fullScreenCover(isPresented: $showingScan) {
+                ScanFlow { result in
+                    switch result {
+                    case .catalogHit(let barcode, let cat):
+                        scanPrefill = .catalog(barcode: barcode, cat)
+                    case .extracted(let extraction, let barcode):
+                        scanPrefill = .extraction(extraction, barcode: barcode)
+                    }
+                }
+            }
+            .sheet(item: Binding(
+                get: { scanPrefill.map { ScanPrefillBox(prefill: $0) } },
+                set: { box in scanPrefill = box?.prefill }
+            )) { box in
+                AddSeedView(prefill: box.prefill)
+            }
             .refreshable {
                 await appEnv.syncIfPossible()
             }
+        }
+    }
+}
+
+/// Identifiable wrapper so the prefill sheet can use `.sheet(item:)`.
+private struct ScanPrefillBox: Identifiable {
+    let prefill: AddSeedView.Prefill
+    var id: String {
+        switch prefill {
+        case .catalog(_, let cat): return "catalog-\(cat.id)"
+        case .extraction(let r, _): return "extraction-\(r.extraction_id)"
         }
     }
 }
