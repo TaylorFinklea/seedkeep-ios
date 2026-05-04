@@ -27,6 +27,30 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Backend") {
+                    NavigationLink {
+                        ServerSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Server", systemImage: "server.rack")
+                            Text(appEnv.preferences.effectiveServerURL.absoluteString)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    NavigationLink {
+                        AIProviderSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("AI provider", systemImage: "sparkles")
+                            Text(appEnv.preferences.aiProvider.displayName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 if case .signedIn(_, let household) = auth.state {
                     Section("Household") {
                         LabeledContent("Name", value: household.name)

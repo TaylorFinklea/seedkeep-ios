@@ -62,6 +62,8 @@ struct LibraryView: View {
                         scanPrefill = .catalog(barcode: barcode, cat)
                     case .extracted(let extraction, let barcode):
                         scanPrefill = .extraction(extraction, barcode: barcode)
+                    case .preExtracted(let pre, let barcode):
+                        scanPrefill = .preExtraction(pre, barcode: barcode)
                     }
                 }
             }
@@ -85,6 +87,7 @@ private struct ScanPrefillBox: Identifiable {
         switch prefill {
         case .catalog(_, let cat): return "catalog-\(cat.id)"
         case .extraction(let r, _): return "extraction-\(r.extraction_id)"
+        case .preExtraction(let r, _): return "pre-extraction-\(r.extraction_id)"
         }
     }
 }

@@ -175,4 +175,18 @@ public enum WireResponses {
         public let front: String
         public let back: String
     }
+
+    /// Response from `POST /api/extractions/pre-extracted`. Mirrors
+    /// `ExtractionResult` except `photo_keys` is a flat array (the
+    /// pre-extracted route stores 0–2 photos depending on what the client
+    /// uploaded) and `review.score` is the client-supplied
+    /// `self_confidence` rather than a server-side reviewer score.
+    public struct PreExtractedResult: Codable, Sendable, Equatable {
+        public let extraction_id: String
+        public let catalog_seed_id: String?
+        public let decision: ExtractionDecision
+        public let extraction: ExtractionFields
+        public let review: ExtractionReview
+        public let photo_keys: [String]
+    }
 }

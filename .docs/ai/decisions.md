@@ -72,6 +72,36 @@
 
 **Rationale**: The single-key form is well-tested by Apple and short-circuits the type-checker explosion. The amount of data we sort on the iOS client (per-household) easily fits in memory, so a secondary in-code sort is free.
 
+## [2026-05-04] Server URL picker + AI provider live in app preferences
+
+**Context**: F3 introduces three independent moving parts that previously had no UI: which Seedkeep server to talk to, which extraction tier to use, and what the *server-reported* tier is. We needed a place to put them that didn't grow the AppEnvironment surface or force every view to reach into UserDefaults.
+
+**Decision**: New `AppPreferences` (`@Observable`, `@MainActor`) holds three persisted values: `serverURLOverride: URL?`, `aiProvider: AIProvider` (`free` / `byok` / `hosted`), and `cachedTier: String?`. AppEnvironment owns one and exposes it; views read it via the environment. The bundled xcconfig URL is the *default*; `serverURLOverride` only fires when the user saves a non-default URL via Settings → Server (and only after `/api/health` succeeds against the candidate URL).
+
+**Alternatives considered**: Inline UserDefaults reads in each settings view; one big NSUserDefaults wrapper without observation; rebuild the SeedkeepClient on every view appearance.
+
+**Rationale**: Centralized observable preferences let SwiftUI re-render automatically when the URL or tier change, and make it trivial to write a "current state" diagnostic later. Validating the URL with `/api/health` *before* persisting prevents the app from silently breaking when a user typos a host.
+
+## [2026-05-04] On-device extraction is OCR + Foundation Models, not vision-direct
+
+**Context**: F3 needs a way to extract `common_name` / `variety` / `company` / `instructions` from packet photos *on-device*. Apple Foundation Models (iOS 26+) is the obvious target, but its public API surface is text-only — there's no `respond(to: image:)`.
+
+**Decision**: Two-stage on-device pipeline. Stage 1 = Vision (`VNRecognizeTextRequest`, iOS 13+) OCRs front + back JPEGs into raw text. Stage 2 = `FoundationModels.LanguageModelSession` (iOS 26+) ingests the OCR text and returns a JSON object. We parse the JSON in Swift and clamp `self_confidence` to [0,1].
+
+**Alternatives considered**: Wait for Apple to ship a vision-capable Foundation Models API; ship a small CoreML packet-classifier; ship without on-device extraction and force everyone to BYOK or Hosted.
+
+**Rationale**: OCR + LLM is *good enough* for seed packets — the packet is structured text, and OCR quality on modern iOS is excellent. We get a real `self_confidence` rating from the model that the server uses verbatim as the catalog-publish gate (per the server-side ADR). On iOS < 26 (or iOS 26+ devices without Apple Intelligence), we surface OCR-only output with `selfConfidence = 0` so the user still has a manual-review path.
+
+## [2026-05-04] iOS deployment target 18.1 (not 26.0) despite Foundation Models requirement
+
+**Context**: Foundation Models is an iOS 26+ framework. We could either bump the floor to 26.0 (smaller install base, simpler code) or stay broader and gate the framework usage with availability checks.
+
+**Decision**: Floor at iOS 18.1 (the minimum that ships a SwiftUI surface comparable to our usage). Wrap all `FoundationModels` references in `#if canImport(FoundationModels)` + `if #available(iOS 26.0, *)`. iOS 18.1–25.x devices fall through to OCR-only extraction or to the Hosted-tier server path.
+
+**Alternatives considered**: Floor at iOS 26.0; floor at iOS 18.0 (but FoundationMacros pulled tooling toward 18.1 anyway).
+
+**Rationale**: Phase 1's job is the daily-use seed library. Locking out everyone on iOS 18 to get one feature on iOS 26 trades the user base for the feature. The availability dance is mechanical and well-supported.
+
 ## [2026-04-30] Household auto-create on first sign-in
 
 **Context**: After Sign in with Apple, the user has zero households. We can either gate the rest of the app on a "Create or join household" wall, or auto-create one and let them invite later.

@@ -375,6 +375,81 @@ public actor SeedkeepClient {
         return try await perform(req)
     }
 
+    /// Body for `POST /api/extractions/pre-extracted`. The client extracts
+    /// fields on-device (Apple Foundation Models, OpenAI, Anthropic, etc.)
+    /// and sends the structured result + optional packet photos. Server
+    /// runs no LLM call — it persists, dedupes, and applies the catalog
+    /// decision based on the client-supplied `self_confidence`.
+    public struct PreExtractedInput: Codable, Sendable {
+        public var common_name: String?
+        public var variety: String?
+        public var company: String?
+        public var instructions: String?
+        public var self_confidence: Double
+        public var model_id: String
+        public var barcode: String?
+        public var perceptual_hash: String?
+        public var front_jpeg_b64: String?
+        public var back_jpeg_b64: String?
+
+        public init(
+            common_name: String?,
+            variety: String?,
+            company: String?,
+            instructions: String?,
+            self_confidence: Double,
+            model_id: String,
+            barcode: String? = nil,
+            perceptual_hash: String? = nil,
+            front_jpeg_b64: String? = nil,
+            back_jpeg_b64: String? = nil
+        ) {
+            self.common_name = common_name
+            self.variety = variety
+            self.company = company
+            self.instructions = instructions
+            self.self_confidence = self_confidence
+            self.model_id = model_id
+            self.barcode = barcode
+            self.perceptual_hash = perceptual_hash
+            self.front_jpeg_b64 = front_jpeg_b64
+            self.back_jpeg_b64 = back_jpeg_b64
+        }
+    }
+
+    public func submitPreExtracted(_ input: PreExtractedInput) async throws -> WireResponses.PreExtractedResult {
+        try await postJSON(path: "/api/extractions/pre-extracted", body: input)
+    }
+
+    // MARK: - Subscriptions
+
+    /// Response from `GET /api/subscriptions/me` and the `tier` portion of
+    /// `POST /api/subscriptions/verify`.
+    public struct SubscriptionMeResponse: Codable, Sendable, Equatable {
+        public let tier: String   // "free" | "byok" | "hosted"
+        public let subscription: SubscriptionDTO?
+    }
+
+    public struct SubscriptionDTO: Codable, Sendable, Equatable {
+        public let id: String
+        public let user_id: String
+        public let product_id: String
+        public let original_transaction_id: String
+        public let latest_transaction_id: String
+        public let status: String   // "active" | "expired" | "cancelled" | "refunded"
+        public let expires_at: Int64
+        public let last_verified_at: Int64
+        public let environment: String   // "production" | "sandbox"
+        public let created_at: Int64
+        public let updated_at: Int64
+    }
+
+    /// Reads the authenticated user's subscription state. Used at app
+    /// launch to learn the current tier (`free` / `byok` / `hosted`).
+    public func subscriptionMe() async throws -> SubscriptionMeResponse {
+        try await getJSON(path: "/api/subscriptions/me")
+    }
+
     // MARK: - Catalog
 
     public func catalogLookup(barcode: String) async throws -> CatalogSeedDTO? {

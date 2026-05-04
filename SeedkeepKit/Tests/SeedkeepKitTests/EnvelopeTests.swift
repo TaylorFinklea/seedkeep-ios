@@ -112,6 +112,119 @@ struct EnvelopeTests {
         }
     }
 
+    @Test func decodesPreExtractedResult() throws {
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "extraction_id": "xt_pre_1",
+            "catalog_seed_id": "cs_pre_1",
+            "decision": { "status": "published" },
+            "extraction": {
+              "common_name": "Sunflower",
+              "variety": "Mammoth",
+              "company": "Burpee",
+              "instructions": "Direct sow after last frost; full sun.",
+              "self_confidence": 0.88
+            },
+            "review": { "score": 0.88, "notes": "pre-extracted: self_confidence used as proxy" },
+            "photo_keys": [
+              "households/h/extractions/xt_pre_1/front-aaa.jpg",
+              "households/h/extractions/xt_pre_1/back-bbb.jpg"
+            ]
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<WireResponses.PreExtractedResult>.self, from: json)
+        switch env {
+        case .ok(let result, _):
+            #expect(result.extraction_id == "xt_pre_1")
+            #expect(result.catalog_seed_id == "cs_pre_1")
+            #expect(result.decision.status == "published")
+            #expect(result.extraction.variety == "Mammoth")
+            #expect(result.review.score == 0.88)
+            #expect(result.photo_keys.count == 2)
+            #expect(result.photo_keys.first?.hasSuffix("front-aaa.jpg") == true)
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
+    @Test func decodesPreExtractedWithoutPhotos() throws {
+        // Pre-extracted submissions can omit photos entirely. Server still
+        // returns the same shape with an empty photo_keys array.
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "extraction_id": "xt_pre_2",
+            "catalog_seed_id": null,
+            "decision": { "status": "pending", "reason": "low_confidence" },
+            "extraction": {
+              "common_name": null, "variety": null, "company": null,
+              "instructions": null, "self_confidence": 0.42
+            },
+            "review": { "score": 0.42, "notes": "pre-extracted: self_confidence used as proxy" },
+            "photo_keys": []
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<WireResponses.PreExtractedResult>.self, from: json)
+        switch env {
+        case .ok(let result, _):
+            #expect(result.catalog_seed_id == nil)
+            #expect(result.decision.status == "pending")
+            #expect(result.decision.reason == "low_confidence")
+            #expect(result.photo_keys.isEmpty)
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
+    @Test func decodesSubscriptionMe() throws {
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "tier": "hosted",
+            "subscription": {
+              "id": "sub_1", "user_id": "u1", "product_id": "app.seedkeep.hosted.monthly",
+              "original_transaction_id": "ot_1", "latest_transaction_id": "lt_2",
+              "status": "active", "expires_at": 1777580000000, "last_verified_at": 1777570000000,
+              "environment": "production", "created_at": 1777560000000, "updated_at": 1777570000000
+            }
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<SeedkeepClient.SubscriptionMeResponse>.self, from: json)
+        switch env {
+        case .ok(let me, _):
+            #expect(me.tier == "hosted")
+            #expect(me.subscription?.status == "active")
+            #expect(me.subscription?.environment == "production")
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
+    @Test func decodesSubscriptionMeFreeTierNoSubscription() throws {
+        let json = #"""
+        { "ok": true, "data": { "tier": "free", "subscription": null } }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<SeedkeepClient.SubscriptionMeResponse>.self, from: json)
+        switch env {
+        case .ok(let me, _):
+            #expect(me.tier == "free")
+            #expect(me.subscription == nil)
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
     @Test func decodesSeedDTOWithTagIds() throws {
         let json = #"""
         {

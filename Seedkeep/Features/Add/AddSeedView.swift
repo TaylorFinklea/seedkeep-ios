@@ -7,12 +7,14 @@ import SeedkeepKit
 /// (prefilled from a catalog hit or AI extraction; see `Prefill`).
 struct AddSeedView: View {
     /// Pre-fill source. `.catalog` populates fields from a confirmed
-    /// catalog match; `.extraction` populates them from AI vision and
-    /// renders a "AI-extracted, please review" banner so the user knows
-    /// to spot-check.
+    /// catalog match; `.extraction` populates them from server-side AI
+    /// vision (Hosted tier); `.preExtraction` populates them from
+    /// on-device extraction (Free / BYOK tier). All three render a
+    /// review banner so the user knows what they're spot-checking.
     enum Prefill: Equatable {
         case catalog(barcode: String?, CatalogSeedDTO)
         case extraction(WireResponses.ExtractionResult, barcode: String?)
+        case preExtraction(WireResponses.PreExtractedResult, barcode: String?)
     }
 
     let prefill: Prefill?
@@ -166,6 +168,19 @@ struct AddSeedView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        case .preExtraction(let result, _):
+            VStack(alignment: .leading, spacing: 4) {
+                Label {
+                    Text("Extracted on-device. Please review.")
+                        .font(.footnote.weight(.medium))
+                } icon: {
+                    Image(systemName: "iphone.gen3")
+                        .foregroundStyle(.blue)
+                }
+                Text("Self-confidence: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         case .none:
             EmptyView()
         }
@@ -182,6 +197,12 @@ struct AddSeedView: View {
             notes = cat.instructions ?? ""
             catalogID = cat.id
         case .extraction(let result, _):
+            name = result.extraction.common_name ?? ""
+            variety = result.extraction.variety ?? ""
+            company = result.extraction.company ?? ""
+            notes = result.extraction.instructions ?? ""
+            catalogID = result.catalog_seed_id
+        case .preExtraction(let result, _):
             name = result.extraction.common_name ?? ""
             variety = result.extraction.variety ?? ""
             company = result.extraction.company ?? ""

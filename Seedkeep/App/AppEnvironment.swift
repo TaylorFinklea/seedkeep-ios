@@ -7,8 +7,10 @@ import SeedkeepKit
 /// `SeedkeepClient`, the SwiftData `ModelContainer`, the `SyncEngine`,
 /// and the `AuthController`. SwiftUI views read this as an `@Environment`.
 ///
-/// We resolve config eagerly at first access so a misconfigured xcconfig
-/// crashes the app cleanly during development instead of failing later.
+/// Server URL resolution: the bundled xcconfig provides the *default*
+/// (e.g. localhost in dev, official cloud host in release). Users can
+/// override per-install via Settings → Server, which writes a URL into
+/// `AppPreferences`. We honor the override on launch + when it changes.
 @MainActor
 @Observable
 public final class AppEnvironment {
@@ -16,23 +18,35 @@ public final class AppEnvironment {
     public let auth: AuthController
     public let container: ModelContainer
     public let sync: SyncEngine
+    public let preferences: AppPreferences
 
     public static func live() -> AppEnvironment {
-        let baseURL = Self.resolveBaseURL()
+        let bundleDefaultURL = Self.resolveBundleDefaultURL()
+        let prefs = AppPreferences(bundleDefaultURL: bundleDefaultURL)
         let keychainService = Self.resolveKeychainService()
         let store = KeychainTokenStore(service: keychainService)
-        let client = SeedkeepClient(configuration: .init(baseURL: baseURL))
+        let client = SeedkeepClient(configuration: .init(baseURL: prefs.effectiveServerURL))
         let auth = AuthController(client: client, tokenStore: store)
         let container = Self.makeModelContainer()
         let sync = SyncEngine(client: client, container: container)
-        return AppEnvironment(client: client, auth: auth, container: container, sync: sync)
+        return AppEnvironment(
+            client: client, auth: auth, container: container,
+            sync: sync, preferences: prefs
+        )
     }
 
-    private init(client: SeedkeepClient, auth: AuthController, container: ModelContainer, sync: SyncEngine) {
+    private init(
+        client: SeedkeepClient,
+        auth: AuthController,
+        container: ModelContainer,
+        sync: SyncEngine,
+        preferences: AppPreferences
+    ) {
         self.client = client
         self.auth = auth
         self.container = container
         self.sync = sync
+        self.preferences = preferences
     }
 
     /// Triggers a sync if the user is signed in. Safe to call repeatedly —
@@ -43,7 +57,41 @@ public final class AppEnvironment {
         }
     }
 
-    private static func resolveBaseURL() -> URL {
+    /// Validates that `url` answers `/api/health` then mutates the live
+    /// `SeedkeepClient` to point at it and persists the override.
+    /// Returns `nil` on success or a human-readable error.
+    public func setServerURL(_ url: URL) async -> String? {
+        let probe = SeedkeepClient(configuration: .init(baseURL: url))
+        do {
+            _ = try await probe.health()
+        } catch let err as SeedkeepError {
+            return "\(err.code): \(err.message)"
+        } catch {
+            return "Could not reach \(url.absoluteString): \(error.localizedDescription)"
+        }
+        await client.setBaseURL(url)
+        preferences.serverURLOverride = url == preferences.bundleDefault ? nil : url
+        return nil
+    }
+
+    /// Resets to the bundle default URL.
+    public func resetServerURLToDefault() async {
+        await client.setBaseURL(preferences.bundleDefault)
+        preferences.serverURLOverride = nil
+    }
+
+    /// Refreshes the cached tier by calling `/api/subscriptions/me`.
+    /// Safe to call without a sign-in — returns silently on auth errors.
+    public func refreshTier() async {
+        do {
+            let res = try await client.subscriptionMe()
+            preferences.cachedTier = res.tier
+        } catch {
+            // Quietly ignore — UI continues to render the last cached tier.
+        }
+    }
+
+    private static func resolveBundleDefaultURL() -> URL {
         let info = Bundle.main.infoDictionary ?? [:]
         let scheme = (info["SeedkeepAPIScheme"] as? String) ?? "http"
         let host = (info["SeedkeepAPIHost"] as? String) ?? "localhost:8787"

@@ -7,6 +7,9 @@ import SeedkeepKit
 enum ScanResult: Equatable {
     case catalogHit(barcode: String, catalog: CatalogSeedDTO)
     case extracted(WireResponses.ExtractionResult, barcode: String?)
+    /// Result of an on-device extraction (free / byok tier), persisted via
+    /// `POST /api/extractions/pre-extracted`.
+    case preExtracted(WireResponses.PreExtractedResult, barcode: String?)
 }
 
 /// Orchestrates the scan-to-data flow:
@@ -145,6 +148,18 @@ struct ScanFlow: View {
     }
 
     private func runExtraction(front: Data, back: Data, barcode: String?) async {
+        // Branch on the user's chosen AI provider. Free + BYOK both run
+        // on-device and POST the structured result to the pre-extracted
+        // endpoint. Hosted hits the multipart server-vision route.
+        switch appEnv.preferences.aiProvider {
+        case .free, .byok:
+            await runOnDeviceExtraction(front: front, back: back, barcode: barcode)
+        case .hosted:
+            await runHostedExtraction(front: front, back: back, barcode: barcode)
+        }
+    }
+
+    private func runHostedExtraction(front: Data, back: Data, barcode: String?) async {
         do {
             let result = try await appEnv.client.submitExtraction(
                 frontJPEG: front,
@@ -154,6 +169,44 @@ struct ScanFlow: View {
             )
             onComplete(.extracted(result, barcode: barcode))
             dismiss()
+        } catch let err as SeedkeepError where err.code == "wrong_tier" {
+            phase = .error("Server says you're not on the Hosted tier. Switch to Free / BYOK in Settings → AI provider, or subscribe.")
+        } catch let err as SeedkeepError {
+            phase = .error("\(err.code): \(err.message)")
+        } catch {
+            phase = .error(error.localizedDescription)
+        }
+    }
+
+    private func runOnDeviceExtraction(front: Data, back: Data, barcode: String?) async {
+        let extractor = OnDeviceExtractor()
+        let output: OnDeviceExtractor.Output
+        do {
+            output = try await extractor.extract(frontJPEG: front, backJPEG: back)
+        } catch {
+            phase = .error("On-device extraction failed: \(error.localizedDescription)")
+            return
+        }
+
+        let input = SeedkeepClient.PreExtractedInput(
+            common_name: output.commonName,
+            variety: output.variety,
+            company: output.company,
+            instructions: output.instructions,
+            self_confidence: output.selfConfidence,
+            model_id: output.modelID,
+            barcode: barcode,
+            perceptual_hash: nil,
+            front_jpeg_b64: front.base64EncodedString(),
+            back_jpeg_b64: back.base64EncodedString()
+        )
+
+        do {
+            let result = try await appEnv.client.submitPreExtracted(input)
+            onComplete(.preExtracted(result, barcode: barcode))
+            dismiss()
+        } catch let err as SeedkeepError where err.code == "wrong_tier" {
+            phase = .error("Server says you're on Hosted. Switch to Hosted in Settings → AI provider, or downgrade.")
         } catch let err as SeedkeepError {
             phase = .error("\(err.code): \(err.message)")
         } catch {

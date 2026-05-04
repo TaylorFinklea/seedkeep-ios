@@ -2,7 +2,10 @@ name: Seedkeep
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
-    iOS: "18.0"
+    # iOS 18.1 floor lets us link FoundationModels (iOS 26+ at runtime,
+    # availability-gated) without dropping pre-26 devices entirely. Older
+    # devices fall through to manual entry or the Hosted (server) tier.
+    iOS: "18.1"
   developmentLanguage: en
   groupSortPosition: top
   generateEmptyDirectories: true

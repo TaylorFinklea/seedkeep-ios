@@ -33,6 +33,14 @@ iOS client for Seedkeep. Phase 1: a household seed library with offline-first in
 - [x] E1: Universal-link invite accept (`seedkeep://invite/<code>` + `https://seedkeep.app/invite/<code>`); InviteAcceptView refreshes household after success
 - [x] E2: Write-queue retry hardening — exponential backoff, dead-letter at 6 attempts, Pending Writes diagnostic view in Settings (retry / forget actions)
 - [x] E3: Photo attach to seed (online-only) — PhotosPicker → JPEG → /api/seeds/:id/photos → refresh seed photos; AuthedImage view for Bearer-aware fetches
+- [x] F3a: Bump iOS deployment target 18.0 → 18.1 (FoundationModels at runtime via iOS 26+ availability gate)
+- [x] F3b: Settings → Server URL picker validating against /api/health
+- [x] F3c: Settings → AI provider (Free / BYOK / Hosted) with tier-mismatch warning + cached server tier
+- [x] F3d: OnDeviceExtractor — Vision OCR + Foundation Models structured-fields extraction
+- [x] F3e: ScanFlow branches on aiProvider; Free / BYOK POST /api/extractions/pre-extracted; Hosted keeps server-vision path
+- [x] F3f: SeedkeepKit — submitPreExtracted, PreExtractedInput / PreExtractedResult, SubscriptionMeResponse, subscriptionMe(); 10/10 tests pass
+- [ ] **F4**: iOS BYOK key fields (Anthropic + OpenAI Keychain) + StoreKit 2 subscription flow + receipt validation against /api/subscriptions/verify
+- [ ] **F5**: End-to-end verification on real device against `seedkeep-server` across all three tiers + final handoff doc updates
 - [ ] **Deferred to post-Phase-1**: offline photo upload queue with byte-storage in SwiftData; HEIC pass-through; thumbnail server-side
 
 ### Later
