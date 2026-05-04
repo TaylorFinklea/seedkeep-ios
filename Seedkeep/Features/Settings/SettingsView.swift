@@ -49,6 +49,26 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    NavigationLink {
+                        APIKeysSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("API keys", systemImage: "key.fill")
+                            Text(apiKeysStatusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    NavigationLink {
+                        SubscriptionSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Subscription", systemImage: "creditcard")
+                            Text(subscriptionStatusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 if case .signedIn(_, let household) = auth.state {
@@ -106,6 +126,17 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
         }
+    }
+
+    private var apiKeysStatusText: String {
+        if let provider = appEnv.apiKeys.preferredProvider() {
+            return "\(provider.displayName) configured"
+        }
+        return "None configured"
+    }
+
+    private var subscriptionStatusText: String {
+        appEnv.preferences.cachedTier ?? "Tap to view"
     }
 
     private func createInvite() async {

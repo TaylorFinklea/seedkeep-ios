@@ -102,6 +102,36 @@
 
 **Rationale**: Phase 1's job is the daily-use seed library. Locking out everyone on iOS 18 to get one feature on iOS 26 trades the user base for the feature. The availability dance is mechanical and well-supported.
 
+## [2026-05-04] BYOK keys live only in the device Keychain
+
+**Context**: BYOK ("bring your own key") lets a user point Seedkeep at an Anthropic or OpenAI account they already pay for. The natural temptation is to store the key on the server so we can run extraction server-side with it — that gives us the same vision pipeline as Hosted, but billed to the user.
+
+**Decision**: BYOK keys never reach our server. They live in the device Keychain, are read into `BYOKExtractor` at extraction time, and the vision call goes directly from the iPhone to api.anthropic.com / api.openai.com. The structured result is then POSTed to `/api/extractions/pre-extracted` (same path Free uses).
+
+**Alternatives considered**: Store keys server-side (encrypted at rest); proxy BYOK calls through our server with the user's key passed in headers; ship a "we'll just charge you" tier instead.
+
+**Rationale**: Keys-on-server is a security liability (compliance burden, breach blast radius, accidental logging). It also gives us nothing the device can't do itself — Anthropic and OpenAI APIs are reachable from iOS. Keeping the boundary clean — server never sees a third-party API key — also matches the self-host story: a self-hoster never has to worry about a third-party key in their database.
+
+## [2026-05-04] StoreKit 2 + verifyReceipt as the IAP path
+
+**Context**: F4 needs to take money for the Hosted tier. Apple's IAP options for an auto-renewable subscription: StoreKit 1 (legacy), StoreKit 2 (modern, async/await), App Store Server API (server-driven, requires JWT signing).
+
+**Decision**: StoreKit 2 on the client + the legacy `verifyReceipt` endpoint on the server. The client base64-encodes `Bundle.main.appStoreReceiptURL` bytes and POSTs them to `/api/subscriptions/verify`; the server hits Apple's verifyReceipt with the configured shared secret and falls back from production → sandbox per Apple's recipe.
+
+**Alternatives considered**: StoreKit 1 (deprecated for new code); App Store Server API + S2S notifications instead of verifyReceipt.
+
+**Rationale**: StoreKit 2 gives us async/await + JWS-verified transactions client-side; verifyReceipt + shared secret is the simplest server path that doesn't require generating + signing JWTs. We can swap to App Store Server API + S2S notifications later (already noted as a TODO in the server roadmap) without changing the iOS surface.
+
+## [2026-05-04] Device-side BYOK uses vision-LLM, not OCR + LLM
+
+**Context**: Free uses two-stage extraction (Vision OCR → Foundation Models) because Foundation Models is text-only. BYOK could either follow the same shape (OCR → Anthropic-text) or send the raw images straight to a vision-capable LLM.
+
+**Decision**: BYOK sends raw images to Anthropic's Claude vision (or OpenAI's GPT-4o vision). No on-device OCR step.
+
+**Alternatives considered**: OCR + text-LLM via the user's key (cheaper per call, but needs an OCR pass); send images as data-URIs but use a text-only model (worse quality, no upside).
+
+**Rationale**: Vision LLMs are *much* better than OCR + text-LLM at packet extraction — they can read color cues, logos, layout, partial text. The user is already paying for tokens; we should give them the best quality their key can buy. Free has to use OCR because Foundation Models can't see images; BYOK has no such restriction.
+
 ## [2026-04-30] Household auto-create on first sign-in
 
 **Context**: After Sign in with Apple, the user has zero households. We can either gate the rest of the app on a "Create or join household" wall, or auto-create one and let them invite later.

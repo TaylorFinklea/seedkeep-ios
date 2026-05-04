@@ -148,14 +148,58 @@ struct ScanFlow: View {
     }
 
     private func runExtraction(front: Data, back: Data, barcode: String?) async {
-        // Branch on the user's chosen AI provider. Free + BYOK both run
-        // on-device and POST the structured result to the pre-extracted
-        // endpoint. Hosted hits the multipart server-vision route.
+        // Branch on the user's chosen AI provider. Free runs Apple
+        // Foundation Models on-device; BYOK calls the user's chosen
+        // remote provider with their key (still bypassing our server);
+        // Hosted hits the multipart server-vision route. All three
+        // ultimately persist via /api/extractions/pre-extracted (or
+        // /api/extractions for Hosted).
         switch appEnv.preferences.aiProvider {
-        case .free, .byok:
+        case .free:
             await runOnDeviceExtraction(front: front, back: back, barcode: barcode)
+        case .byok:
+            await runBYOKExtraction(front: front, back: back, barcode: barcode)
         case .hosted:
             await runHostedExtraction(front: front, back: back, barcode: barcode)
+        }
+    }
+
+    private func runBYOKExtraction(front: Data, back: Data, barcode: String?) async {
+        let extractor = BYOKExtractor(keyStore: appEnv.apiKeys)
+        let output: BYOKExtractor.Output
+        do {
+            output = try await extractor.extract(frontJPEG: front, backJPEG: back)
+        } catch BYOKExtractor.Failure.noKey {
+            phase = .error("No API key set. Add one in Settings → API keys, or switch to Free / Hosted.")
+            return
+        } catch {
+            phase = .error("BYOK extraction failed: \(error.localizedDescription)")
+            return
+        }
+
+        let input = SeedkeepClient.PreExtractedInput(
+            common_name: output.commonName,
+            variety: output.variety,
+            company: output.company,
+            instructions: output.instructions,
+            self_confidence: output.selfConfidence,
+            model_id: output.modelID,
+            barcode: barcode,
+            perceptual_hash: nil,
+            front_jpeg_b64: front.base64EncodedString(),
+            back_jpeg_b64: back.base64EncodedString()
+        )
+
+        do {
+            let result = try await appEnv.client.submitPreExtracted(input)
+            onComplete(.preExtracted(result, barcode: barcode))
+            dismiss()
+        } catch let err as SeedkeepError where err.code == "wrong_tier" {
+            phase = .error("Server says you're on Hosted — switch in Settings → AI provider, or downgrade.")
+        } catch let err as SeedkeepError {
+            phase = .error("\(err.code): \(err.message)")
+        } catch {
+            phase = .error(error.localizedDescription)
         }
     }
 

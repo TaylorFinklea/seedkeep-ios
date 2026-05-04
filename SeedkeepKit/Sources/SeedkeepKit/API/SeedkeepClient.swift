@@ -450,6 +450,32 @@ public actor SeedkeepClient {
         try await getJSON(path: "/api/subscriptions/me")
     }
 
+    /// Result of validating a StoreKit receipt against the server.
+    public struct VerifyReceiptResponse: Codable, Sendable, Equatable {
+        public let tier: String
+        public let environment: String
+        public let subscription: VerifiedSubscription
+
+        public struct VerifiedSubscription: Codable, Sendable, Equatable {
+            public let product_id: String
+            public let original_transaction_id: String
+            public let status: String
+            public let expires_at: Int64
+        }
+    }
+
+    /// Posts the StoreKit receipt blob (base64-encoded contents of
+    /// `Bundle.main.appStoreReceiptURL`) to the server. The server hits
+    /// Apple's /verifyReceipt, persists the subscription, and flips the
+    /// user's tier to `hosted` while the subscription is active.
+    public func verifyAppleReceipt(receiptDataB64: String) async throws -> VerifyReceiptResponse {
+        struct Body: Encodable { let receipt_data: String }
+        return try await postJSON(
+            path: "/api/subscriptions/verify",
+            body: Body(receipt_data: receiptDataB64)
+        )
+    }
+
     // MARK: - Catalog
 
     public func catalogLookup(barcode: String) async throws -> CatalogSeedDTO? {

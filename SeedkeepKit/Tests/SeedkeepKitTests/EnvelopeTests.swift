@@ -210,6 +210,36 @@ struct EnvelopeTests {
         }
     }
 
+    @Test func decodesVerifyReceiptResponse() throws {
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "tier": "hosted",
+            "environment": "sandbox",
+            "subscription": {
+              "product_id": "app.seedkeep.hosted.monthly",
+              "original_transaction_id": "ot_abc",
+              "status": "active",
+              "expires_at": 1777580000000
+            }
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<SeedkeepClient.VerifyReceiptResponse>.self, from: json)
+        switch env {
+        case .ok(let res, _):
+            #expect(res.tier == "hosted")
+            #expect(res.environment == "sandbox")
+            #expect(res.subscription.product_id == "app.seedkeep.hosted.monthly")
+            #expect(res.subscription.status == "active")
+            #expect(res.subscription.expires_at == 1777580000000)
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
     @Test func decodesSubscriptionMeFreeTierNoSubscription() throws {
         let json = #"""
         { "ok": true, "data": { "tier": "free", "subscription": null } }

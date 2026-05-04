@@ -39,8 +39,13 @@ iOS client for Seedkeep. Phase 1: a household seed library with offline-first in
 - [x] F3d: OnDeviceExtractor — Vision OCR + Foundation Models structured-fields extraction
 - [x] F3e: ScanFlow branches on aiProvider; Free / BYOK POST /api/extractions/pre-extracted; Hosted keeps server-vision path
 - [x] F3f: SeedkeepKit — submitPreExtracted, PreExtractedInput / PreExtractedResult, SubscriptionMeResponse, subscriptionMe(); 10/10 tests pass
-- [ ] **F4**: iOS BYOK key fields (Anthropic + OpenAI Keychain) + StoreKit 2 subscription flow + receipt validation against /api/subscriptions/verify
-- [ ] **F5**: End-to-end verification on real device against `seedkeep-server` across all three tiers + final handoff doc updates
+- [x] F4a: APIKeyStore — Keychain-backed Anthropic + OpenAI keys
+- [x] F4b: Settings → API keys form (mask, save, clear, prefix-validation warning)
+- [x] F4c: BYOKExtractor — direct vision call to Anthropic (preferred) or OpenAI from the device
+- [x] F4d: SubscriptionManager — StoreKit 2 product load, purchase, restore, transaction-update listener
+- [x] F4e: Settings → Subscription view — buy / restore + server-tier display
+- [x] F4f: SeedkeepKit — verifyAppleReceipt(receiptDataB64:) + VerifyReceiptResponse; 11/11 tests pass
+- [ ] **F5**: End-to-end verification on real device across all three tiers + handoff doc updates. Blocker: App Store Connect product configuration.
 - [ ] **Deferred to post-Phase-1**: offline photo upload queue with byte-storage in SwiftData; HEIC pass-through; thumbnail server-side
 
 ### Later

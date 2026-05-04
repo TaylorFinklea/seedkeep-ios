@@ -19,19 +19,24 @@ public final class AppEnvironment {
     public let container: ModelContainer
     public let sync: SyncEngine
     public let preferences: AppPreferences
+    public let apiKeys: APIKeyStore
+    public let subscriptions: SubscriptionManager
 
     public static func live() -> AppEnvironment {
         let bundleDefaultURL = Self.resolveBundleDefaultURL()
         let prefs = AppPreferences(bundleDefaultURL: bundleDefaultURL)
         let keychainService = Self.resolveKeychainService()
         let store = KeychainTokenStore(service: keychainService)
+        let apiKeys = APIKeyStore(service: keychainService)
         let client = SeedkeepClient(configuration: .init(baseURL: prefs.effectiveServerURL))
         let auth = AuthController(client: client, tokenStore: store)
         let container = Self.makeModelContainer()
         let sync = SyncEngine(client: client, container: container)
+        let subscriptions = SubscriptionManager(client: client)
         return AppEnvironment(
             client: client, auth: auth, container: container,
-            sync: sync, preferences: prefs
+            sync: sync, preferences: prefs, apiKeys: apiKeys,
+            subscriptions: subscriptions
         )
     }
 
@@ -40,13 +45,17 @@ public final class AppEnvironment {
         auth: AuthController,
         container: ModelContainer,
         sync: SyncEngine,
-        preferences: AppPreferences
+        preferences: AppPreferences,
+        apiKeys: APIKeyStore,
+        subscriptions: SubscriptionManager
     ) {
         self.client = client
         self.auth = auth
         self.container = container
         self.sync = sync
         self.preferences = preferences
+        self.apiKeys = apiKeys
+        self.subscriptions = subscriptions
     }
 
     /// Triggers a sync if the user is signed in. Safe to call repeatedly —
