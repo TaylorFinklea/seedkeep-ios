@@ -20,6 +20,11 @@
 	<h1>Seedkeep</h1>
 	<p class="tagline">Your household seed library.</p>
 	<span class="status">Coming soon to the App Store</span>
+	<p class="source-note">
+		Free, MIT-licensed, self-hostable.
+		<a href="https://github.com/TaylorFinklea/seedkeep-ios">iOS source</a> ·
+		<a href="https://github.com/TaylorFinklea/seedkeep-server">Server source</a>
+	</p>
 </section>
 
 <section class="intro">
@@ -102,6 +107,12 @@
 		color: var(--text-muted);
 		border-radius: 999px;
 		letter-spacing: 0.02em;
+	}
+
+	.source-note {
+		margin-top: var(--space-md);
+		font-size: 0.9rem;
+		color: var(--text-muted);
 	}
 
 	.intro p,
