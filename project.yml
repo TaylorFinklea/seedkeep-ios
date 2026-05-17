@@ -50,6 +50,18 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         NSCameraUsageDescription: "Seedkeep needs the camera to scan seed-packet barcodes and capture front/back photos for AI catalog extraction."
         NSPhotoLibraryUsageDescription: "Seedkeep can attach photos from your library to seed entries."
+        # iPhone is portrait-locked (the UI is designed around the single-
+        # hand thumb reach). iPad needs all four orientations declared
+        # because Stage Manager / Split View resize apps to arbitrary
+        # frames — Apple's validator rejects iPad-capable binaries that
+        # don't support all four.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        "UISupportedInterfaceOrientations~ipad":
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # Declares that the app's use of encryption is exempt under the
         # standard HTTPS/URLSession provisions. Stops TestFlight from
         # asking on every build. Flip to true (and file an annual

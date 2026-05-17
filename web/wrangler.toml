@@ -1,0 +1,18 @@
+#:schema node_modules/wrangler/config-schema.json
+
+# Static-assets-only Cloudflare project: no Worker code, no server-side
+# rendering, no edge functions. SvelteKit's adapter-static prerenders
+# every route at build time into ./build, then wrangler ships those
+# files to Cloudflare's edge network. Custom domain (seedkeep.app) and
+# DNS are configured in the Cloudflare dashboard once the project
+# exists.
+
+name = "seedkeep-web"
+compatibility_date = "2026-05-17"
+
+[assets]
+directory = "./build"
+
+# The _headers file in build/ is honored automatically by Cloudflare's
+# asset server, which is how the AASA file gets served as
+# application/json instead of text/plain. No extra config needed here.

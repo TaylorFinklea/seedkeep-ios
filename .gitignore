@@ -19,6 +19,7 @@ Config/AppConfig.local.xcconfig
 # Swift Package
 .build/
 Package.resolved
+.swiftpm/
 
 # macOS
 .DS_Store

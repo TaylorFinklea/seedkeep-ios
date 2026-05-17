@@ -28,16 +28,46 @@ Pages, Netlify, GitHub Pages, S3 + CloudFront, whatever.
   app's household-invite deep links. Served as `application/json` via the
   `static/_headers` Cloudflare Pages directive.
 
-## Deploy notes
+## Deploy to Cloudflare
 
-**Cloudflare Pages** is the easiest path. Connect this repo's `web/` directory,
-set the build command to `npm run build`, output directory `build`. The
-`static/_headers` file is honored automatically.
+The repo ships a `wrangler.toml` that configures the project as static-only
+(no Worker code, just assets). The Cloudflare Workers Builds dashboard
+settings for a fresh project:
 
-If you deploy somewhere that doesn't read `_headers` (e.g. plain GitHub Pages),
-configure the host to serve `/.well-known/apple-app-site-association` with
-`Content-Type: application/json` — Apple's universal-link validator rejects
-anything else.
+| Setting | Value |
+|---|---|
+| **Build command** | `npm install && npm run build` |
+| **Deploy command** | `npx wrangler deploy` |
+| **Path / root directory** | `/web` (where this README lives — *not* `/web/build`) |
+| **Non-production deploy** | `npx wrangler versions upload` (default) |
+
+After the first deploy:
+
+1. Add the custom domain `seedkeep.app` in the Cloudflare dashboard → Workers
+   & Pages → seedkeep-web → Custom domains. DNS resolves automatically if the
+   domain is on Cloudflare; otherwise add the CNAME record the dashboard
+   shows.
+2. Validate the AASA file:
+   ```bash
+   curl -I https://seedkeep.app/.well-known/apple-app-site-association
+   ```
+   Expected `200 OK` + `content-type: application/json`. Apple's CDN cache
+   warms up over the next ~24 hours at
+   <https://app-site-association.cdn-apple.com/a/v1/seedkeep.app>.
+
+## Manual deploy (alternative)
+
+If you'd rather skip the Cloudflare dashboard wiring and deploy from your
+machine:
+
+```bash
+cd web
+npm install
+npm run build
+npx wrangler deploy
+```
+
+Wrangler will prompt for auth the first time, then publish `build/` directly.
 
 ## Validating the AASA file after deploy
 
