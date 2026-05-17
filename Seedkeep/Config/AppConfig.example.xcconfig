@@ -13,10 +13,10 @@
 // profiles across machines.
 PRODUCT_BUNDLE_IDENTIFIER = app.seedkeep.ios
 
-// Apple Developer Team ID. Empty in the committed example so simulator
-// builds work without a paid developer account. Fill in for real-device
-// or archive builds.
-DEVELOPMENT_TEAM =
+// Apple Developer Team ID. Required for real-device + archive builds;
+// simulator builds tolerate it being empty. This is the same team that
+// publishes Joji, SimmerSmith, Open Feelings, and Patchstand.
+DEVELOPMENT_TEAM = K7CBQW6MPG
 
 // Keychain service used for the Bearer-token store. Defaults to the bundle
 // id so different environments don't collide.

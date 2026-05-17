@@ -1,0 +1,7 @@
+# Cloudflare Pages / Netlify-style headers file.
+# Apple requires the AASA file to be served as application/json.
+# Without an extension on the URL, hosts default to text/plain
+# which makes the universal-link validator reject the file.
+/.well-known/apple-app-site-association
+  Content-Type: application/json
+  Cache-Control: public, max-age=3600

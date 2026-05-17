@@ -155,12 +155,13 @@ Open items before public submission. Items already done are checked.
 - [x] iOS build green for both simulator + real-device Release
 - [x] Export compliance declared (`ITSAppUsesNonExemptEncryption = false`)
 - [x] Hosted tier feature-flagged off — Free + BYOK only for v1
-- [ ] **App Icon PNG** added to `AppIcon.appiconset` (blocking upload)
-- [ ] **DEVELOPMENT_TEAM** set in `AppConfig.local.xcconfig`
-- [ ] **Privacy Policy** page live at `https://seedkeep.app/privacy`
-- [ ] **Support** page live at `https://seedkeep.app/support`
-- [ ] **Marketing** page live at `https://seedkeep.app` (can be one-pager)
-- [ ] **Apple-App-Site-Association** file hosted at `https://seedkeep.app/.well-known/apple-app-site-association` so the household-invite universal links work
+- [x] App Icon PNG in `AppIcon.appiconset` (sprout-keep on cream, 1024×1024)
+- [x] `DEVELOPMENT_TEAM = K7CBQW6MPG` pinned in `AppConfig.example.xcconfig`
+- [x] Marketing-site scaffolded at `web/` (SvelteKit + adapter-static)
+- [x] Privacy Policy + Support pages drafted (`web/src/routes/{privacy,support}`)
+- [x] Apple-App-Site-Association generated (`web/static/.well-known/apple-app-site-association`) with `K7CBQW6MPG.app.seedkeep.ios` + `/invite/*`
+- [ ] **Deploy `web/` to seedkeep.app** — `npm install && npm run build && upload build/ to Cloudflare Pages` (or any static host that honors `_headers`)
+- [ ] **Validate AASA after deploy** — `curl -I https://seedkeep.app/.well-known/apple-app-site-association` should return `application/json`; also check Apple's CDN cache at `https://app-site-association.cdn-apple.com/a/v1/seedkeep.app`
 - [ ] **Screenshots** captured at 6.7" (iPhone 15 Pro Max), 6.5", and 5.5" simulator sizes — at least 3 each
 - [ ] **F5 real-device verification** — sideload, sign in, scan a packet via Free path, switch to BYOK with a test key, scan again, verify both paths POST a `catalog_extractions` row server-side
 - [ ] **Archive + TestFlight upload** — internal testing first
