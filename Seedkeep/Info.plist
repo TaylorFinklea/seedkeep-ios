@@ -31,6 +31,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>KeychainService</key>
 	<string>$(KEYCHAIN_SERVICE)</string>
 	<key>NSCameraUsageDescription</key>

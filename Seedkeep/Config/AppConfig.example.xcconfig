@@ -1,10 +1,22 @@
 // Example config — copy to AppConfig.local.xcconfig and wire it as the
 // base configuration for the Seedkeep target if you need per-developer
 // overrides. The committed defaults already build on a fresh checkout.
+//
+// For a real-device build you MUST also set DEVELOPMENT_TEAM to your
+// Apple Developer Team ID. Find it at developer.apple.com → Membership
+// (the 10-character "Team ID"). Either copy this file to
+// AppConfig.local.xcconfig and set it there (gitignored, safe), or
+// set it once in Xcode → Signing & Capabilities (xcodegen will
+// preserve it across regenerations as long as you don't overwrite it).
 
 // Bundle identifier. Override per developer to avoid sharing provisioning
 // profiles across machines.
 PRODUCT_BUNDLE_IDENTIFIER = app.seedkeep.ios
+
+// Apple Developer Team ID. Empty in the committed example so simulator
+// builds work without a paid developer account. Fill in for real-device
+// or archive builds.
+DEVELOPMENT_TEAM =
 
 // Keychain service used for the Bearer-token store. Defaults to the bundle
 // id so different environments don't collide.

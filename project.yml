@@ -1,6 +1,5 @@
 name: Seedkeep
 options:
-  bundleIdPrefix: com.example
   deploymentTarget:
     # iOS 18.1 floor lets us link FoundationModels (iOS 26+ at runtime,
     # availability-gated) without dropping pre-26 devices entirely. Older
@@ -16,7 +15,8 @@ settings:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    DEVELOPMENT_TEAM: ""
+    # DEVELOPMENT_TEAM intentionally not pinned here — flows in from
+    # Seedkeep/Config/AppConfig.example.xcconfig (or AppConfig.local).
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
@@ -50,6 +50,12 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         NSCameraUsageDescription: "Seedkeep needs the camera to scan seed-packet barcodes and capture front/back photos for AI catalog extraction."
         NSPhotoLibraryUsageDescription: "Seedkeep can attach photos from your library to seed entries."
+        # Declares that the app's use of encryption is exempt under the
+        # standard HTTPS/URLSession provisions. Stops TestFlight from
+        # asking on every build. Flip to true (and file an annual
+        # self-classification report) only if we add custom cryptography
+        # beyond the OS-provided TLS path.
+        ITSAppUsesNonExemptEncryption: false
         # Surfaced from xcconfig — `AppEnvironment` reads these at launch.
         SeedkeepAPIScheme: "$(SEEDKEEP_API_SCHEME)"
         SeedkeepAPIHost: "$(SEEDKEEP_API_HOST)"
