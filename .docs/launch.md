@@ -78,61 +78,41 @@ If we ever add custom client-side crypto (e.g. AES-encrypting seed photos before
 
 ### One-time setup
 
-1. **Apple Developer Team ID** — find it at developer.apple.com → Membership → Team ID (10-char string like `A1B2C3D4E5`).
-2. Copy `Seedkeep/Config/AppConfig.example.xcconfig` to `Seedkeep/Config/AppConfig.local.xcconfig` (gitignored) and set `DEVELOPMENT_TEAM = <YOUR_TEAM_ID>`. Alternative: set it once via Xcode → Signing & Capabilities and xcodegen will preserve it across regenerations (but reverify after every `xcodegen generate`).
-3. **App Icon** — `Seedkeep/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json` currently has one 1024×1024 slot with no PNG. Drop a 1024×1024 icon PNG there before archiving. Without one, App Store Connect rejects the upload with "Missing required icon."
-4. **Increment build number** — bump `CURRENT_PROJECT_VERSION` in `project.yml` for every upload. App Store Connect refuses duplicates.
+Already done; this list is the inventory:
 
-### Archive + upload (each release)
+- **Team ID** — pinned to `K7CBQW6MPG` in `Seedkeep/Config/AppConfig.example.xcconfig`. Per-developer overrides go in `Seedkeep/Config/AppConfig.local.xcconfig` (gitignored).
+- **App Icon** — 1024×1024 PNG at `Seedkeep/Resources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png`.
+- **App Store Connect API key** — `~/.appstoreconnect/AuthKey_J79935N6P6.p8` (shared across our published apps: Joji, SimmerSmith, Open Feelings, Seedkeep).
+- **ExportOptions.plist** — `Seedkeep/ExportOptions.plist` (committed; references team ID and `app-store-connect` upload destination).
+
+### Releasing (each TestFlight + App Store iteration)
+
+One command:
 
 ```bash
-# 1. Regenerate the project (in case project.yml changed)
-xcodegen generate
-
-# 2. Archive for release
-xcodebuild \
-  -scheme Seedkeep \
-  -destination 'generic/platform=iOS' \
-  -configuration Release \
-  -archivePath build/Seedkeep.xcarchive \
-  archive
-
-# 3. Export an .ipa from the archive (needs ExportOptions.plist — see below)
-xcodebuild \
-  -exportArchive \
-  -archivePath build/Seedkeep.xcarchive \
-  -exportOptionsPlist build/ExportOptions.plist \
-  -exportPath build/export
-
-# 4. Upload to App Store Connect
-xcrun altool --upload-app \
-  --type ios \
-  --file build/export/Seedkeep.ipa \
-  --apiKey <KEY_ID> --apiIssuer <ISSUER_ID>
+./scripts/release.sh
 ```
 
-`build/ExportOptions.plist` template:
+That runs the full pipeline: bump `CURRENT_PROJECT_VERSION` in `project.yml`, regenerate the Xcode project, archive Release for generic iOS, export with the App Store Connect API key, upload to TestFlight, commit the version bump. Mirrors the same script used by Open Feelings and SimmerSmith.
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>method</key>
-  <string>app-store-connect</string>
-  <key>teamID</key>
-  <string>YOUR_TEAM_ID</string>
-  <key>uploadSymbols</key>
-  <true/>
-</dict>
-</plist>
+Flags for marketing-version bumps (when promoting a TestFlight build to an actual App Store release):
+
+```bash
+./scripts/release.sh --patch    # 0.1.0 → 0.1.1
+./scripts/release.sh --minor    # 0.1.0 → 0.2.0
 ```
 
-Or skip the CLI entirely and use Xcode → Product → Archive → Distribute App → App Store Connect for the first few releases — the GUI does all this for you and is fine when you're not shipping daily.
+Build-only bumps are the right default for routine TestFlight iteration. `--patch` / `--minor` trigger a fresh App Store review when promoted out of TestFlight, so only use them when you actually intend to ship.
 
-### App Store Connect API key (for the altool upload step)
+### After upload
 
-App Store Connect → Users and Access → Integrations → App Store Connect API → Generate a new key with **App Manager** role. Download the `.p8`, note the Key ID and Issuer ID. Save the `.p8` to `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8` (the path altool reads by default).
+App Store Connect takes 10–30 min to process the build. Watch under TestFlight → iOS Builds → your new build row. Once processing completes:
+
+1. Add yourself as an Internal Tester (instant — no review needed)
+2. Install via the TestFlight app on your phone
+3. The TestFlight app surfaces new builds with an "Update" tap
+
+Material problems (missing icon, missing export compliance, validation failures) surface immediately as red emails from App Store Connect. The script also pipes the export log to `/tmp/seedkeep-export.log` for debugging.
 
 ### TestFlight
 
@@ -160,8 +140,8 @@ Open items before public submission. Items already done are checked.
 - [x] Marketing-site scaffolded at `web/` (SvelteKit + adapter-static)
 - [x] Privacy Policy + Support pages drafted (`web/src/routes/{privacy,support}`)
 - [x] Apple-App-Site-Association generated (`web/static/.well-known/apple-app-site-association`) with `K7CBQW6MPG.app.seedkeep.ios` + `/invite/*`
-- [ ] **Deploy `web/` to seedkeep.app** — `npm install && npm run build && upload build/ to Cloudflare Pages` (or any static host that honors `_headers`)
-- [ ] **Validate AASA after deploy** — `curl -I https://seedkeep.app/.well-known/apple-app-site-association` should return `application/json`; also check Apple's CDN cache at `https://app-site-association.cdn-apple.com/a/v1/seedkeep.app`
+- [x] Marketing site live at `https://seedkeep.app` (Cloudflare); AASA verified `application/json`
+- [x] `scripts/release.sh` for one-command TestFlight upload (mirrors Open Feelings)
 - [ ] **Screenshots** captured at 6.7" (iPhone 15 Pro Max), 6.5", and 5.5" simulator sizes — at least 3 each
 - [ ] **F5 real-device verification** — sideload, sign in, scan a packet via Free path, switch to BYOK with a test key, scan again, verify both paths POST a `catalog_extractions` row server-side
 - [ ] **Archive + TestFlight upload** — internal testing first
