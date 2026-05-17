@@ -190,7 +190,7 @@ struct EnvelopeTests {
           "data": {
             "tier": "hosted",
             "subscription": {
-              "id": "sub_1", "user_id": "u1", "product_id": "app.seedkeep.hosted.monthly",
+              "id": "sub_1", "user_id": "u1", "product_id": "app.seedkeep.ios.hosted.monthly",
               "original_transaction_id": "ot_1", "latest_transaction_id": "lt_2",
               "status": "active", "expires_at": 1777580000000, "last_verified_at": 1777570000000,
               "environment": "production", "created_at": 1777560000000, "updated_at": 1777570000000
@@ -218,7 +218,7 @@ struct EnvelopeTests {
             "tier": "hosted",
             "environment": "sandbox",
             "subscription": {
-              "product_id": "app.seedkeep.hosted.monthly",
+              "product_id": "app.seedkeep.ios.hosted.monthly",
               "original_transaction_id": "ot_abc",
               "status": "active",
               "expires_at": 1777580000000
@@ -232,7 +232,7 @@ struct EnvelopeTests {
         case .ok(let res, _):
             #expect(res.tier == "hosted")
             #expect(res.environment == "sandbox")
-            #expect(res.subscription.product_id == "app.seedkeep.hosted.monthly")
+            #expect(res.subscription.product_id == "app.seedkeep.ios.hosted.monthly")
             #expect(res.subscription.status == "active")
             #expect(res.subscription.expires_at == 1777580000000)
         case .failure(let err):

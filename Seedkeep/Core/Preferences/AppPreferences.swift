@@ -13,6 +13,12 @@ import Observation
 @MainActor
 @Observable
 public final class AppPreferences {
+    /// Master switch for the Hosted (paid) tier. Flip to `true` once the
+    /// App Store Connect subscription products + `APPLE_IAP_SHARED_SECRET`
+    /// are configured. Off keeps the UI clean — Hosted disappears from
+    /// the provider picker and the Subscription settings row hides.
+    public static let isHostedTierEnabled: Bool = false
+
     public enum AIProvider: String, CaseIterable, Sendable, Identifiable {
         /// On-device extraction via Apple Foundation Models. The default
         /// for everyone who hasn't subscribed and hasn't pasted their own
@@ -60,7 +66,11 @@ public final class AppPreferences {
         self.defaults = defaults
         self.bundleDefaultURL = bundleDefaultURL
         self._serverURLOverride = defaults.url(forKey: Key.serverURLOverride)
-        self._aiProvider = defaults.string(forKey: Key.aiProvider).flatMap(AIProvider.init(rawValue:)) ?? .free
+        let stored = defaults.string(forKey: Key.aiProvider).flatMap(AIProvider.init(rawValue:)) ?? .free
+        // If a stored preference points at a tier that's currently
+        // gated off, fall back to .free so ScanFlow doesn't keep
+        // dispatching to a path the UI can no longer reach.
+        self._aiProvider = (stored == .hosted && !Self.isHostedTierEnabled) ? .free : stored
         self._cachedTier = defaults.string(forKey: Key.cachedTier)
     }
 

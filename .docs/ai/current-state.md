@@ -60,11 +60,11 @@
 
 ## Next concrete step
 
+**Hosted tier is feature-flagged off (2026-05-16).** `AppPreferences.isHostedTierEnabled = false` hides the Hosted option from the AI provider picker and the Subscription row from Settings. All Hosted code (SubscriptionManager, StoreKit wiring, `/api/subscriptions/verify`) is still compiled in and works — just gated behind the flag. To re-enable: flip the flag, register `app.seedkeep.ios.hosted.{monthly,yearly}` in App Store Connect, set `APPLE_IAP_SHARED_SECRET` on Fly. Bundle ID is `app.seedkeep.ios`.
+
 F4 complete. Remaining for the F1–F5 tier-aware Phase 1 sequence:
 
-1. **F5** — End-to-end verification across Free / BYOK / Hosted on a real device against the new `seedkeep-server`, plus updates to all three repos' handoff docs. Concrete checks: a) sign in, b) switch server URL, c) Free path runs Vision OCR + (on iOS 26+) Foundation Models, d) BYOK path runs Anthropic vision against a real test key, e) Hosted path goes through StoreKit sandbox subscribe + sees server tier flip to `hosted`, f) all three POST a `catalog_extractions` row.
-
-App Store Connect product configuration is the only blocker — until `app.seedkeep.hosted.monthly` and `app.seedkeep.hosted.yearly` exist there (with the right shared secret in `APPLE_IAP_SHARED_SECRET`), the Subscription screen will say "No subscription products available" and StoreKit returns an empty product list.
+1. **F5** — End-to-end verification of Free + BYOK on a real device against the live `seedkeep-server.fly.dev`. Concrete checks: a) sign in, b) Free path runs Vision OCR + (on iOS 26+) Foundation Models, c) BYOK path runs Anthropic vision against a real test key, d) both POST a `catalog_extractions` row. Hosted verification is deferred until the tier is unflagged.
 
 Pre-existing follow-ups from earlier phases:
 

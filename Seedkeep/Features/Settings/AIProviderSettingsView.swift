@@ -14,7 +14,7 @@ struct AIProviderSettingsView: View {
     var body: some View {
         Form {
             Section("Provider") {
-                ForEach(AppPreferences.AIProvider.allCases) { provider in
+                ForEach(availableProviders) { provider in
                     Button {
                         appEnv.preferences.aiProvider = provider
                     } label: {
@@ -38,45 +38,55 @@ struct AIProviderSettingsView: View {
                 }
             }
 
-            Section {
-                LabeledContent("Server-reported tier") {
-                    Text(appEnv.preferences.cachedTier ?? "(unknown)")
-                        .foregroundStyle(.secondary)
-                }
-                Button {
-                    Task { await refresh() }
-                } label: {
-                    HStack {
-                        Label("Refresh from server", systemImage: "arrow.clockwise")
-                        if refreshing {
-                            Spacer()
-                            ProgressView().controlSize(.small)
+            if AppPreferences.isHostedTierEnabled {
+                Section {
+                    LabeledContent("Server-reported tier") {
+                        Text(appEnv.preferences.cachedTier ?? "(unknown)")
+                            .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        Task { await refresh() }
+                    } label: {
+                        HStack {
+                            Label("Refresh from server", systemImage: "arrow.clockwise")
+                            if refreshing {
+                                Spacer()
+                                ProgressView().controlSize(.small)
+                            }
                         }
                     }
+                    .disabled(refreshing)
+                } header: {
+                    Text("Subscription")
+                } footer: {
+                    Text("Hosted requires an active subscription. The server records your purchase and reports it back here. Your local picker chooses your *preferred* extraction path; the server enforces what you can actually use.")
                 }
-                .disabled(refreshing)
-            } header: {
-                Text("Subscription")
-            } footer: {
-                Text("Hosted requires an active subscription. The server records your purchase and reports it back here. Your local picker chooses your *preferred* extraction path; the server enforces what you can actually use.")
-            }
 
-            if appEnv.preferences.aiProvider == .hosted &&
-               appEnv.preferences.cachedTier != "hosted" {
-                Section {
-                    Label {
-                        Text("You picked Hosted, but the server doesn't yet see an active subscription. Subscribe in the next step (or restore a previous purchase). Until then, extractions will fall back to on-device.")
-                            .font(.footnote)
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
+                if appEnv.preferences.aiProvider == .hosted &&
+                   appEnv.preferences.cachedTier != "hosted" {
+                    Section {
+                        Label {
+                            Text("You picked Hosted, but the server doesn't yet see an active subscription. Subscribe in the next step (or restore a previous purchase). Until then, extractions will fall back to on-device.")
+                                .font(.footnote)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
                     }
                 }
             }
         }
         .navigationTitle("AI provider")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await refresh() }
+        .task {
+            if AppPreferences.isHostedTierEnabled { await refresh() }
+        }
+    }
+
+    private var availableProviders: [AppPreferences.AIProvider] {
+        AppPreferences.AIProvider.allCases.filter { provider in
+            AppPreferences.isHostedTierEnabled || provider != .hosted
+        }
     }
 
     private func refresh() async {

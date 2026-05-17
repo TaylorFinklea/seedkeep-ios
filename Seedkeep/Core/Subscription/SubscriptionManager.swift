@@ -25,8 +25,8 @@ import SeedkeepKit
 @MainActor
 @Observable
 public final class SubscriptionManager {
-    public static let monthlyProductID = "app.seedkeep.hosted.monthly"
-    public static let yearlyProductID = "app.seedkeep.hosted.yearly"
+    public static let monthlyProductID = "app.seedkeep.ios.hosted.monthly"
+    public static let yearlyProductID = "app.seedkeep.ios.hosted.yearly"
 
     public private(set) var products: [Product] = []
     public private(set) var purchasedProductIDs: Set<String> = []

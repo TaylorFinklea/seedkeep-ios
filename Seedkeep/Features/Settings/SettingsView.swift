@@ -59,14 +59,16 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    NavigationLink {
-                        SubscriptionSettingsView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Subscription", systemImage: "creditcard")
-                            Text(subscriptionStatusText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    if AppPreferences.isHostedTierEnabled {
+                        NavigationLink {
+                            SubscriptionSettingsView()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label("Subscription", systemImage: "creditcard")
+                                Text(subscriptionStatusText)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
