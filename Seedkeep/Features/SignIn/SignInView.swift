@@ -13,10 +13,10 @@ struct SignInView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            Image(systemName: "leaf.circle.fill")
+            Image("BrandMark")
                 .resizable()
-                .frame(width: 88, height: 88)
-                .foregroundStyle(.tint)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 140, height: 140)
             VStack(spacing: 8) {
                 Text("Seedkeep")
                     .font(.largeTitle.weight(.bold))
@@ -71,8 +71,15 @@ struct SignInView: View {
     private func exchangeAppleToken(idToken: String, credential: ASAuthorizationAppleIDCredential) async {
         struct Body: Encodable {
             let provider: String
-            let idToken: String
+            let idToken: IDTokenPayload
             let user: AppleUser?
+        }
+        // better-auth's native sign-in expects idToken as an object,
+        // not a raw string. Sending a string triggers the OAuth
+        // redirect path, which returns {redirect: true, url: ...} and
+        // omits the Bearer token from the response body.
+        struct IDTokenPayload: Encodable {
+            let token: String
         }
         struct AppleUser: Encodable {
             let firstName: String?
@@ -99,7 +106,9 @@ struct SignInView: View {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONEncoder().encode(Body(provider: "apple", idToken: idToken, user: user))
+        req.httpBody = try? JSONEncoder().encode(
+            Body(provider: "apple", idToken: IDTokenPayload(token: idToken), user: user)
+        )
 
         do {
             let (data, _) = try await URLSession.shared.data(for: req)
