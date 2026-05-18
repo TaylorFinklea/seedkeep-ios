@@ -29,11 +29,18 @@ struct AddPlantingEventView: View {
     @State private var saving = false
     @State private var error: String?
 
+    /// Catalog metadata for the currently selected seed. Used to compute
+    /// the frost warning. Cached by catalogID inside the view so changing
+    /// the seed selection re-fetches lazily.
+    @State private var catalogCache: [String: CatalogSeedDTO?] = [:]
+    @State private var currentCatalog: CatalogSeedDTO?
+
     var body: some View {
         NavigationStack {
             Form {
                 actionSection
                 whereSection
+                frostWarningSection
                 notesSection
                 errorSection
             }
@@ -43,6 +50,10 @@ struct AddPlantingEventView: View {
             .onAppear {
                 if selectedBedID == nil { selectedBedID = bedID }
                 if selectedSeedID == nil { selectedSeedID = prefillSeedID }
+                Task { await refreshCatalogForSelection() }
+            }
+            .onChange(of: selectedSeedID) { _, _ in
+                Task { await refreshCatalogForSelection() }
             }
         }
     }
@@ -72,6 +83,38 @@ struct AddPlantingEventView: View {
                 Text("None").tag(String?.none)
                 ForEach(seeds) { seed in
                     Text(seed.customName ?? "Unnamed seed").tag(Optional(seed.id))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var frostWarningSection: some View {
+        if let warning = frostWarning {
+            Section {
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(warning.title)
+                            .font(.subheadline.weight(.semibold))
+                        Text(warning.detail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "snowflake")
+                        .foregroundStyle(.orange)
+                }
+                .padding(.vertical, 2)
+            }
+        } else if let lastFrost = appEnv.preferences.lastFrost {
+            Section {
+                Label {
+                    Text("Last frost \(monthDayLabel(lastFrost))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } icon: {
+                    Image(systemName: "snowflake")
+                        .foregroundStyle(.tint)
                 }
             }
         }
@@ -141,5 +184,59 @@ struct AddPlantingEventView: View {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = .current
         return f.string(from: date)
+    }
+
+    // MARK: - Frost warning
+
+    private struct FrostWarning {
+        let title: String
+        let detail: String
+    }
+
+    /// Returns a warning when the user is scheduling a *sow* (not transplant
+    /// or harvest) before the last frost AND the catalog marks the plant
+    /// as tender. Everything else just shows the no-op reference banner.
+    private var frostWarning: FrostWarning? {
+        guard kind == .sowing else { return nil }
+        guard let lastFrost = appEnv.preferences.lastFrost else { return nil }
+        guard let tolerance = currentCatalog?.frost_tolerance, tolerance == "tender" else { return nil }
+        let cal = Calendar.current
+        let year = cal.component(.year, from: plannedFor)
+        guard let frostDate = lastFrost.date(inYear: year, calendar: cal) else { return nil }
+        guard plannedFor < frostDate else { return nil }
+        let label = monthDayLabel(lastFrost)
+        let name = currentCatalog?.common_name ?? "this plant"
+        return FrostWarning(
+            title: "Before last frost",
+            detail: "\(name) is tender — direct-sowing before your last frost (\(label)) risks losing the planting. Consider starting indoors and transplanting after \(label), or pick a later date."
+        )
+    }
+
+    private func monthDayLabel(_ md: MonthDay) -> String {
+        let cal = Calendar.current
+        guard let date = md.date(inYear: cal.component(.year, from: Date())) else {
+            return "\(md.month)/\(md.day)"
+        }
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f.string(from: date)
+    }
+
+    @MainActor
+    private func refreshCatalogForSelection() async {
+        guard let seedID = selectedSeedID,
+              let catalogID = seeds.first(where: { $0.id == seedID })?.catalogID else {
+            currentCatalog = nil
+            return
+        }
+        if let cached = catalogCache[catalogID] {
+            currentCatalog = cached
+            return
+        }
+        // Lookup miss — fetch and remember the result (including nil for
+        // 404, so we don't re-fetch every time the user toggles seeds).
+        let fetched = (try? await appEnv.client.catalogByID(catalogID)) ?? nil
+        catalogCache[catalogID] = fetched
+        currentCatalog = fetched
     }
 }
