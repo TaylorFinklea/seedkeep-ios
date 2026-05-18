@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import SeedkeepKit
 
 /// Result the scan flow returns to its parent. Either a catalog hit (we
@@ -118,20 +119,45 @@ struct ScanFlow: View {
     }
 
     private func handlePhoto(_ data: Data) {
+        // Anthropic vision caps images at 5MB; Foundation Models is happy
+        // at much smaller; our server's pre-extracted endpoint takes a
+        // base64 string that bloats ~33% in transit. Resize once here so
+        // every downstream path gets a bounded payload.
+        let resized = Self.resizedJPEG(data, maxDimension: 2048, quality: 0.75) ?? data
         switch phase {
         case .scanning:
             // Front photo without a barcode (user tapped "Skip barcode").
-            phase = .promptForBack(frontJPEG: data, barcode: detectedBarcode)
+            phase = .promptForBack(frontJPEG: resized, barcode: detectedBarcode)
         case .captureFront(let barcode):
             // Barcode was captured but had no catalog hit; this is the
             // front photo for the AI-extraction pipeline.
-            phase = .promptForBack(frontJPEG: data, barcode: barcode)
+            phase = .promptForBack(frontJPEG: resized, barcode: barcode)
         case .promptForBack(let frontJPEG, let barcode):
-            phase = .extracting(frontJPEG, data, barcode)
-            Task { await runExtraction(front: frontJPEG, back: data, barcode: barcode) }
+            phase = .extracting(frontJPEG, resized, barcode)
+            Task { await runExtraction(front: frontJPEG, back: resized, barcode: barcode) }
         default:
             break
         }
+    }
+
+    /// Resize + recompress an oversize JPEG. Returns nil only if UIImage
+    /// can't decode the bytes (e.g. corrupted capture); callers fall back
+    /// to the original Data in that case.
+    private static func resizedJPEG(_ data: Data, maxDimension: CGFloat, quality: CGFloat) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let size = image.size
+        let longest = max(size.width, size.height)
+        if longest <= maxDimension {
+            // Already within target dimensions — recompress only.
+            return image.jpegData(compressionQuality: quality)
+        }
+        let scale = maxDimension / longest
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let scaled = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+        return scaled.jpegData(compressionQuality: quality)
     }
 
     private func handleCameraError(_ error: CameraError) {
