@@ -167,7 +167,11 @@ final class CameraViewController: UIViewController {
 
         if session.canAddOutput(photoOutput) {
             session.addOutput(photoOutput)
-            photoOutput.maxPhotoDimensions = .init(width: 2048, height: 2048)
+            // No explicit maxPhotoDimensions — the value MUST come from the
+            // device's activeFormat.supportedMaxPhotoDimensions list, and
+            // any other value raises an uncatchable NSException at config
+            // time. Defaults give the largest the format supports, which is
+            // already past what AI extraction needs.
         }
 
         let preview = AVCaptureVideoPreviewLayer(session: session)
