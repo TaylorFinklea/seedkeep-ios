@@ -89,10 +89,29 @@ public struct CatalogSeedDTO: Codable, Sendable, Equatable {
     public let barcode: String?
     public let perceptual_hash: String?
     public let common_name: String
+    public let scientific_name: String?
     public let variety: String?
     public let company: String?
     public let instructions: String?
     public let viability_years: Int?
+    // Horticultural data — populated by AI extraction when present on
+    // the packet; null otherwise. Phase 2 surfaces these in garden-plan
+    // validation and planting-calendar derivation.
+    public let days_to_germinate_min: Int?
+    public let days_to_germinate_max: Int?
+    public let days_to_maturity_min: Int?
+    public let days_to_maturity_max: Int?
+    public let soil_temp_min_f: Int?
+    public let soil_temp_max_f: Int?
+    public let seed_depth_inches: Double?
+    public let plant_spacing_inches: Int?
+    public let row_spacing_inches: Int?
+    public let sun_requirement: String?   // "full" | "partial" | "shade"
+    public let frost_tolerance: String?   // "tender" | "half_hardy" | "hardy"
+    public let sow_method: String?        // "direct" | "transplant" | "either"
+    public let life_cycle: String?        // "annual" | "biennial" | "perennial"
+    public let hardiness_zone_min: Int?
+    public let hardiness_zone_max: Int?
     public let status: String
     public let confidence: Double?
     public let created_at: Int64
@@ -160,9 +179,25 @@ public enum WireResponses {
 
     public struct ExtractionFields: Codable, Sendable, Equatable {
         public let common_name: String?
+        public let scientific_name: String?
         public let variety: String?
         public let company: String?
         public let instructions: String?
+        public let days_to_germinate_min: Int?
+        public let days_to_germinate_max: Int?
+        public let days_to_maturity_min: Int?
+        public let days_to_maturity_max: Int?
+        public let soil_temp_min_f: Int?
+        public let soil_temp_max_f: Int?
+        public let seed_depth_inches: Double?
+        public let plant_spacing_inches: Int?
+        public let row_spacing_inches: Int?
+        public let sun_requirement: String?
+        public let frost_tolerance: String?
+        public let sow_method: String?
+        public let life_cycle: String?
+        public let hardiness_zone_min: Int?
+        public let hardiness_zone_max: Int?
         public let self_confidence: Double?
     }
 

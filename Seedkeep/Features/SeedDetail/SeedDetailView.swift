@@ -27,6 +27,11 @@ struct SeedDetailView: View {
     @State private var uploadingPhoto = false
     @State private var uploadError: String?
 
+    /// Catalog metadata (scientific name, growing conditions, etc.) fetched
+    /// when the view appears if the seed is linked to a catalog entry.
+    /// Stays nil for manually-entered seeds or while loading.
+    @State private var catalog: CatalogSeedDTO?
+
     init(seedID: String) {
         self.seedID = seedID
         let id = seedID
@@ -44,6 +49,7 @@ struct SeedDetailView: View {
                 Form {
                     headerSection(seed)
                     photosSection(seed)
+                    growingInfoSection(seed)
                     lifecycleSection(seed)
                     if seed.state != .wishlist {
                         quantitySection(seed)
@@ -60,6 +66,12 @@ struct SeedDetailView: View {
                     // current even if the local store predates new uploads.
                     if case .signedIn(_, let household) = appEnv.auth.state {
                         try? await appEnv.sync.refreshSeedPhotos(seedID: seed.id, householdID: household.id)
+                    }
+                    // Fetch the catalog entry for the growing-info section.
+                    // Manual entries (no catalog_id) skip this. Failures are
+                    // silent — the section just hides.
+                    if let catalogID = seed.catalogID {
+                        catalog = try? await appEnv.client.catalogByID(catalogID)
                     }
                 }
             } else {
@@ -162,6 +174,149 @@ struct SeedDetailView: View {
     private func jpegEncode(originalData: Data) -> Data? {
         guard let image = UIImage(data: originalData) else { return nil }
         return image.jpegData(compressionQuality: 0.75)
+    }
+
+    /// Catalog-sourced growing information. Hidden entirely for manual
+    /// entries (catalog == nil) or catalog entries that didn't capture
+    /// any of these fields. The section is read-only — edits to the
+    /// catalog itself land in a Phase 2 moderation flow.
+    @ViewBuilder
+    private func growingInfoSection(_ seed: LocalSeed) -> some View {
+        if let catalog, hasAnyGrowingInfo(catalog) {
+            Section {
+                if let sci = catalog.scientific_name {
+                    LabeledContent("Scientific name") {
+                        Text(sci).italic()
+                    }
+                }
+                if let life = humanLifeCycle(catalog.life_cycle) {
+                    LabeledContent("Life cycle", value: life)
+                }
+                if let sun = humanSun(catalog.sun_requirement) {
+                    LabeledContent("Sun", value: sun)
+                }
+                if let frost = humanFrost(catalog.frost_tolerance) {
+                    LabeledContent("Frost tolerance", value: frost)
+                }
+                if let sow = humanSow(catalog.sow_method) {
+                    LabeledContent("Sow method", value: sow)
+                }
+                if let depth = catalog.seed_depth_inches {
+                    LabeledContent("Seed depth", value: formatInches(depth))
+                }
+                if let germ = formatRange(min: catalog.days_to_germinate_min, max: catalog.days_to_germinate_max, unit: "days") {
+                    LabeledContent("Days to germinate", value: germ)
+                }
+                if let mature = formatRange(min: catalog.days_to_maturity_min, max: catalog.days_to_maturity_max, unit: "days") {
+                    LabeledContent("Days to maturity", value: mature)
+                }
+                if let soil = formatRange(min: catalog.soil_temp_min_f, max: catalog.soil_temp_max_f, unit: "°F") {
+                    LabeledContent("Soil temperature", value: soil)
+                }
+                if let plant = catalog.plant_spacing_inches {
+                    LabeledContent("Plant spacing", value: "\(plant)\"")
+                }
+                if let row = catalog.row_spacing_inches {
+                    LabeledContent("Row spacing", value: "\(row)\"")
+                }
+                if let zones = formatRange(min: catalog.hardiness_zone_min, max: catalog.hardiness_zone_max, unit: nil) {
+                    LabeledContent("Hardiness zones", value: zones)
+                }
+                if let inst = catalog.instructions, !inst.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Instructions")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Text(inst)
+                            .font(.body)
+                    }
+                    .padding(.vertical, 4)
+                }
+            } header: {
+                Text("Growing info")
+            } footer: {
+                Text("From the catalog (\(catalog.common_name)\(catalog.variety.map { " — \($0)" } ?? "")). Phase 2 will let you correct or annotate these.")
+            }
+        }
+    }
+
+    private func hasAnyGrowingInfo(_ c: CatalogSeedDTO) -> Bool {
+        c.scientific_name != nil
+            || c.life_cycle != nil
+            || c.sun_requirement != nil
+            || c.frost_tolerance != nil
+            || c.sow_method != nil
+            || c.seed_depth_inches != nil
+            || c.days_to_germinate_min != nil || c.days_to_germinate_max != nil
+            || c.days_to_maturity_min != nil || c.days_to_maturity_max != nil
+            || c.soil_temp_min_f != nil || c.soil_temp_max_f != nil
+            || c.plant_spacing_inches != nil
+            || c.row_spacing_inches != nil
+            || c.hardiness_zone_min != nil || c.hardiness_zone_max != nil
+            || (c.instructions?.isEmpty == false)
+    }
+
+    private func humanLifeCycle(_ raw: String?) -> String? {
+        switch raw {
+        case "annual": return "Annual"
+        case "biennial": return "Biennial"
+        case "perennial": return "Perennial"
+        default: return nil
+        }
+    }
+
+    private func humanSun(_ raw: String?) -> String? {
+        switch raw {
+        case "full": return "Full sun"
+        case "partial": return "Partial sun"
+        case "shade": return "Shade"
+        default: return nil
+        }
+    }
+
+    private func humanFrost(_ raw: String?) -> String? {
+        switch raw {
+        case "tender": return "Tender (killed by frost)"
+        case "half_hardy": return "Half-hardy (tolerates light frost)"
+        case "hardy": return "Hardy (tolerates freezes)"
+        default: return nil
+        }
+    }
+
+    private func humanSow(_ raw: String?) -> String? {
+        switch raw {
+        case "direct": return "Direct sow"
+        case "transplant": return "Start indoors, transplant"
+        case "either": return "Direct or transplant"
+        default: return nil
+        }
+    }
+
+    private func formatInches(_ value: Double) -> String {
+        // Show common fractions for the most-printed depths.
+        let twentieths = (value * 20).rounded() / 20
+        switch twentieths {
+        case 0.25: return "1/4\""
+        case 0.5: return "1/2\""
+        case 0.75: return "3/4\""
+        case 1: return "1\""
+        default:
+            let formatter = NumberFormatter()
+            formatter.maximumFractionDigits = 2
+            formatter.minimumFractionDigits = 0
+            return "\(formatter.string(from: NSNumber(value: value)) ?? "\(value)")\""
+        }
+    }
+
+    private func formatRange(min: Int?, max: Int?, unit: String?) -> String? {
+        let suffix = unit.map { " \($0)" } ?? ""
+        switch (min, max) {
+        case let (a?, b?) where a == b: return "\(a)\(suffix)"
+        case let (a?, b?): return "\(a)–\(b)\(suffix)"
+        case let (a?, nil): return "\(a)+\(suffix)"
+        case let (nil, b?): return "≤\(b)\(suffix)"
+        default: return nil
+        }
     }
 
     @ViewBuilder

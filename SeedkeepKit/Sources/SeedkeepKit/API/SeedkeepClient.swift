@@ -382,9 +382,29 @@ public actor SeedkeepClient {
     /// decision based on the client-supplied `self_confidence`.
     public struct PreExtractedInput: Codable, Sendable {
         public var common_name: String?
+        public var scientific_name: String?
         public var variety: String?
         public var company: String?
         public var instructions: String?
+        // Horticultural data — every field optional; the extractor fills
+        // whatever the packet shows. Encoded as flat snake_case to match
+        // server's zod schema.
+        public var days_to_germinate_min: Int?
+        public var days_to_germinate_max: Int?
+        public var days_to_maturity_min: Int?
+        public var days_to_maturity_max: Int?
+        public var soil_temp_min_f: Int?
+        public var soil_temp_max_f: Int?
+        public var seed_depth_inches: Double?
+        public var plant_spacing_inches: Int?
+        public var row_spacing_inches: Int?
+        public var sun_requirement: String?
+        public var frost_tolerance: String?
+        public var sow_method: String?
+        public var life_cycle: String?
+        public var hardiness_zone_min: Int?
+        public var hardiness_zone_max: Int?
+
         public var self_confidence: Double
         public var model_id: String
         public var barcode: String?
@@ -394,9 +414,25 @@ public actor SeedkeepClient {
 
         public init(
             common_name: String?,
+            scientific_name: String? = nil,
             variety: String?,
             company: String?,
             instructions: String?,
+            days_to_germinate_min: Int? = nil,
+            days_to_germinate_max: Int? = nil,
+            days_to_maturity_min: Int? = nil,
+            days_to_maturity_max: Int? = nil,
+            soil_temp_min_f: Int? = nil,
+            soil_temp_max_f: Int? = nil,
+            seed_depth_inches: Double? = nil,
+            plant_spacing_inches: Int? = nil,
+            row_spacing_inches: Int? = nil,
+            sun_requirement: String? = nil,
+            frost_tolerance: String? = nil,
+            sow_method: String? = nil,
+            life_cycle: String? = nil,
+            hardiness_zone_min: Int? = nil,
+            hardiness_zone_max: Int? = nil,
             self_confidence: Double,
             model_id: String,
             barcode: String? = nil,
@@ -405,9 +441,25 @@ public actor SeedkeepClient {
             back_jpeg_b64: String? = nil
         ) {
             self.common_name = common_name
+            self.scientific_name = scientific_name
             self.variety = variety
             self.company = company
             self.instructions = instructions
+            self.days_to_germinate_min = days_to_germinate_min
+            self.days_to_germinate_max = days_to_germinate_max
+            self.days_to_maturity_min = days_to_maturity_min
+            self.days_to_maturity_max = days_to_maturity_max
+            self.soil_temp_min_f = soil_temp_min_f
+            self.soil_temp_max_f = soil_temp_max_f
+            self.seed_depth_inches = seed_depth_inches
+            self.plant_spacing_inches = plant_spacing_inches
+            self.row_spacing_inches = row_spacing_inches
+            self.sun_requirement = sun_requirement
+            self.frost_tolerance = frost_tolerance
+            self.sow_method = sow_method
+            self.life_cycle = life_cycle
+            self.hardiness_zone_min = hardiness_zone_min
+            self.hardiness_zone_max = hardiness_zone_max
             self.self_confidence = self_confidence
             self.model_id = model_id
             self.barcode = barcode
@@ -482,6 +534,19 @@ public actor SeedkeepClient {
         struct Body: Codable, Sendable { let catalog_seed: CatalogSeedDTO? }
         let res: Body = try await getJSON(path: "/api/catalog/lookup", query: [.init(name: "barcode", value: barcode)])
         return res.catalog_seed
+    }
+
+    /// Fetch a single catalog entry by id. Returns nil on 404 (e.g. an
+    /// entry that was never published or has been removed) so the caller
+    /// can fall back to showing just the per-household custom fields.
+    public func catalogByID(_ id: String) async throws -> CatalogSeedDTO? {
+        struct Body: Codable, Sendable { let catalog_seed: CatalogSeedDTO }
+        do {
+            let res: Body = try await getJSON(path: "/api/catalog/\(id)")
+            return res.catalog_seed
+        } catch let err as SeedkeepError where err.code == "not_found" {
+            return nil
+        }
     }
 
     /// Server response for any DELETE that soft-deletes a per-household row.
