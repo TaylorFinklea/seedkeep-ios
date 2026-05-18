@@ -56,6 +56,7 @@ struct AddSeedView: View {
                 if prefill != nil {
                     Section { prefillBanner }
                 }
+                extractedGrowingInfoSection
                 Section("Lifecycle") {
                     Picker("State", selection: $state) {
                         Text("Active").tag(SeedState.active)
@@ -142,6 +143,144 @@ struct AddSeedView: View {
 
     private var canSave: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Surfaces the horticultural data the extractor pulled out of the
+    /// packet photos so the user can review *what* will land in the
+    /// global catalog before they hit Save. Read-only — these fields
+    /// belong to the catalog entry, not the per-household seed, and
+    /// editing the catalog is a Phase 2 moderation flow.
+    @ViewBuilder
+    private var extractedGrowingInfoSection: some View {
+        if let fields = extractedFields, Self.hasAnyExtracted(fields) {
+            Section {
+                if let sci = fields.scientific_name {
+                    LabeledContent("Scientific name") { Text(sci).italic() }
+                }
+                if let life = Self.humanLifeCycle(fields.life_cycle) {
+                    LabeledContent("Life cycle", value: life)
+                }
+                if let sun = Self.humanSun(fields.sun_requirement) {
+                    LabeledContent("Sun", value: sun)
+                }
+                if let frost = Self.humanFrost(fields.frost_tolerance) {
+                    LabeledContent("Frost tolerance", value: frost)
+                }
+                if let sow = Self.humanSow(fields.sow_method) {
+                    LabeledContent("Sow method", value: sow)
+                }
+                if let depth = fields.seed_depth_inches {
+                    LabeledContent("Seed depth", value: Self.formatInches(depth))
+                }
+                if let germ = Self.formatRange(min: fields.days_to_germinate_min, max: fields.days_to_germinate_max, unit: "days") {
+                    LabeledContent("Sprouts in", value: germ)
+                }
+                if let mature = Self.formatRange(min: fields.days_to_maturity_min, max: fields.days_to_maturity_max, unit: "days") {
+                    LabeledContent("Days to maturity", value: mature)
+                }
+                if let soil = Self.formatRange(min: fields.soil_temp_min_f, max: fields.soil_temp_max_f, unit: "°F") {
+                    LabeledContent("Soil temperature", value: soil)
+                }
+                if let plant = fields.plant_spacing_inches {
+                    LabeledContent("Plant spacing", value: "\(plant)\"")
+                }
+                if let row = fields.row_spacing_inches {
+                    LabeledContent("Row spacing", value: "\(row)\"")
+                }
+                if let zones = Self.formatRange(min: fields.hardiness_zone_min, max: fields.hardiness_zone_max, unit: nil) {
+                    LabeledContent("Hardiness zones", value: zones)
+                }
+            } header: {
+                Text("Growing info (extracted)")
+            } footer: {
+                Text("Surfaced from the packet. Will be added to the shared catalog so other households who scan the same packet get an instant match.")
+            }
+        }
+    }
+
+    private var extractedFields: WireResponses.ExtractionFields? {
+        switch prefill {
+        case .extraction(let result, _): return result.extraction
+        case .preExtraction(let result, _): return result.extraction
+        case .catalog, .none: return nil
+        }
+    }
+
+    private static func hasAnyExtracted(_ f: WireResponses.ExtractionFields) -> Bool {
+        f.scientific_name != nil
+            || f.life_cycle != nil
+            || f.sun_requirement != nil
+            || f.frost_tolerance != nil
+            || f.sow_method != nil
+            || f.seed_depth_inches != nil
+            || f.days_to_germinate_min != nil || f.days_to_germinate_max != nil
+            || f.days_to_maturity_min != nil || f.days_to_maturity_max != nil
+            || f.soil_temp_min_f != nil || f.soil_temp_max_f != nil
+            || f.plant_spacing_inches != nil
+            || f.row_spacing_inches != nil
+            || f.hardiness_zone_min != nil || f.hardiness_zone_max != nil
+    }
+
+    private static func humanLifeCycle(_ raw: String?) -> String? {
+        switch raw {
+        case "annual": return "Annual"
+        case "biennial": return "Biennial"
+        case "perennial": return "Perennial"
+        default: return nil
+        }
+    }
+
+    private static func humanSun(_ raw: String?) -> String? {
+        switch raw {
+        case "full": return "Full sun"
+        case "partial": return "Partial sun"
+        case "shade": return "Shade"
+        default: return nil
+        }
+    }
+
+    private static func humanFrost(_ raw: String?) -> String? {
+        switch raw {
+        case "tender": return "Tender (killed by frost)"
+        case "half_hardy": return "Half-hardy (tolerates light frost)"
+        case "hardy": return "Hardy (tolerates freezes)"
+        default: return nil
+        }
+    }
+
+    private static func humanSow(_ raw: String?) -> String? {
+        switch raw {
+        case "direct": return "Direct sow"
+        case "transplant": return "Start indoors, transplant"
+        case "either": return "Direct or transplant"
+        default: return nil
+        }
+    }
+
+    private static func formatInches(_ value: Double) -> String {
+        let twentieths = (value * 20).rounded() / 20
+        switch twentieths {
+        case 0.25: return "1/4\""
+        case 0.5: return "1/2\""
+        case 0.75: return "3/4\""
+        case 1: return "1\""
+        default:
+            let formatter = NumberFormatter()
+            formatter.maximumFractionDigits = 2
+            formatter.minimumFractionDigits = 0
+            return "\(formatter.string(from: NSNumber(value: value)) ?? "\(value)")\""
+        }
+    }
+
+    private static func formatRange(min: Int?, max: Int?, unit: String?) -> String? {
+        let suffix = unit.map { " \($0)" } ?? ""
+        switch (min, max) {
+        case let (a?, b?) where a == b: return "\(a)\(suffix)"
+        case let (a?, b?): return "\(a)–\(b)\(suffix)"
+        case let (a?, nil): return "\(a)+\(suffix)"
+        case let (nil, b?): return "≤\(b)\(suffix)"
+        default: return nil
+        }
     }
 
     @ViewBuilder
