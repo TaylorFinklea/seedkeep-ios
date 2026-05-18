@@ -121,6 +121,8 @@ public final class AppEnvironment {
             LocalTag.self,
             LocalSeed.self,
             LocalSeedPhoto.self,
+            LocalBed.self,
+            LocalPlantingEvent.self,
             LocalSyncCursor.self,
             LocalPendingWrite.self,
         ])

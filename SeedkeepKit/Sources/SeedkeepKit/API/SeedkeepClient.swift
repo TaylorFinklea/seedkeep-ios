@@ -528,6 +528,132 @@ public actor SeedkeepClient {
         )
     }
 
+    // MARK: - Beds (Phase 2)
+
+    public func beds(since: Int64 = 0, limit: Int? = nil) async throws -> DeltaPage<BedDTO> {
+        try await getJSON(path: "/api/beds", query: deltaQuery(since: since, limit: limit))
+    }
+
+    public struct CreateBedInput: Codable, Sendable {
+        public var name: String
+        public var description: String?
+        public var width_feet: Double?
+        public var length_feet: Double?
+        public var sort_order: Int?
+        public init(name: String, description: String? = nil, width_feet: Double? = nil, length_feet: Double? = nil, sort_order: Int? = nil) {
+            self.name = name
+            self.description = description
+            self.width_feet = width_feet
+            self.length_feet = length_feet
+            self.sort_order = sort_order
+        }
+    }
+
+    public func createBed(_ input: CreateBedInput) async throws -> BedDTO {
+        let res: WireResponses.BedOne = try await postJSON(path: "/api/beds", body: input)
+        return res.bed
+    }
+
+    public struct UpdateBedInput: Codable, Sendable {
+        public var name: String?
+        public var description: String?
+        public var width_feet: Double?
+        public var length_feet: Double?
+        public var sort_order: Int?
+        public init(name: String? = nil, description: String? = nil, width_feet: Double? = nil, length_feet: Double? = nil, sort_order: Int? = nil) {
+            self.name = name
+            self.description = description
+            self.width_feet = width_feet
+            self.length_feet = length_feet
+            self.sort_order = sort_order
+        }
+    }
+
+    public func updateBed(id: String, _ input: UpdateBedInput) async throws -> BedDTO {
+        let res: WireResponses.BedOne = try await patchJSON(path: "/api/beds/\(id)", body: input)
+        return res.bed
+    }
+
+    @discardableResult
+    public func deleteBed(id: String) async throws -> DeleteResult {
+        try await deleteJSON(path: "/api/beds/\(id)")
+    }
+
+    // MARK: - Planting events (Phase 2)
+
+    public func plantingEvents(since: Int64 = 0, limit: Int? = nil) async throws -> DeltaPage<PlantingEventDTO> {
+        try await getJSON(path: "/api/planting-events", query: deltaQuery(since: since, limit: limit))
+    }
+
+    public struct CreatePlantingEventInput: Codable, Sendable {
+        public var bed_id: String?
+        public var seed_id: String?
+        public var catalog_seed_id: String?
+        public var kind: String
+        public var planned_for: String   // YYYY-MM-DD
+        public var completed_at: Int64?
+        public var notes: String?
+        public init(
+            bed_id: String? = nil,
+            seed_id: String? = nil,
+            catalog_seed_id: String? = nil,
+            kind: PlantingEventKind,
+            planned_for: String,
+            completed_at: Int64? = nil,
+            notes: String? = nil
+        ) {
+            self.bed_id = bed_id
+            self.seed_id = seed_id
+            self.catalog_seed_id = catalog_seed_id
+            self.kind = kind.rawValue
+            self.planned_for = planned_for
+            self.completed_at = completed_at
+            self.notes = notes
+        }
+    }
+
+    public func createPlantingEvent(_ input: CreatePlantingEventInput) async throws -> PlantingEventDTO {
+        let res: WireResponses.PlantingEventOne = try await postJSON(path: "/api/planting-events", body: input)
+        return res.planting_event
+    }
+
+    public struct UpdatePlantingEventInput: Codable, Sendable {
+        public var bed_id: String?
+        public var seed_id: String?
+        public var catalog_seed_id: String?
+        public var kind: String?
+        public var planned_for: String?
+        public var completed_at: Int64?
+        public var notes: String?
+        public init(
+            bed_id: String? = nil,
+            seed_id: String? = nil,
+            catalog_seed_id: String? = nil,
+            kind: PlantingEventKind? = nil,
+            planned_for: String? = nil,
+            completed_at: Int64? = nil,
+            notes: String? = nil
+        ) {
+            self.bed_id = bed_id
+            self.seed_id = seed_id
+            self.catalog_seed_id = catalog_seed_id
+            self.kind = kind?.rawValue
+            self.planned_for = planned_for
+            self.completed_at = completed_at
+            self.notes = notes
+        }
+    }
+
+    public func updatePlantingEvent(id: String, _ input: UpdatePlantingEventInput) async throws -> PlantingEventDTO {
+        let res: WireResponses.PlantingEventOne = try await patchJSON(path: "/api/planting-events/\(id)", body: input)
+        return res.planting_event
+    }
+
+    @discardableResult
+    public func deletePlantingEvent(id: String) async throws -> DeleteResult {
+        try await deleteJSON(path: "/api/planting-events/\(id)")
+    }
+
     // MARK: - Catalog
 
     public func catalogLookup(barcode: String) async throws -> CatalogSeedDTO? {

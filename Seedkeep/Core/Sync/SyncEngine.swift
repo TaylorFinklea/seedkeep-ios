@@ -40,6 +40,8 @@ public final class SyncEngine {
             try await pullLocations(householdID: householdID)
             try await pullTags(householdID: householdID)
             try await pullSeeds(householdID: householdID)
+            try await pullBeds(householdID: householdID)
+            try await pullPlantingEvents(householdID: householdID)
             try await flushPending()
             lastError = nil
         } catch let err as SeedkeepError {
@@ -81,6 +83,30 @@ public final class SyncEngine {
             try upsertSeeds(page.items)
             since = page.cursor
             try saveCursor(householdID: householdID, kind: "seeds", cursor: since)
+            if !page.has_more { break }
+        } while true
+    }
+
+    private func pullBeds(householdID: String) async throws {
+        let cursor = currentCursor(householdID: householdID, kind: "beds")
+        var since = cursor
+        repeat {
+            let page = try await client.beds(since: since)
+            try upsertBeds(page.items)
+            since = page.cursor
+            try saveCursor(householdID: householdID, kind: "beds", cursor: since)
+            if !page.has_more { break }
+        } while true
+    }
+
+    private func pullPlantingEvents(householdID: String) async throws {
+        let cursor = currentCursor(householdID: householdID, kind: "planting_events")
+        var since = cursor
+        repeat {
+            let page = try await client.plantingEvents(since: since)
+            try upsertPlantingEvents(page.items)
+            since = page.cursor
+            try saveCursor(householdID: householdID, kind: "planting_events", cursor: since)
             if !page.has_more { break }
         } while true
     }
@@ -207,6 +233,32 @@ public final class SyncEngine {
 
         case ("seed", "delete"):
             _ = try await client.deleteSeed(id: write.entityID)
+
+        case ("bed", "create"):
+            let body = try JSONDecoder().decode(SeedkeepClient.CreateBedInput.self, from: Data(write.payloadJSON.utf8))
+            let dto = try await client.createBed(body)
+            try replaceLocalBed(oldID: write.entityID, with: dto)
+
+        case ("bed", "update"):
+            let body = try JSONDecoder().decode(SeedkeepClient.UpdateBedInput.self, from: Data(write.payloadJSON.utf8))
+            let dto = try await client.updateBed(id: write.entityID, body)
+            try upsertBeds([dto])
+
+        case ("bed", "delete"):
+            _ = try await client.deleteBed(id: write.entityID)
+
+        case ("planting_event", "create"):
+            let body = try JSONDecoder().decode(SeedkeepClient.CreatePlantingEventInput.self, from: Data(write.payloadJSON.utf8))
+            let dto = try await client.createPlantingEvent(body)
+            try replaceLocalPlantingEvent(oldID: write.entityID, with: dto)
+
+        case ("planting_event", "update"):
+            let body = try JSONDecoder().decode(SeedkeepClient.UpdatePlantingEventInput.self, from: Data(write.payloadJSON.utf8))
+            let dto = try await client.updatePlantingEvent(id: write.entityID, body)
+            try upsertPlantingEvents([dto])
+
+        case ("planting_event", "delete"):
+            _ = try await client.deletePlantingEvent(id: write.entityID)
 
         default:
             throw SeedkeepError(code: "unknown_pending_op", message: "Unknown pending write \(write.entityType)/\(write.operation)")
@@ -402,6 +454,142 @@ public final class SyncEngine {
         try context.save()
     }
 
+    // MARK: - Beds (Phase 2)
+
+    public func enqueueCreateBed(_ input: SeedkeepClient.CreateBedInput, householdID: String) throws -> LocalBed {
+        let id = "bed_local_\(UUID().uuidString)"
+        let now = Self.nowMs()
+        let local = LocalBed(
+            id: id,
+            householdID: householdID,
+            name: input.name,
+            bedDescription: input.description,
+            widthFeet: input.width_feet,
+            lengthFeet: input.length_feet,
+            sortOrder: input.sort_order ?? 0,
+            createdAt: now,
+            updatedAt: now
+        )
+        let payload = try JSONEncoder().encode(input)
+        let context = ModelContext(container)
+        context.insert(local)
+        context.insert(LocalPendingWrite(
+            id: "pw_\(UUID().uuidString)",
+            entityType: "bed", entityID: id, operation: "create",
+            payloadJSON: String(decoding: payload, as: UTF8.self),
+            createdAt: now
+        ))
+        try context.save()
+        return local
+    }
+
+    public func enqueueUpdateBed(id: String, _ patch: SeedkeepClient.UpdateBedInput) throws {
+        let now = Self.nowMs()
+        let context = ModelContext(container)
+        if let local = try fetchBed(id: id, in: context) {
+            if let n = patch.name { local.name = n }
+            if let d = patch.description { local.bedDescription = d }
+            if let w = patch.width_feet { local.widthFeet = w }
+            if let l = patch.length_feet { local.lengthFeet = l }
+            if let o = patch.sort_order { local.sortOrder = o }
+            local.updatedAt = now
+        }
+        let payload = try JSONEncoder().encode(patch)
+        context.insert(LocalPendingWrite(
+            id: "pw_\(UUID().uuidString)",
+            entityType: "bed", entityID: id, operation: "update",
+            payloadJSON: String(decoding: payload, as: UTF8.self),
+            createdAt: now
+        ))
+        try context.save()
+    }
+
+    public func enqueueDeleteBed(id: String) throws {
+        let now = Self.nowMs()
+        let context = ModelContext(container)
+        if let local = try fetchBed(id: id, in: context) {
+            local.deletedAt = now
+            local.updatedAt = now
+        }
+        context.insert(LocalPendingWrite(
+            id: "pw_\(UUID().uuidString)",
+            entityType: "bed", entityID: id, operation: "delete",
+            payloadJSON: "{}",
+            createdAt: now
+        ))
+        try context.save()
+    }
+
+    // MARK: - Planting events (Phase 2)
+
+    public func enqueueCreatePlantingEvent(_ input: SeedkeepClient.CreatePlantingEventInput, householdID: String) throws -> LocalPlantingEvent {
+        let id = "pe_local_\(UUID().uuidString)"
+        let now = Self.nowMs()
+        let local = LocalPlantingEvent(
+            id: id,
+            householdID: householdID,
+            bedID: input.bed_id,
+            seedID: input.seed_id,
+            catalogSeedID: input.catalog_seed_id,
+            kindRaw: input.kind,
+            plannedFor: input.planned_for,
+            completedAt: input.completed_at,
+            notes: input.notes,
+            createdAt: now,
+            updatedAt: now
+        )
+        let payload = try JSONEncoder().encode(input)
+        let context = ModelContext(container)
+        context.insert(local)
+        context.insert(LocalPendingWrite(
+            id: "pw_\(UUID().uuidString)",
+            entityType: "planting_event", entityID: id, operation: "create",
+            payloadJSON: String(decoding: payload, as: UTF8.self),
+            createdAt: now
+        ))
+        try context.save()
+        return local
+    }
+
+    public func enqueueUpdatePlantingEvent(id: String, _ patch: SeedkeepClient.UpdatePlantingEventInput) throws {
+        let now = Self.nowMs()
+        let context = ModelContext(container)
+        if let local = try fetchPlantingEvent(id: id, in: context) {
+            if let b = patch.bed_id { local.bedID = b }
+            if let s = patch.seed_id { local.seedID = s }
+            if let c = patch.catalog_seed_id { local.catalogSeedID = c }
+            if let k = patch.kind { local.kindRaw = k }
+            if let p = patch.planned_for { local.plannedFor = p }
+            if let done = patch.completed_at { local.completedAt = done }
+            if let n = patch.notes { local.notes = n }
+            local.updatedAt = now
+        }
+        let payload = try JSONEncoder().encode(patch)
+        context.insert(LocalPendingWrite(
+            id: "pw_\(UUID().uuidString)",
+            entityType: "planting_event", entityID: id, operation: "update",
+            payloadJSON: String(decoding: payload, as: UTF8.self),
+            createdAt: now
+        ))
+        try context.save()
+    }
+
+    public func enqueueDeletePlantingEvent(id: String) throws {
+        let now = Self.nowMs()
+        let context = ModelContext(container)
+        if let local = try fetchPlantingEvent(id: id, in: context) {
+            local.deletedAt = now
+            local.updatedAt = now
+        }
+        context.insert(LocalPendingWrite(
+            id: "pw_\(UUID().uuidString)",
+            entityType: "planting_event", entityID: id, operation: "delete",
+            payloadJSON: "{}",
+            createdAt: now
+        ))
+        try context.save()
+    }
+
     // MARK: - SwiftData helpers
 
     private func currentCursor(householdID: String, kind: String) -> Int64 {
@@ -452,6 +640,42 @@ public final class SyncEngine {
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalTag>(predicate: #Predicate { $0.id == id })
+            if let existing = try context.fetch(descriptor).first {
+                if dto.deleted_at != nil {
+                    context.delete(existing)
+                } else {
+                    dto.apply(to: existing)
+                }
+            } else if dto.deleted_at == nil {
+                context.insert(dto.makeLocal())
+            }
+        }
+        try context.save()
+    }
+
+    private func upsertBeds(_ items: [BedDTO]) throws {
+        let context = ModelContext(container)
+        for dto in items {
+            let id = dto.id
+            let descriptor = FetchDescriptor<LocalBed>(predicate: #Predicate { $0.id == id })
+            if let existing = try context.fetch(descriptor).first {
+                if dto.deleted_at != nil {
+                    context.delete(existing)
+                } else {
+                    dto.apply(to: existing)
+                }
+            } else if dto.deleted_at == nil {
+                context.insert(dto.makeLocal())
+            }
+        }
+        try context.save()
+    }
+
+    private func upsertPlantingEvents(_ items: [PlantingEventDTO]) throws {
+        let context = ModelContext(container)
+        for dto in items {
+            let id = dto.id
+            let descriptor = FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id })
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
                     context.delete(existing)
@@ -576,6 +800,32 @@ public final class SyncEngine {
             context.delete(stale)
         }
         try upsertSeeds([dto])
+    }
+
+    private func fetchBed(id: String, in context: ModelContext) throws -> LocalBed? {
+        let descriptor = FetchDescriptor<LocalBed>(predicate: #Predicate { $0.id == id })
+        return try context.fetch(descriptor).first
+    }
+
+    private func fetchPlantingEvent(id: String, in context: ModelContext) throws -> LocalPlantingEvent? {
+        let descriptor = FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id })
+        return try context.fetch(descriptor).first
+    }
+
+    private func replaceLocalBed(oldID: String, with dto: BedDTO) throws {
+        let context = ModelContext(container)
+        if oldID != dto.id, let stale = try fetchBed(id: oldID, in: context) {
+            context.delete(stale)
+        }
+        try upsertBeds([dto])
+    }
+
+    private func replaceLocalPlantingEvent(oldID: String, with dto: PlantingEventDTO) throws {
+        let context = ModelContext(container)
+        if oldID != dto.id, let stale = try fetchPlantingEvent(id: oldID, in: context) {
+            context.delete(stale)
+        }
+        try upsertPlantingEvents([dto])
     }
 
     static func nowMs() -> Int64 {

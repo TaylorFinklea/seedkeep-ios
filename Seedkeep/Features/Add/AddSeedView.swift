@@ -427,7 +427,7 @@ private struct YearField: View {
     }
 }
 
-private extension String {
+extension String {
     var trimmedNonEmpty: String? {
         let t = trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t

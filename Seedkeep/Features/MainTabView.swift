@@ -1,17 +1,17 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Five-tab root: Library / Plan / Random / Settings / You. Plan is still
-/// a placeholder (Phase 2). Random and Settings are real in C-ios.
+/// Five-tab root: Library / Garden / Random / Settings / You. Garden is
+/// the Phase 2 entry point — beds + planting events. Random and Settings
+/// shipped in C-ios.
 struct MainTabView: View {
     var body: some View {
         TabView {
             LibraryView()
                 .tabItem { Label("Library", systemImage: "leaf") }
 
-            Text("Plan — coming in Phase 2")
-                .foregroundStyle(.secondary)
-                .tabItem { Label("Plan", systemImage: "calendar") }
+            GardenView()
+                .tabItem { Label("Garden", systemImage: "square.grid.3x3.topleft.filled") }
 
             RandomPickView()
                 .tabItem { Label("Random", systemImage: "shuffle") }

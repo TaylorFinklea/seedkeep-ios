@@ -119,6 +119,63 @@ public struct CatalogSeedDTO: Codable, Sendable, Equatable {
     public let published_at: Int64?
 }
 
+/// Phase 2: garden bed (a named, household-scoped growing space).
+public struct BedDTO: Codable, Sendable, Equatable {
+    public let id: String
+    public let household_id: String
+    public let name: String
+    public let description: String?
+    public let width_feet: Double?
+    public let length_feet: Double?
+    public let sort_order: Int
+    public let created_at: Int64
+    public let updated_at: Int64
+    public let deleted_at: Int64?
+}
+
+/// Phase 2: planting event — a single dated action inside a bed.
+/// `kind` is one of "sowing", "transplant", "harvest", "note".
+/// `planned_for` is a YYYY-MM-DD string (date-only, no timezone).
+/// `completed_at` is ms-epoch when the user marks the event done.
+public struct PlantingEventDTO: Codable, Sendable, Equatable {
+    public let id: String
+    public let household_id: String
+    public let bed_id: String?
+    public let seed_id: String?
+    public let catalog_seed_id: String?
+    public let kind: String
+    public let planned_for: String
+    public let completed_at: Int64?
+    public let notes: String?
+    public let created_at: Int64
+    public let updated_at: Int64
+    public let deleted_at: Int64?
+}
+
+public enum PlantingEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
+    case sowing
+    case transplant
+    case harvest
+    case note
+    public var id: String { rawValue }
+    public var displayName: String {
+        switch self {
+        case .sowing: return "Sow"
+        case .transplant: return "Transplant"
+        case .harvest: return "Harvest"
+        case .note: return "Note"
+        }
+    }
+    public var systemImage: String {
+        switch self {
+        case .sowing: return "leaf.fill"
+        case .transplant: return "arrow.up.bin.fill"
+        case .harvest: return "basket.fill"
+        case .note: return "note.text"
+        }
+    }
+}
+
 /// Generic delta-sync response: `{ items: [T], cursor: <ms>, has_more: bool }`.
 public struct DeltaPage<Item: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
     public let items: [Item]
@@ -148,6 +205,14 @@ public enum WireResponses {
 
     public struct LocationOne: Codable, Sendable, Equatable {
         public let location: LocationDTO
+    }
+
+    public struct BedOne: Codable, Sendable, Equatable {
+        public let bed: BedDTO
+    }
+
+    public struct PlantingEventOne: Codable, Sendable, Equatable {
+        public let planting_event: PlantingEventDTO
     }
 
     public struct TagOne: Codable, Sendable, Equatable {

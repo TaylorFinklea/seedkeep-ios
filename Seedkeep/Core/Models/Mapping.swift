@@ -90,3 +90,65 @@ extension SeedDTO {
         local.deletedAt = deleted_at
     }
 }
+
+extension BedDTO {
+    func makeLocal() -> LocalBed {
+        LocalBed(
+            id: id,
+            householdID: household_id,
+            name: name,
+            bedDescription: description,
+            widthFeet: width_feet,
+            lengthFeet: length_feet,
+            sortOrder: sort_order,
+            createdAt: created_at,
+            updatedAt: updated_at,
+            deletedAt: deleted_at
+        )
+    }
+
+    func apply(to local: LocalBed) {
+        local.householdID = household_id
+        local.name = name
+        local.bedDescription = description
+        local.widthFeet = width_feet
+        local.lengthFeet = length_feet
+        local.sortOrder = sort_order
+        local.createdAt = created_at
+        local.updatedAt = updated_at
+        local.deletedAt = deleted_at
+    }
+}
+
+extension PlantingEventDTO {
+    func makeLocal() -> LocalPlantingEvent {
+        LocalPlantingEvent(
+            id: id,
+            householdID: household_id,
+            bedID: bed_id,
+            seedID: seed_id,
+            catalogSeedID: catalog_seed_id,
+            kindRaw: kind,
+            plannedFor: planned_for,
+            completedAt: completed_at,
+            notes: notes,
+            createdAt: created_at,
+            updatedAt: updated_at,
+            deletedAt: deleted_at
+        )
+    }
+
+    func apply(to local: LocalPlantingEvent) {
+        local.householdID = household_id
+        local.bedID = bed_id
+        local.seedID = seed_id
+        local.catalogSeedID = catalog_seed_id
+        local.kindRaw = kind
+        local.plannedFor = planned_for
+        local.completedAt = completed_at
+        local.notes = notes
+        local.createdAt = created_at
+        local.updatedAt = updated_at
+        local.deletedAt = deleted_at
+    }
+}

@@ -97,9 +97,5 @@ public final class LocalSeed {
     }
 }
 
-private extension String {
-    var trimmedNonEmpty: String? {
-        let t = trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? nil : t
-    }
-}
+// trimmedNonEmpty lives in AddSeedView.swift as an internal-access
+// String extension; reuse it here.

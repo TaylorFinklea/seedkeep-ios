@@ -26,6 +26,7 @@ struct SeedDetailView: View {
     @State private var pickedPhoto: PhotosPickerItem?
     @State private var uploadingPhoto = false
     @State private var uploadError: String?
+    @State private var showPlanEvent = false
 
     /// Catalog metadata (scientific name, growing conditions, etc.) fetched
     /// when the view appears if the seed is linked to a catalog entry.
@@ -57,7 +58,11 @@ struct SeedDetailView: View {
                     storageSection(seed)
                     provenanceSection(seed)
                     notesSection(seed)
+                    plantSection(seed)
                     deleteSection(seed)
+                }
+                .sheet(isPresented: $showPlanEvent) {
+                    AddPlantingEventView(bedID: nil, prefillSeedID: seedID)
                 }
                 .navigationTitle(seed.customName ?? "Seed")
                 .navigationBarTitleDisplayMode(.inline)
@@ -467,6 +472,19 @@ struct SeedDetailView: View {
         }
         .onDisappear {
             Task { try? await appEnv.sync.flushPending() }
+        }
+    }
+
+    @ViewBuilder
+    private func plantSection(_ seed: LocalSeed) -> some View {
+        Section {
+            Button {
+                showPlanEvent = true
+            } label: {
+                Label("Plan to plant", systemImage: "calendar.badge.plus")
+            }
+        } footer: {
+            Text("Add a sow, transplant, harvest, or note tied to this seed and (optionally) a bed.")
         }
     }
 
