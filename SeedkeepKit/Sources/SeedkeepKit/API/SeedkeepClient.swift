@@ -620,6 +620,36 @@ public actor SeedkeepClient {
         return try await perform(req)
     }
 
+    /// Pretty-print a Swift DecodingError so users + logs can see the
+    /// exact key + types involved. Includes a short body excerpt so a
+    /// shape mismatch between client and server is obvious at a glance.
+    private static func describeDecodeError(_ error: Error, body: Data) -> String {
+        let path: (DecodingError.Context) -> String = { ctx in
+            ctx.codingPath.map { $0.stringValue }.joined(separator: ".")
+        }
+        let detail: String
+        if let d = error as? DecodingError {
+            switch d {
+            case .typeMismatch(let type, let ctx):
+                detail = "typeMismatch \(type) at '\(path(ctx))' — \(ctx.debugDescription)"
+            case .valueNotFound(let type, let ctx):
+                detail = "valueNotFound \(type) at '\(path(ctx))' — \(ctx.debugDescription)"
+            case .keyNotFound(let key, let ctx):
+                detail = "keyNotFound '\(key.stringValue)' at '\(path(ctx))'"
+            case .dataCorrupted(let ctx):
+                detail = "dataCorrupted at '\(path(ctx))' — \(ctx.debugDescription)"
+            @unknown default:
+                detail = "DecodingError: \(error.localizedDescription)"
+            }
+        } else {
+            detail = error.localizedDescription
+        }
+        let snippet = String(data: body, encoding: .utf8)?
+            .replacingOccurrences(of: "\n", with: " ")
+            .prefix(220) ?? ""
+        return "\(detail) | body: \(snippet)"
+    }
+
     private func perform<T: Decodable & Sendable>(_ req: URLRequest) async throws -> T {
         let (data, response) = try await configuration.session.data(for: req)
         guard let http = response as? HTTPURLResponse else {
@@ -632,10 +662,14 @@ public actor SeedkeepClient {
             envelope = try JSONDecoder().decode(Envelope<T>.self, from: data)
         } catch {
             // Server returned something that wasn't an envelope. Surface the
-            // raw HTTP status with the decode error so logs still help.
+            // raw HTTP status with the decode-error detail so the message
+            // names the exact key + expected/found types instead of the
+            // generic "couldn't be read because it isn't in the correct
+            // format."
+            let detail = Self.describeDecodeError(error, body: data)
             throw SeedkeepError(
                 code: "decode_failed",
-                message: "HTTP \(http.statusCode): \(error.localizedDescription)"
+                message: "HTTP \(http.statusCode): \(detail)"
             )
         }
 
