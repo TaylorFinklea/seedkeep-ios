@@ -143,21 +143,48 @@ struct ScanFlow: View {
     /// Resize + recompress an oversize JPEG. Returns nil only if UIImage
     /// can't decode the bytes (e.g. corrupted capture); callers fall back
     /// to the original Data in that case.
-    private static func resizedJPEG(_ data: Data, maxDimension: CGFloat, quality: CGFloat) -> Data? {
+    ///
+    /// Guarantees the returned bytes are ≤ `targetBytes` by progressively
+    /// dropping JPEG quality if the first pass overruns. Anthropic's
+    /// vision API caps at 5 MB on the base64-encoded form, so a raw cap
+    /// of 4 MB leaves headroom for the ~33% base64 inflation.
+    private static func resizedJPEG(
+        _ data: Data,
+        maxDimension: CGFloat,
+        quality: CGFloat,
+        targetBytes: Int = 4 * 1024 * 1024
+    ) -> Data? {
         guard let image = UIImage(data: data) else { return nil }
         let size = image.size
         let longest = max(size.width, size.height)
-        if longest <= maxDimension {
-            // Already within target dimensions — recompress only.
-            return image.jpegData(compressionQuality: quality)
+
+        // Critical: format.scale = 1 forces the renderer to emit a real
+        // pixel-for-pixel bitmap at our requested CGSize. The default is
+        // UIScreen.main.scale (2.0 or 3.0), which silently inflates a
+        // "2048-point" output to 4096 or 6144 actual pixels.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = true
+
+        let drawSize: CGSize = {
+            if longest <= maxDimension { return size }
+            let scale = maxDimension / longest
+            return CGSize(width: size.width * scale, height: size.height * scale)
+        }()
+
+        let scaled = UIGraphicsImageRenderer(size: drawSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: drawSize))
         }
-        let scale = maxDimension / longest
-        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        let scaled = renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: newSize))
+
+        // Progressive quality fallback: rare but possible that an image
+        // with a lot of fine detail still busts the budget at the first
+        // chosen quality. Try descending steps before giving up.
+        for q in [quality, 0.6, 0.5, 0.4, 0.3] as [CGFloat] {
+            guard let encoded = scaled.jpegData(compressionQuality: q) else { continue }
+            if encoded.count <= targetBytes { return encoded }
         }
-        return scaled.jpegData(compressionQuality: quality)
+        // Last resort: return the smallest one we got, even if it's over.
+        return scaled.jpegData(compressionQuality: 0.3)
     }
 
     private func handleCameraError(_ error: CameraError) {
