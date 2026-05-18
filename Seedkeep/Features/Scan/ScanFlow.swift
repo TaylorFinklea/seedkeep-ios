@@ -30,6 +30,12 @@ struct ScanFlow: View {
     enum Phase: Equatable {
         case scanning
         case lookingUp(String)
+        /// Barcode detected and looked up; no catalog hit. Camera stays
+        /// live so the user can frame the packet and tap to capture the
+        /// front. Separating this from `.scanning` keeps the detector
+        /// from re-firing the lookup in a loop while the user lines up
+        /// the shot.
+        case captureFront(barcode: String?)
         case promptForBack(frontJPEG: Data, barcode: String?)
         case extracting(Data, Data, String?)
         case error(String)
@@ -68,6 +74,7 @@ struct ScanFlow: View {
         switch phase {
         case .scanning: return "Scan"
         case .lookingUp: return "Looking up…"
+        case .captureFront: return "Capture front"
         case .promptForBack: return "Capture back"
         case .extracting: return "Extracting…"
         case .error: return "Scan failed"
@@ -83,10 +90,16 @@ struct ScanFlow: View {
             )
         case .lookingUp(let barcode):
             StatusOverlay(title: "Looking up barcode…", subtitle: barcode)
+        case .captureFront(let barcode):
+            FrontPromptOverlay(
+                barcode: barcode,
+                onCaptureFront: { capture = .takePhoto },
+                onCancel: { phase = .scanning; detectedBarcode = nil }
+            )
         case .promptForBack(_, _):
             BackPromptOverlay(
                 onCaptureBack: { capture = .takePhoto },
-                onCancel: { phase = .scanning }
+                onCancel: { phase = .scanning; detectedBarcode = nil }
             )
         case .extracting:
             StatusOverlay(title: "Reading the packet…", subtitle: "This usually takes 8–15 seconds.")
@@ -109,6 +122,10 @@ struct ScanFlow: View {
         case .scanning:
             // Front photo without a barcode (user tapped "Skip barcode").
             phase = .promptForBack(frontJPEG: data, barcode: detectedBarcode)
+        case .captureFront(let barcode):
+            // Barcode was captured but had no catalog hit; this is the
+            // front photo for the AI-extraction pipeline.
+            phase = .promptForBack(frontJPEG: data, barcode: barcode)
         case .promptForBack(let frontJPEG, let barcode):
             phase = .extracting(frontJPEG, data, barcode)
             Task { await runExtraction(front: frontJPEG, back: data, barcode: barcode) }
@@ -138,13 +155,12 @@ struct ScanFlow: View {
             phase = .error(error.localizedDescription)
             return
         }
-        // No hit — prompt the user to capture front + back photos.
-        phase = .promptForBack(frontJPEG: Data(), barcode: barcode)
-        // The empty Data placeholder is intentionally never persisted; we
-        // route immediately into front-capture when the user taps the
-        // capture button (handlePhoto reads phase to decide what's next).
-        // Reset to `.scanning` so they can capture front first.
-        phase = .scanning
+        // No catalog hit — move to the front-capture phase so the
+        // detector doesn't immediately re-fire while the user lines up
+        // the front-of-packet shot. The captured barcode rides through
+        // the rest of the flow so it lands on the AI-extraction submit
+        // and the resulting catalog entry inherits it.
+        phase = .captureFront(barcode: barcode)
     }
 
     private func runExtraction(front: Data, back: Data, barcode: String?) async {
@@ -333,6 +349,59 @@ private struct ScanReticle: View {
             .strokeBorder(.white.opacity(0.9), lineWidth: 3)
             .frame(width: 260, height: 160)
             .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+    }
+}
+
+private struct FrontPromptOverlay: View {
+    let barcode: String?
+    let onCaptureFront: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack {
+            Spacer()
+            VStack(spacing: 12) {
+                if let barcode {
+                    VStack(spacing: 4) {
+                        Label("Barcode captured", systemImage: "checkmark.circle.fill")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text(barcode)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.6), in: .capsule)
+                }
+                Text("This packet is new — take a front photo so we can extract details.")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.6), in: .capsule)
+                HStack(spacing: 12) {
+                    Button(role: .cancel) { onCancel() } label: {
+                        Text("Restart")
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(.regularMaterial, in: .capsule)
+                    }
+                    Button {
+                        onCaptureFront()
+                    } label: {
+                        Text("Capture front")
+                            .font(.headline)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .background(.tint, in: .capsule)
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .padding(.bottom, 32)
+        }
     }
 }
 
