@@ -8,65 +8,49 @@
 
 ## Last Session Summary
 
-**Date**: 2026-05-04
+**Date**: 2026-05-19
 
-- Shipped F4: iOS BYOK + StoreKit 2 subscription flow on top of F3.
-- New `APIKeyStore` (Keychain wrapper) for Anthropic + OpenAI keys; never sent to our server.
-- New `BYOKExtractor` calls Anthropic vision (preferred) or OpenAI GPT-4o vision *directly from the device* with the user's key. Returns the same shape as `OnDeviceExtractor.Output` so ScanFlow can route it through `/api/extractions/pre-extracted`.
-- New `SubscriptionManager` (`@MainActor @Observable`) wraps StoreKit 2 — `loadProducts`, `purchase(_:)`, `restore()`, `refreshEntitlements()`, plus a background `Transaction.updates` listener. Receipt path: read `Bundle.main.appStoreReceiptURL` bytes → base64 → `POST /api/subscriptions/verify`.
-- Settings now has four backend rows: Server, AI provider, API keys (BYOK), Subscription. Each shows a one-line status under its label.
-- ScanFlow's BYOK branch routes through `BYOKExtractor`. Free still uses Apple Foundation Models; Hosted still uses the multipart server-vision route.
-- SeedkeepKit: added `verifyAppleReceipt(receiptDataB64:)` + `VerifyReceiptResponse`. 11/11 tests pass.
+- Cut TestFlight build 16 (0.1.0 / 16) — current latest on App Store Connect.
+- Eliminated multi-second scan-confirm hang: moved UIImage resize (1–3s per photo) and base64 encoding (~8 MB total for front + back) off MainActor onto detached tasks. `resizedJPEG` and `encodeBase64Pair` are now `nonisolated`; `applyResizedPhoto` re-checks scan phase post-resize so cancelled photos drop cleanly. Files: `Seedkeep/Features/Scan/ScanFlow.swift`.
+- Added per-seed `customType: String?` to `LocalSeed` (additive, local-only migration). `AddSeedView` infers a type from the extraction / catalog `common_name` at save time; `SeedDetailView` exposes a Type field in the Identity section (wired via `SyncEngine.setLocalCustomType`). `SeedRow` renders the type as a tint-colored capsule.
+- Added "Group by type" toggle in `LibraryView` toolbar (persisted via `@AppStorage`). On = `insetGrouped` style with one section per type, "Untyped" pushed to bottom; off = the existing flat list. Stable alphabetical section order.
+- Cut TestFlight build 15 (0.1.0 / 15) immediately prior, carrying:
+  - Editable seed identity — name, variety, company now editable from `SeedDetailView` via `enqueueUpdateSeed`.
+  - Transplant frost warnings — frost-warning banner now fires on transplant events for tender plants scheduled before last frost, not just direct-sow.
+  - Growing-info snapshot on `LocalSeed` — new `GrowingInfoSnapshot` (Codable) + `growingInfoJSON` field. `SeedDetailView` reads snapshot first, falls back to catalog, backfills legacy seeds on read. Lets manual-entry and offline seeds carry growing info without depending on a catalog row.
 
-**Date**: 2026-05-04 (earlier)
+**Date**: 2026-05-17 (range: 2026-05-04 → 2026-05-17, multiple sessions documented in commits only)
 
-- Shipped F3: iOS Server URL picker + on-device extraction.
-- Bumped deployment target 18.0 → 18.1 (FoundationModels gate is iOS 26+ at runtime, availability-checked).
-- New `AppPreferences` (Observable) with persisted `serverURLOverride`, `aiProvider` (`free` / `byok` / `hosted`), and a `cachedTier` snapshot from the server.
-- `AppEnvironment` now constructs the live `SeedkeepClient` from `effectiveServerURL`. `setServerURL(_:)` validates the URL against `/api/health` before mutating the client. `refreshTier()` calls `/api/subscriptions/me`.
-- Settings → Server: URL picker that saves only after the health check passes; supports reset to bundle default.
-- Settings → AI provider: picker for Free / BYOK / Hosted with help text + a tier-mismatch warning when the picker disagrees with the server-reported tier.
-- `OnDeviceExtractor` (`Seedkeep/Core/AI/OnDeviceExtractor.swift`): two-stage. Stage 1 = Vision `VNRecognizeTextRequest` OCR on front + back JPEGs (iOS 13+). Stage 2 = `FoundationModels.LanguageModelSession` structured-fields extraction (iOS 26+, gated by `SystemLanguageModel.default.isAvailable`). Falls back to OCR-only on older / non-AI-capable devices.
-- `ScanFlow` now branches on `appEnv.preferences.aiProvider`. Free + BYOK call `OnDeviceExtractor.extract(...)` then POST `/api/extractions/pre-extracted`. Hosted keeps the multipart server-vision path. New `.preExtracted` `ScanResult` case threads back to `AddSeedView.Prefill.preExtraction` with its own review banner ("Extracted on-device — Self-confidence 0.xx").
-- SeedkeepKit: added `WireResponses.PreExtractedResult`, `SeedkeepClient.PreExtractedInput`, `submitPreExtracted(_:)`, plus `SubscriptionMeResponse` / `SubscriptionDTO` and `subscriptionMe()`. Four new `EnvelopeTests` cover round-trip decoding (including no-photos and free-tier-no-subscription edges). 10/10 SeedkeepKit tests pass.
-- F0/F1/F2 (server side, in `~/git/seedkeep-server`) shipped earlier in the session: tagged `f1-bootstrap-complete` and `f2-tier-subscriptions-complete`.
-
-**Date**: 2026-05-03
-
-- Shipped Phase 1 steps D (scan flow) and E (polish) on iOS in the same session.
-- D-ios: `submitExtraction` multipart upload, `CameraView` over AVFoundation, `ScanFlow` state machine, `AddSeedView` Prefill banner, viewfinder toolbar button on Library.
-- E1: universal-link + custom-URL-scheme invite handling. `seedkeep://invite/<code>` and `https://seedkeep.app/invite/<code>` both route to a presentable `InviteAcceptView` that calls `acceptInvite` and refreshes the household state.
-- E2: write-queue hardening. `LocalPendingWrite` carries `nextAttemptAt` and `isDeadLettered`; `flushPending()` skips backed-off and dead-lettered rows. Settings → Pending writes lists every queue row with last error + retry/forget actions. Backoff: 2/4/8/16/32/64s capped at 5 min, dead-letter after 6 attempts.
-- E3: online-only photo attach. `SeedkeepClient.uploadSeedPhoto` posts raw JPEG; `fetchSeedPhotoData` streams binary. `SyncEngine.refreshSeedPhotos` fetches `GET /api/seeds/:id` and reconciles `LocalSeedPhoto` rows. `AuthedImage` renders with Bearer header (since `AsyncImage` can't add it). SeedDetailView gets a horizontal photo strip + PhotosPicker → JPEG (75% quality) → upload.
-- Offline photo queue is **deferred** post-Phase-1; documented in roadmap.
+- Phase 2A shipped (build 10): Garden tab — beds CRUD + planting events timeline. Files: `Seedkeep/Features/Garden/{GardenView, AddBedView, BedDetailView, AddPlantingEventView}.swift`. SwiftData adds `LocalBed`, `LocalPlantingEvent`. Pairs with `seedkeep-server` migration adding `beds` + `planting_events` tables.
+- Phase 2B shipped (build 11): Frost-date awareness in planting events. Server returns last/first frost dates for the household's hardiness zone; planting events show "X days before last frost" relative banners.
+- Phase 2C.1 shipped (build 12): Bed layout canvas — `BedLayoutCanvas.swift` renders the bed as a measured grid; planting events carry `xFeet` / `yFeet` for spatial position. `AddPlantingEventView` includes position pickers.
+- Phase 2C shipped (build 13): Spacing rings (visualizes per-plant spacing radius on the canvas), drag-and-drop reposition, zone-based auto-fill of suggested spacing, sow-recommendation chips on the planting event card.
+- Build 14 cut on top of Phase 2C (consolidation only, no notable user-facing changes documented in the commit).
+- NUMERIC decode fix (server-side, in `seedkeep-server` commit `0662fe7`): postgres.js was returning NUMERIC columns as strings, which broke iOS-side Double decoding. Server now parses NUMERIC as Number before envelope serialization.
 
 ## Build Status
 
-- `xcodebuild -scheme Seedkeep -destination 'generic/platform=iOS Simulator' build` → **BUILD SUCCEEDED** (after F4).
-- `cd SeedkeepKit && swift test` → 11/11 tests passing.
-- Backend round-trips verified via curl + synthetic Bearer tokens: PATCH `/api/seeds/:id`, PATCH `/api/tags/:id`, DELETE `/api/tags/:id` all return correct envelopes.
-- C-ios surface area:
-  - `Seedkeep/Core/Models/` — six `@Model` types + `Mapping.swift`.
-  - `Seedkeep/Core/Sync/SyncEngine.swift` — `syncAll(householdID:)` and `flushPending()`; optimistic enqueue methods.
-  - `Seedkeep/Features/Library/{LibraryView, SeedRow}.swift`, `SeedDetail/SeedDetailView.swift`, `Add/AddSeedView.swift`, `Random/RandomPickView.swift`, `Settings/{SettingsView, LocationsView, TagsView}.swift`.
-  - `MainTabView` is now 5 tabs; `YouView` slimmed to identity + sign-out.
-- `AppEnvironment.live()` configures the `ModelContainer` over the six `@Model` types and instantiates the `SyncEngine` once.
-- `SeedkeepApp` triggers `appEnv.syncIfPossible()` from a `.task(id:)` keyed on the auth state, so we sync once per sign-in transition rather than every state change.
+- `xcodebuild -scheme Seedkeep -destination 'generic/platform=iOS Simulator' build` last verified green at build 16 cut (2026-05-19).
+- `cd SeedkeepKit && swift test` — 11/11 last documented at F4 completion; no SeedkeepKit-touching changes since (Phase 2A/B/C and 2C.1 work was app-target + server side).
+- `MARKETING_VERSION = 0.1.0`, `CURRENT_PROJECT_VERSION = 16` in `project.yml`.
+- Garden feature surface: `Seedkeep/Features/Garden/{GardenView, AddBedView, BedDetailView, AddPlantingEventView, BedLayoutCanvas}.swift` + SwiftData `LocalBed` and `LocalPlantingEvent`.
+- TestFlight: 0.1.0 build 16 is the latest uploaded; build 16 is the current top of `main`.
 
 ## Blockers
 
-- Sign in with Apple still requires a real bundle ID + provisioning profile to actually log in (the build succeeds; auth round-trip on a real device requires user-supplied keys via `AppConfig.local.xcconfig`).
-- Backend `seedkeep` repo must be running locally for the app to connect (`npm run dev` in `~/git/seedkeep`).
+- Hosted tier still feature-flagged off (`AppPreferences.isHostedTierEnabled = false`). To unflag: register `app.seedkeep.ios.hosted.{monthly,yearly}` in App Store Connect, set `APPLE_IAP_SHARED_SECRET` + `ANTHROPIC_API_KEY` on Fly via `fly secrets set`. Bundle ID is `app.seedkeep.ios`. (Carried over from F4.)
+- F5 end-to-end real-device verification across all three tiers still notionally open, but Free + BYOK have shipped to TestFlight builds 11+ without regressions — the remaining gap is the Hosted-tier path, which is gated by the flag above.
+- Pending-photo-upload offline queue still deferred post-Phase-1 (documented in roadmap).
 
 ## Next concrete step
 
-**Hosted tier is feature-flagged off (2026-05-16).** `AppPreferences.isHostedTierEnabled = false` hides the Hosted option from the AI provider picker and the Subscription row from Settings. All Hosted code (SubscriptionManager, StoreKit wiring, `/api/subscriptions/verify`) is still compiled in and works — just gated behind the flag. To re-enable: flip the flag, register `app.seedkeep.ios.hosted.{monthly,yearly}` in App Store Connect, set `APPLE_IAP_SHARED_SECRET` on Fly. Bundle ID is `app.seedkeep.ios`.
+Phase 2A/B/C and 2C.1 shipped through TestFlight build 16. The remaining Phase 2 surface still to scope:
 
-F4 complete. Remaining for the F1–F5 tier-aware Phase 1 sequence:
+1. **Garden plan completion** — the Plan tab placeholder is gone (Garden tab is real now), but the documented Phase 2 surface includes WeatherKit-driven planting windows beyond frost dates, and extension-calendar integration. Neither has a tracked task yet — needs a brainstorming session to decide what ships in 0.2.0.
+2. **TestFlight feedback triage** — six TestFlight builds (11–16) shipped Phase 2 features over ~2 weeks. Worth pulling tester feedback / crash logs from App Store Connect before scoping the next chunk.
+3. **Hosted tier unflag** — purely a configuration step (App Store Connect product setup + two `fly secrets set` calls + a one-line iOS code change). Could ship as 0.1.1 once products are approved.
 
-1. **F5** — End-to-end verification of Free + BYOK on a real device against the live `seedkeep-server.fly.dev`. Concrete checks: a) sign in, b) Free path runs Vision OCR + (on iOS 26+) Foundation Models, c) BYOK path runs Anthropic vision against a real test key, d) both POST a `catalog_extractions` row. Hosted verification is deferred until the tier is unflagged.
+Pre-existing follow-ups still open:
 
-Pre-existing follow-ups from earlier phases:
-
-- Live two-device test with real Sign in with Apple — needs your Apple bundle ID + provisioning profile in `AppConfig.local.xcconfig`.
-- Decide whether offline-photo queueing ships in v1 or is a fast-follow.
+- Live two-device test of real Sign in with Apple — needs Apple bundle ID + provisioning profile in `AppConfig.local.xcconfig`. (Last documented 2026-05-04.)
+- Offline-photo queueing decision — ship in 0.2.0 or stay deferred.

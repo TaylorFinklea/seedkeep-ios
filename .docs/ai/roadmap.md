@@ -4,69 +4,75 @@
 
 ## Vision
 
-iOS client for Seedkeep. Phase 1: a household seed library with offline-first inventory, scan-to-catalog flow, and Sign in with Apple. Pairs with the `seedkeep` Workers API.
+iOS client for Seedkeep. Phase 1 ships a household seed library with offline-first inventory, scan-to-catalog flow, Sign in with Apple, and a tier-aware extraction pipeline (Free on-device, BYOK direct-to-provider, Hosted via the server). Phase 2 builds the garden plan on top of that inventory. Pairs with the `seedkeep-server` API.
 
 ## Now / Next / Later
 
-### Now
-- [x] B1: seedkeep-ios repo bootstrap (.gitignore, README, .docs/ai/, project.yml)
-- [x] B2: SeedkeepKit Swift package — Envelope, SeedState, Wire DTOs, SeedkeepClient (5 tests passing)
-- [x] B3: Xcode app target — Sign in with Apple, AppConfig.example.xcconfig, /api/me + household round-trip wired
-- [x] B4: Household auto-create rolled into AuthController; empty Library tab + You tab placeholders ship
-- [x] C1: SeedkeepClient extended with PATCH + DELETE (locations/tags/seeds), DeleteResult envelope, UpdateSeedInput patch
-- [x] C2: SwiftData @Model layer — LocalLocation, LocalTag, LocalSeed, LocalSeedPhoto, LocalSyncCursor, LocalPendingWrite + DTO mapping
-- [x] C3: SyncEngine — pulls deltas with cursor watermarks, drains pending writes, optimistic-local enqueueCreate/Update/Delete
-- [x] C4: ModelContainer + SyncEngine wired into AppEnvironment; sync triggers on sign-in transition
-- [x] C5: LibraryView — @Query of LocalSeed by state, search, age badge, pull-to-refresh, swipe-delete, "+" → AddSeedView
-- [x] C6: AddSeedView — manual entry sheet (state, name, variety, company, packet count, location, tags, year, source, notes)
-- [x] C7: SeedDetailView — every field editable with optimistic local + queued push
-- [x] C8: RandomPickView — calls /api/seeds/random, big card UI, empty state
-- [x] C9: Settings tab — Locations CRUD + Tags CRUD with color palette + sync-now action
-- [x] C10: MainTabView promoted to 5 tabs (Library / Plan / Random / Settings / You); YouView slimmed to identity + sign-out
-- [x] D1: SeedkeepClient.submitExtraction multipart POST + envelope test (6 tests passing)
-- [x] D2: CameraView (AVCaptureSession + AVCaptureMetadataOutput + AVCapturePhotoOutput) — Swift 6 nonisolated delegates
-- [x] D3: ScanFlow coordinator — barcode → catalog lookup, fallback front+back capture → /api/extractions
-- [x] D4: AddSeedView accepts Prefill (catalog hit or AI extraction) with review banner
-- [x] D5: Scan toolbar button in LibraryView opens ScanFlow as fullScreenCover; result populates AddSeedView
+### Now (Phase 2: Garden plan — partially shipped)
+- [x] 2A: Garden tab — beds CRUD + planting events timeline (TestFlight build 10)
+- [x] 2B: Frost-date awareness in planting events (TestFlight build 11)
+- [x] 2C.1: Bed layout canvas — measured grid, `xFeet` / `yFeet` position on events (TestFlight build 12)
+- [x] 2C: Spacing rings on canvas, drag-and-drop reposition, zone-based auto-fill, sow-recommendation chips (TestFlight build 13)
+- [x] Editable seed identity (name / variety / company) from `SeedDetailView` (build 15)
+- [x] Transplant frost warnings for tender plants scheduled before last frost (build 15)
+- [x] `GrowingInfoSnapshot` on `LocalSeed` — snapshots catalog growing info onto the seed so manual / offline entries carry growing info too (build 15)
+- [x] Scan-confirm hang eliminated — UIImage resize + base64 encode moved off MainActor (build 16)
+- [x] Per-seed Type field with `LibraryView` "Group by type" toggle (build 16)
+- [ ] **WeatherKit-driven planting windows** beyond frost dates (humidity, soil-temp proxy, recent rain) — not yet scoped
+- [ ] **Extension-calendar integration** (regional planting calendars from state cooperative-extension feeds) — not yet scoped
+- [ ] **TestFlight feedback triage** — pull tester feedback / crash logs from App Store Connect for builds 11–16 before scoping the next chunk
 
 ### Next
-- [x] E1: Universal-link invite accept (`seedkeep://invite/<code>` + `https://seedkeep.app/invite/<code>`); InviteAcceptView refreshes household after success
-- [x] E2: Write-queue retry hardening — exponential backoff, dead-letter at 6 attempts, Pending Writes diagnostic view in Settings (retry / forget actions)
-- [x] E3: Photo attach to seed (online-only) — PhotosPicker → JPEG → /api/seeds/:id/photos → refresh seed photos; AuthedImage view for Bearer-aware fetches
-- [x] F3a: Bump iOS deployment target 18.0 → 18.1 (FoundationModels at runtime via iOS 26+ availability gate)
-- [x] F3b: Settings → Server URL picker validating against /api/health
-- [x] F3c: Settings → AI provider (Free / BYOK / Hosted) with tier-mismatch warning + cached server tier
-- [x] F3d: OnDeviceExtractor — Vision OCR + Foundation Models structured-fields extraction
-- [x] F3e: ScanFlow branches on aiProvider; Free / BYOK POST /api/extractions/pre-extracted; Hosted keeps server-vision path
-- [x] F3f: SeedkeepKit — submitPreExtracted, PreExtractedInput / PreExtractedResult, SubscriptionMeResponse, subscriptionMe(); 10/10 tests pass
-- [x] F4a: APIKeyStore — Keychain-backed Anthropic + OpenAI keys
-- [x] F4b: Settings → API keys form (mask, save, clear, prefix-validation warning)
-- [x] F4c: BYOKExtractor — direct vision call to Anthropic (preferred) or OpenAI from the device
-- [x] F4d: SubscriptionManager — StoreKit 2 product load, purchase, restore, transaction-update listener
-- [x] F4e: Settings → Subscription view — buy / restore + server-tier display
-- [x] F4f: SeedkeepKit — verifyAppleReceipt(receiptDataB64:) + VerifyReceiptResponse; 11/11 tests pass
-- [ ] **F5**: End-to-end verification on real device across all three tiers + handoff doc updates. Blocker: App Store Connect product configuration.
-- [ ] **Deferred to post-Phase-1**: offline photo upload queue with byte-storage in SwiftData; HEIC pass-through; thumbnail server-side
+- [ ] **Hosted-tier unflag** — register `app.seedkeep.ios.hosted.{monthly,yearly}` products in App Store Connect, set `APPLE_IAP_SHARED_SECRET` + `ANTHROPIC_API_KEY` on Fly, flip `AppPreferences.isHostedTierEnabled = true`. Ships as 0.1.1.
+- [ ] **F5 closing the loop**: real-device verification of the Hosted tier path once unflagged (Free + BYOK already proven via builds 11+).
+- [ ] **Offline photo upload queue** (deferred from Phase 1) — `LocalPendingPhotoUpload` model, byte storage, retry orchestration. Probably ships in 0.2.0 alongside any remaining Phase 2 surface.
+- [ ] **Two-device real Sign in with Apple test** — needs bundle ID + provisioning profile in `AppConfig.local.xcconfig`.
 
 ### Later
-- [ ] Phase 2 — Garden plan with WeatherKit + extension calendars
 - [ ] Phase 3 — Journal
 - [ ] Phase 4 — AI assistant
 - [ ] Phase 5 — Tomagachi + sensors
 
+### Shipped — Phase 1 (Seed Library)
+- [x] B1–B4: Repo bootstrap, SeedkeepKit package, Xcode app target, Sign in with Apple, household auto-create
+- [x] C1–C10: Sync engine, optimistic local writes, Library / Add / Detail / Random / Settings, 5-tab MainTabView
+- [x] D1–D5: Multipart extraction submit, AVFoundation camera, ScanFlow coordinator, Prefill banner, viewfinder toolbar button
+- [x] E1: Universal-link + custom-URL-scheme invite handling
+- [x] E2: Write-queue retry hardening (exponential backoff, dead-letter at 6 attempts, Pending Writes diagnostic view)
+- [x] E3: Online-only photo attach (`PhotosPicker` → JPEG → upload → `AuthedImage`)
+- [x] F3: Server URL picker + AI provider picker + `OnDeviceExtractor` (Vision OCR + Foundation Models)
+- [x] F4: BYOK keys in Keychain, `BYOKExtractor` direct-to-provider, StoreKit 2 `SubscriptionManager`, receipt validation
+- [x] F5: Free + BYOK proven on TestFlight (Hosted gated behind feature flag)
+
 ## Milestones
 
-### M1: Phase 1 — Seed Library
-- [ ] App boots, signs in, hits the Workers backend
-- [ ] Library lists active / wishlist / saved / archived seeds
-- [ ] Scan flow extracts a packet via the API
-- [ ] Household-shared with one invite
+### M1: Phase 1 — Seed Library — ✅ shipped to TestFlight
+- [x] App boots, signs in, hits the API
+- [x] Library lists active / wishlist / saved / archived seeds
+- [x] Scan flow extracts a packet via the API or on-device
+- [x] Household-shared with one invite
+- [x] Tier-aware extraction (Free, BYOK, Hosted-gated)
+
+### M2: Phase 2 — Garden Plan — 🚧 in progress
+- [x] Beds CRUD + planting events timeline (2A)
+- [x] Frost-date awareness (2B)
+- [x] Bed layout canvas + spatial position (2C.1)
+- [x] Spacing rings, drag-and-drop, zone auto-fill, sow recs (2C)
+- [ ] WeatherKit-driven planting windows
+- [ ] Extension-calendar integration
+- [ ] 0.2.0 release on TestFlight
+
+### M3: 0.1.1 — Hosted tier on
+- [ ] App Store Connect products approved
+- [ ] Fly secrets configured
+- [ ] `isHostedTierEnabled = true`
 
 ## Constraints
 
-- iOS 18+ only (target raised to iOS 26 simulator for development).
-- No CloudKit — backend is the source of truth (matches `seedkeep` API).
+- iOS 18.1+ floor (FoundationModels gated behind `if #available(iOS 26.0, *)`).
+- No CloudKit — `seedkeep-server` is the source of truth.
 - `.xcodeproj` is generated from `project.yml`; do not hand-edit it.
+- Bundle ID: `app.seedkeep.ios`.
 
 ## Backlog
 
