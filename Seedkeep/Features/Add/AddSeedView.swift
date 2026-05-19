@@ -375,12 +375,70 @@ struct AddSeedView: View {
         )
 
         do {
-            _ = try appEnv.sync.enqueueCreateSeed(input, householdID: household.id)
+            let local = try appEnv.sync.enqueueCreateSeed(input, householdID: household.id)
+            if let snapshot = buildGrowingInfoSnapshot(), snapshot.hasAny {
+                try? appEnv.sync.setLocalGrowingInfo(seedID: local.id, snapshot: snapshot)
+            }
             try? await appEnv.sync.flushPending()
             dismiss()
         } catch {
             saveError = error.localizedDescription
         }
+    }
+
+    /// Builds the local snapshot from whichever prefill source we have.
+    /// Returns nil for manual entries with no extraction or catalog data.
+    private func buildGrowingInfoSnapshot() -> GrowingInfoSnapshot? {
+        switch prefill {
+        case .catalog(_, let cat):
+            return GrowingInfoSnapshot(
+                scientific_name: cat.scientific_name,
+                life_cycle: cat.life_cycle,
+                sun_requirement: cat.sun_requirement,
+                frost_tolerance: cat.frost_tolerance,
+                sow_method: cat.sow_method,
+                seed_depth_inches: cat.seed_depth_inches,
+                days_to_germinate_min: cat.days_to_germinate_min,
+                days_to_germinate_max: cat.days_to_germinate_max,
+                days_to_maturity_min: cat.days_to_maturity_min,
+                days_to_maturity_max: cat.days_to_maturity_max,
+                soil_temp_min_f: cat.soil_temp_min_f,
+                soil_temp_max_f: cat.soil_temp_max_f,
+                plant_spacing_inches: cat.plant_spacing_inches,
+                row_spacing_inches: cat.row_spacing_inches,
+                hardiness_zone_min: cat.hardiness_zone_min,
+                hardiness_zone_max: cat.hardiness_zone_max,
+                instructions: cat.instructions
+            )
+        case .extraction(let result, _):
+            return Self.snapshot(from: result.extraction)
+        case .preExtraction(let result, _):
+            return Self.snapshot(from: result.extraction)
+        case .none:
+            return nil
+        }
+    }
+
+    private static func snapshot(from f: WireResponses.ExtractionFields) -> GrowingInfoSnapshot {
+        GrowingInfoSnapshot(
+            scientific_name: f.scientific_name,
+            life_cycle: f.life_cycle,
+            sun_requirement: f.sun_requirement,
+            frost_tolerance: f.frost_tolerance,
+            sow_method: f.sow_method,
+            seed_depth_inches: f.seed_depth_inches,
+            days_to_germinate_min: f.days_to_germinate_min,
+            days_to_germinate_max: f.days_to_germinate_max,
+            days_to_maturity_min: f.days_to_maturity_min,
+            days_to_maturity_max: f.days_to_maturity_max,
+            soil_temp_min_f: f.soil_temp_min_f,
+            soil_temp_max_f: f.soil_temp_max_f,
+            plant_spacing_inches: f.plant_spacing_inches,
+            row_spacing_inches: f.row_spacing_inches,
+            hardiness_zone_min: f.hardiness_zone_min,
+            hardiness_zone_max: f.hardiness_zone_max,
+            instructions: f.instructions
+        )
     }
 }
 

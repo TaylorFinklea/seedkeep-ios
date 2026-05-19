@@ -438,6 +438,18 @@ public final class SyncEngine {
         try context.save()
     }
 
+    /// Updates the local-only growing-info snapshot on a seed. Not sent to
+    /// the server — the catalog remains the shared source of truth — but
+    /// guarantees the user can always see the depth / temp / spacing they
+    /// reviewed at save time, even offline or before the catalog row
+    /// finishes processing.
+    public func setLocalGrowingInfo(seedID: String, snapshot: GrowingInfoSnapshot?) throws {
+        let context = ModelContext(container)
+        guard let local = try fetchSeed(id: seedID, in: context) else { return }
+        local.growingInfo = snapshot
+        try context.save()
+    }
+
     public func enqueueDeleteSeed(id: String) throws {
         let now = Self.nowMs()
         let context = ModelContext(container)

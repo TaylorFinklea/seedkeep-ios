@@ -285,11 +285,12 @@ struct AddPlantingEventView: View {
         let detail: String
     }
 
-    /// Returns a warning when the user is scheduling a *sow* (not transplant
-    /// or harvest) before the last frost AND the catalog marks the plant
-    /// as tender. Everything else just shows the no-op reference banner.
+    /// Returns a warning when the user schedules a sow or transplant before
+    /// the last frost AND the catalog marks the plant as tender. Harvests
+    /// and notes don't trigger it. Everything else just shows the no-op
+    /// reference banner.
     private var frostWarning: FrostWarning? {
-        guard kind == .sowing else { return nil }
+        guard kind == .sowing || kind == .transplant else { return nil }
         guard let lastFrost = appEnv.preferences.lastFrost else { return nil }
         guard let tolerance = currentCatalog?.frost_tolerance, tolerance == "tender" else { return nil }
         let cal = Calendar.current
@@ -298,10 +299,20 @@ struct AddPlantingEventView: View {
         guard plannedFor < frostDate else { return nil }
         let label = monthDayLabel(lastFrost)
         let name = currentCatalog?.common_name ?? "this plant"
-        return FrostWarning(
-            title: "Before last frost",
-            detail: "\(name) is tender — direct-sowing before your last frost (\(label)) risks losing the planting. Consider starting indoors and transplanting after \(label), or pick a later date."
-        )
+        switch kind {
+        case .sowing:
+            return FrostWarning(
+                title: "Before last frost",
+                detail: "\(name) is tender — direct-sowing before your last frost (\(label)) risks losing the planting. Consider starting indoors and transplanting after \(label), or pick a later date."
+            )
+        case .transplant:
+            return FrostWarning(
+                title: "Before last frost",
+                detail: "\(name) is tender and can be killed by frost — transplanting before your last frost (\(label)) risks losing the plant. Wait until after \(label), or be ready to cover and harden off carefully."
+            )
+        default:
+            return nil
+        }
     }
 
     private func monthDayLabel(_ md: MonthDay) -> String {

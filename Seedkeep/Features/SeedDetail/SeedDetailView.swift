@@ -28,6 +28,15 @@ struct SeedDetailView: View {
     @State private var uploadError: String?
     @State private var showPlanEvent = false
 
+    /// Local edit buffers for the Identity section. Mirrored from the seed
+    /// on appear so TextFields can bind to non-optional Strings; pushed back
+    /// through the sync queue on each change, flushed on disappear (same
+    /// throttle pattern as Notes).
+    @State private var nameDraft: String = ""
+    @State private var varietyDraft: String = ""
+    @State private var companyDraft: String = ""
+    @State private var identityHydrated = false
+
     /// Catalog metadata (scientific name, growing conditions, etc.) fetched
     /// when the view appears if the seed is linked to a catalog entry.
     /// Stays nil for manually-entered seeds or while loading.
@@ -48,7 +57,7 @@ struct SeedDetailView: View {
         Group {
             if let seed = seedQuery.first {
                 Form {
-                    headerSection(seed)
+                    identitySection(seed)
                     photosSection(seed)
                     growingInfoSection(seed)
                     lifecycleSection(seed)
@@ -73,10 +82,18 @@ struct SeedDetailView: View {
                         try? await appEnv.sync.refreshSeedPhotos(seedID: seed.id, householdID: household.id)
                     }
                     // Fetch the catalog entry for the growing-info section.
-                    // Manual entries (no catalog_id) skip this. Failures are
-                    // silent — the section just hides.
+                    // Used both as a display fallback and to backfill the
+                    // local snapshot for seeds saved before snapshots
+                    // existed. Failures are silent — the section falls back
+                    // to the local snapshot (or hides entirely).
                     if let catalogID = seed.catalogID {
                         catalog = try? await appEnv.client.catalogByID(catalogID)
+                        if seed.growingInfo == nil, let cat = catalog {
+                            let snap = Self.snapshot(from: cat)
+                            if snap.hasAny {
+                                try? appEnv.sync.setLocalGrowingInfo(seedID: seed.id, snapshot: snap)
+                            }
+                        }
                     }
                 }
             } else {
@@ -181,53 +198,54 @@ struct SeedDetailView: View {
         return image.jpegData(compressionQuality: 0.75)
     }
 
-    /// Catalog-sourced growing information. Hidden entirely for manual
-    /// entries (catalog == nil) or catalog entries that didn't capture
-    /// any of these fields. The section is read-only — edits to the
-    /// catalog itself land in a Phase 2 moderation flow.
+    /// Growing information for the seed. Reads from the local snapshot
+    /// captured at save time so it works offline, for manual entries, and
+    /// before the catalog row has been populated. Falls back to the live
+    /// catalog fetch when no snapshot exists yet. Hidden when neither has
+    /// any data.
     @ViewBuilder
     private func growingInfoSection(_ seed: LocalSeed) -> some View {
-        if let catalog, hasAnyGrowingInfo(catalog) {
+        if let info = effectiveGrowingInfo(seed), info.hasAny {
             Section {
-                if let sci = catalog.scientific_name {
+                if let sci = info.scientific_name {
                     LabeledContent("Scientific name") {
                         Text(sci).italic()
                     }
                 }
-                if let life = humanLifeCycle(catalog.life_cycle) {
+                if let life = humanLifeCycle(info.life_cycle) {
                     LabeledContent("Life cycle", value: life)
                 }
-                if let sun = humanSun(catalog.sun_requirement) {
+                if let sun = humanSun(info.sun_requirement) {
                     LabeledContent("Sun", value: sun)
                 }
-                if let frost = humanFrost(catalog.frost_tolerance) {
+                if let frost = humanFrost(info.frost_tolerance) {
                     LabeledContent("Frost tolerance", value: frost)
                 }
-                if let sow = humanSow(catalog.sow_method) {
+                if let sow = humanSow(info.sow_method) {
                     LabeledContent("Sow method", value: sow)
                 }
-                if let depth = catalog.seed_depth_inches {
+                if let depth = info.seed_depth_inches {
                     LabeledContent("Seed depth", value: formatInches(depth))
                 }
-                if let germ = formatRange(min: catalog.days_to_germinate_min, max: catalog.days_to_germinate_max, unit: "days") {
+                if let germ = formatRange(min: info.days_to_germinate_min, max: info.days_to_germinate_max, unit: "days") {
                     LabeledContent("Days to germinate", value: germ)
                 }
-                if let mature = formatRange(min: catalog.days_to_maturity_min, max: catalog.days_to_maturity_max, unit: "days") {
+                if let mature = formatRange(min: info.days_to_maturity_min, max: info.days_to_maturity_max, unit: "days") {
                     LabeledContent("Days to maturity", value: mature)
                 }
-                if let soil = formatRange(min: catalog.soil_temp_min_f, max: catalog.soil_temp_max_f, unit: "°F") {
+                if let soil = formatRange(min: info.soil_temp_min_f, max: info.soil_temp_max_f, unit: "°F") {
                     LabeledContent("Soil temperature", value: soil)
                 }
-                if let plant = catalog.plant_spacing_inches {
+                if let plant = info.plant_spacing_inches {
                     LabeledContent("Plant spacing", value: "\(plant)\"")
                 }
-                if let row = catalog.row_spacing_inches {
+                if let row = info.row_spacing_inches {
                     LabeledContent("Row spacing", value: "\(row)\"")
                 }
-                if let zones = formatRange(min: catalog.hardiness_zone_min, max: catalog.hardiness_zone_max, unit: nil) {
+                if let zones = formatRange(min: info.hardiness_zone_min, max: info.hardiness_zone_max, unit: nil) {
                     LabeledContent("Hardiness zones", value: zones)
                 }
-                if let inst = catalog.instructions, !inst.isEmpty {
+                if let inst = info.instructions, !inst.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Instructions")
                             .font(.subheadline.weight(.medium))
@@ -240,25 +258,48 @@ struct SeedDetailView: View {
             } header: {
                 Text("Growing info")
             } footer: {
-                Text("From the catalog (\(catalog.common_name)\(catalog.variety.map { " — \($0)" } ?? "")). Phase 2 will let you correct or annotate these.")
+                Text(growingInfoFooter(seed))
             }
         }
     }
 
-    private func hasAnyGrowingInfo(_ c: CatalogSeedDTO) -> Bool {
-        c.scientific_name != nil
-            || c.life_cycle != nil
-            || c.sun_requirement != nil
-            || c.frost_tolerance != nil
-            || c.sow_method != nil
-            || c.seed_depth_inches != nil
-            || c.days_to_germinate_min != nil || c.days_to_germinate_max != nil
-            || c.days_to_maturity_min != nil || c.days_to_maturity_max != nil
-            || c.soil_temp_min_f != nil || c.soil_temp_max_f != nil
-            || c.plant_spacing_inches != nil
-            || c.row_spacing_inches != nil
-            || c.hardiness_zone_min != nil || c.hardiness_zone_max != nil
-            || (c.instructions?.isEmpty == false)
+    /// Prefer the on-seed snapshot (offline-safe, survives catalog gaps)
+    /// and fall back to the freshly-fetched catalog while it's loading or
+    /// for legacy seeds without a snapshot.
+    private func effectiveGrowingInfo(_ seed: LocalSeed) -> GrowingInfoSnapshot? {
+        if let snap = seed.growingInfo, snap.hasAny { return snap }
+        guard let catalog else { return nil }
+        return Self.snapshot(from: catalog)
+    }
+
+    private func growingInfoFooter(_ seed: LocalSeed) -> String {
+        if let catalog {
+            let variety = catalog.variety.map { " — \($0)" } ?? ""
+            return "From the catalog (\(catalog.common_name)\(variety)). Phase 2 will let you correct or annotate these."
+        }
+        return "Captured from the seed packet. Phase 2 will let you correct or annotate these."
+    }
+
+    fileprivate static func snapshot(from c: CatalogSeedDTO) -> GrowingInfoSnapshot {
+        GrowingInfoSnapshot(
+            scientific_name: c.scientific_name,
+            life_cycle: c.life_cycle,
+            sun_requirement: c.sun_requirement,
+            frost_tolerance: c.frost_tolerance,
+            sow_method: c.sow_method,
+            seed_depth_inches: c.seed_depth_inches,
+            days_to_germinate_min: c.days_to_germinate_min,
+            days_to_germinate_max: c.days_to_germinate_max,
+            days_to_maturity_min: c.days_to_maturity_min,
+            days_to_maturity_max: c.days_to_maturity_max,
+            soil_temp_min_f: c.soil_temp_min_f,
+            soil_temp_max_f: c.soil_temp_max_f,
+            plant_spacing_inches: c.plant_spacing_inches,
+            row_spacing_inches: c.row_spacing_inches,
+            hardiness_zone_min: c.hardiness_zone_min,
+            hardiness_zone_max: c.hardiness_zone_max,
+            instructions: c.instructions
+        )
     }
 
     private func humanLifeCycle(_ raw: String?) -> String? {
@@ -325,18 +366,49 @@ struct SeedDetailView: View {
     }
 
     @ViewBuilder
-    private func headerSection(_ seed: LocalSeed) -> some View {
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(seed.customName ?? "Untitled seed")
-                    .font(.title2.weight(.semibold))
-                if let v = seed.customVariety, !v.isEmpty, v != seed.customName {
-                    Text(v).foregroundStyle(.secondary)
+    private func identitySection(_ seed: LocalSeed) -> some View {
+        Section("Identity") {
+            TextField("Name (e.g. Cherokee Purple)", text: $nameDraft)
+                .textInputAutocapitalization(.words)
+                .onChange(of: nameDraft) { _, new in
+                    guard identityHydrated else { return }
+                    let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+                    try? appEnv.sync.enqueueUpdateSeed(
+                        id: seed.id,
+                        .init(custom_name: trimmed.isEmpty ? nil : trimmed)
+                    )
                 }
-                if let c = seed.customCompany, !c.isEmpty {
-                    Text(c).font(.caption).foregroundStyle(.secondary)
+            TextField("Variety (optional)", text: $varietyDraft)
+                .textInputAutocapitalization(.words)
+                .onChange(of: varietyDraft) { _, new in
+                    guard identityHydrated else { return }
+                    let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+                    try? appEnv.sync.enqueueUpdateSeed(
+                        id: seed.id,
+                        .init(custom_variety: trimmed.isEmpty ? nil : trimmed)
+                    )
                 }
+            TextField("Company (e.g. Baker Creek)", text: $companyDraft)
+                .textInputAutocapitalization(.words)
+                .onChange(of: companyDraft) { _, new in
+                    guard identityHydrated else { return }
+                    let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
+                    try? appEnv.sync.enqueueUpdateSeed(
+                        id: seed.id,
+                        .init(custom_company: trimmed.isEmpty ? nil : trimmed)
+                    )
+                }
+        }
+        .onAppear {
+            if !identityHydrated {
+                nameDraft = seed.customName ?? ""
+                varietyDraft = seed.customVariety ?? ""
+                companyDraft = seed.customCompany ?? ""
+                identityHydrated = true
             }
+        }
+        .onDisappear {
+            Task { try? await appEnv.sync.flushPending() }
         }
     }
 
