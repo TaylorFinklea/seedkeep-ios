@@ -450,6 +450,17 @@ public final class SyncEngine {
         try context.save()
     }
 
+    /// Updates the local-only `customType` (e.g. "Pepper", "Tomato") used
+    /// to group/filter the Library. Not yet sent to the server — Phase 2
+    /// adds a corresponding column so the value syncs across devices.
+    public func setLocalCustomType(seedID: String, type: String?) throws {
+        let context = ModelContext(container)
+        guard let local = try fetchSeed(id: seedID, in: context) else { return }
+        let trimmed = type?.trimmingCharacters(in: .whitespacesAndNewlines)
+        local.customType = (trimmed?.isEmpty == false) ? trimmed : nil
+        try context.save()
+    }
+
     public func enqueueDeleteSeed(id: String) throws {
         let now = Self.nowMs()
         let context = ModelContext(container)

@@ -379,10 +379,30 @@ struct AddSeedView: View {
             if let snapshot = buildGrowingInfoSnapshot(), snapshot.hasAny {
                 try? appEnv.sync.setLocalGrowingInfo(seedID: local.id, snapshot: snapshot)
             }
+            if let inferredType = inferredCustomType() {
+                try? appEnv.sync.setLocalCustomType(seedID: local.id, type: inferredType)
+            }
             try? await appEnv.sync.flushPending()
             dismiss()
         } catch {
             saveError = error.localizedDescription
+        }
+    }
+
+    /// Default type guess for a freshly-added seed. Pulls from the
+    /// extraction or catalog `common_name` because that's the canonical
+    /// "what crop is this" value (e.g. "Pepper", "Tomato"). The user can
+    /// always override it later in the detail view.
+    private func inferredCustomType() -> String? {
+        switch prefill {
+        case .catalog(_, let cat):
+            return cat.common_name.trimmedNonEmpty
+        case .extraction(let result, _):
+            return result.extraction.common_name?.trimmedNonEmpty
+        case .preExtraction(let result, _):
+            return result.extraction.common_name?.trimmedNonEmpty
+        case .none:
+            return nil
         }
     }
 

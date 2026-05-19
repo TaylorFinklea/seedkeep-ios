@@ -18,6 +18,12 @@ public final class LocalSeed {
     public var customName: String?
     public var customVariety: String?
     public var customCompany: String?
+    /// User-assigned high-level category (e.g. "Pepper", "Tomato", "Herb")
+    /// used to group/filter the Library. Defaults to the extraction or
+    /// catalog `common_name` at save time. Local-only for now — Phase 2
+    /// will add a corresponding server column so the value syncs across
+    /// devices in the same household.
+    public var customType: String?
     public var notes: String?
     /// Tag IDs as a JSON-encoded array. SwiftData supports `[String]` natively
     /// but JSON keeps the schema flat for cross-version migrations.
@@ -44,6 +50,7 @@ public final class LocalSeed {
         customName: String? = nil,
         customVariety: String? = nil,
         customCompany: String? = nil,
+        customType: String? = nil,
         notes: String? = nil,
         tagIDs: [String] = [],
         growingInfo: GrowingInfoSnapshot? = nil,
@@ -62,6 +69,7 @@ public final class LocalSeed {
         self.customName = customName
         self.customVariety = customVariety
         self.customCompany = customCompany
+        self.customType = customType
         self.notes = notes
         self.tagIDsJSON = (try? String(data: JSONEncoder().encode(tagIDs), encoding: .utf8)) ?? "[]"
         self.growingInfoJSON = growingInfo.flatMap { snap in

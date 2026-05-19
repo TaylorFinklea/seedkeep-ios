@@ -32,6 +32,7 @@ struct SeedDetailView: View {
     /// on appear so TextFields can bind to non-optional Strings; pushed back
     /// through the sync queue on each change, flushed on disappear (same
     /// throttle pattern as Notes).
+    @State private var typeDraft: String = ""
     @State private var nameDraft: String = ""
     @State private var varietyDraft: String = ""
     @State private var companyDraft: String = ""
@@ -368,6 +369,15 @@ struct SeedDetailView: View {
     @ViewBuilder
     private func identitySection(_ seed: LocalSeed) -> some View {
         Section("Identity") {
+            TextField("Type (e.g. Pepper)", text: $typeDraft)
+                .textInputAutocapitalization(.words)
+                .onChange(of: typeDraft) { _, new in
+                    guard identityHydrated else { return }
+                    // Local-only field — write straight through the sync
+                    // engine's local helper rather than the server patch
+                    // queue. Server sync lands in a Phase 2 follow-up.
+                    try? appEnv.sync.setLocalCustomType(seedID: seed.id, type: new)
+                }
             TextField("Name (e.g. Cherokee Purple)", text: $nameDraft)
                 .textInputAutocapitalization(.words)
                 .onChange(of: nameDraft) { _, new in
@@ -401,6 +411,7 @@ struct SeedDetailView: View {
         }
         .onAppear {
             if !identityHydrated {
+                typeDraft = seed.customType ?? ""
                 nameDraft = seed.customName ?? ""
                 varietyDraft = seed.customVariety ?? ""
                 companyDraft = seed.customCompany ?? ""

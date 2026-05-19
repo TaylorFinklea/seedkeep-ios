@@ -123,7 +123,23 @@ struct ScanFlow: View {
         // at much smaller; our server's pre-extracted endpoint takes a
         // base64 string that bloats ~33% in transit. Resize once here so
         // every downstream path gets a bounded payload.
-        let resized = Self.resizedJPEG(data, maxDimension: 2048, quality: 0.75) ?? data
+        //
+        // Run the resize on a detached task: UIImage decode + render +
+        // jpegData is sync and takes 1–3 sec per 12 MP photo on iPhone 16
+        // — easily long enough to trip the iOS hang indicator if done on
+        // MainActor.
+        let phaseBeforeResize = phase
+        Task.detached(priority: .userInitiated) {
+            let resized = Self.resizedJPEG(data, maxDimension: 2048, quality: 0.75) ?? data
+            await self.applyResizedPhoto(resized, phaseAtCapture: phaseBeforeResize)
+        }
+    }
+
+    @MainActor
+    private func applyResizedPhoto(_ resized: Data, phaseAtCapture: Phase) {
+        // If the user cancelled / restarted while the resize was running,
+        // drop the photo on the floor — phase has moved on.
+        guard phase == phaseAtCapture else { return }
         switch phase {
         case .scanning:
             // Front photo without a barcode (user tapped "Skip barcode").
@@ -148,7 +164,12 @@ struct ScanFlow: View {
     /// dropping JPEG quality if the first pass overruns. Anthropic's
     /// vision API caps at 5 MB on the base64-encoded form, so a raw cap
     /// of 4 MB leaves headroom for the ~33% base64 inflation.
-    private static func resizedJPEG(
+    ///
+    /// `nonisolated` so the resize can run on a detached background task
+    /// — UIImage/UIGraphicsImageRenderer are safe off main, and the
+    /// MainActor isolation inherited from `View` would otherwise force
+    /// this multi-second sync work back onto the main thread.
+    nonisolated private static func resizedJPEG(
         _ data: Data,
         maxDimension: CGFloat,
         quality: CGFloat,
@@ -185,6 +206,16 @@ struct ScanFlow: View {
         }
         // Last resort: return the smallest one we got, even if it's over.
         return scaled.jpegData(compressionQuality: 0.3)
+    }
+
+    /// Run base64 encoding for both photos on a detached background task
+    /// in parallel. Each ~4 MB Data turns into a ~5.3 MB String, and the
+    /// encoder is synchronous — doing both on MainActor adds another
+    /// ~1 second of hang on top of the resize work.
+    nonisolated private static func encodeBase64Pair(front: Data, back: Data) async -> (String, String) {
+        async let f = Task.detached(priority: .userInitiated) { front.base64EncodedString() }.value
+        async let b = Task.detached(priority: .userInitiated) { back.base64EncodedString() }.value
+        return await (f, b)
     }
 
     private func handleCameraError(_ error: CameraError) {
@@ -246,6 +277,7 @@ struct ScanFlow: View {
             return
         }
 
+        let (frontB64, backB64) = await Self.encodeBase64Pair(front: front, back: back)
         let input = SeedkeepClient.PreExtractedInput(
             common_name: output.commonName,
             scientific_name: output.scientificName,
@@ -271,8 +303,8 @@ struct ScanFlow: View {
             model_id: output.modelID,
             barcode: barcode,
             perceptual_hash: nil,
-            front_jpeg_b64: front.base64EncodedString(),
-            back_jpeg_b64: back.base64EncodedString()
+            front_jpeg_b64: frontB64,
+            back_jpeg_b64: backB64
         )
 
         do {
@@ -317,6 +349,7 @@ struct ScanFlow: View {
             return
         }
 
+        let (frontB64, backB64) = await Self.encodeBase64Pair(front: front, back: back)
         let input = SeedkeepClient.PreExtractedInput(
             common_name: output.commonName,
             scientific_name: output.scientificName,
@@ -342,8 +375,8 @@ struct ScanFlow: View {
             model_id: output.modelID,
             barcode: barcode,
             perceptual_hash: nil,
-            front_jpeg_b64: front.base64EncodedString(),
-            back_jpeg_b64: back.base64EncodedString()
+            front_jpeg_b64: frontB64,
+            back_jpeg_b64: backB64
         )
 
         do {

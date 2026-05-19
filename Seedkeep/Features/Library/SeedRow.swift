@@ -24,6 +24,14 @@ struct SeedRow: View {
                 }
             }
             HStack(spacing: 6) {
+                if let type = seed.customType?.nilIfBlank {
+                    Text(type)
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.tint.opacity(0.18), in: .capsule)
+                        .foregroundStyle(.tint)
+                }
                 if let company = seed.customCompany?.nilIfBlank {
                     Text(company)
                         .font(.caption)
