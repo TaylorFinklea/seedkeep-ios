@@ -32,6 +32,7 @@ struct BedDetailView: View {
         Group {
             if let bed = beds.first {
                 Form {
+                    layoutSection(bed)
                     Section("Bed") {
                         LabeledContent("Name", value: bed.name)
                         if let desc = bed.bedDescription, !desc.isEmpty {
@@ -85,6 +86,49 @@ struct BedDetailView: View {
     }
 
     // MARK: - Sections
+
+    @ViewBuilder
+    private func layoutSection(_ bed: LocalBed) -> some View {
+        if let width = bed.widthFeet, let length = bed.lengthFeet,
+           width > 0, length > 0 {
+            Section {
+                BedLayoutCanvas(
+                    widthFeet: width,
+                    lengthFeet: length,
+                    placements: placements(for: bed)
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            } header: {
+                Text("Layout")
+            } footer: {
+                Text(placedCount(for: bed) == 0
+                     ? "Add a position to a planting event to see it on the layout."
+                     : "Plant positions in feet from the bottom-left of the bed.")
+            }
+        }
+    }
+
+    private func placements(for bed: LocalBed) -> [BedLayoutCanvas.Placement] {
+        // Show every non-completed event that has been placed. Completed
+        // events fade out by default; uncomment to include them.
+        allEvents.compactMap { event in
+            guard let x = event.xFeet, let y = event.yFeet else { return nil }
+            let kind = PlantingEventKind(rawValue: event.kindRaw)
+            return BedLayoutCanvas.Placement(
+                id: event.id,
+                x: x,
+                y: y,
+                spacingFeet: 0,    // Phase 2C.2 will pull this from catalog
+                label: seedName(for: event) ?? (kind?.displayName ?? ""),
+                isSowing: kind == .sowing
+            )
+        }
+    }
+
+    private func placedCount(for bed: LocalBed) -> Int {
+        allEvents.filter { $0.xFeet != nil && $0.yFeet != nil }.count
+    }
 
     @ViewBuilder
     private func eventSection(title: String, events: [LocalPlantingEvent], defaultEmptyHidden: Bool) -> some View {

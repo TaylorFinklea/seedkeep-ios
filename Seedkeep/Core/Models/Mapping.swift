@@ -132,6 +132,8 @@ extension PlantingEventDTO {
             plannedFor: planned_for,
             completedAt: completed_at,
             notes: notes,
+            xFeet: x_feet,
+            yFeet: y_feet,
             createdAt: created_at,
             updatedAt: updated_at,
             deletedAt: deleted_at
@@ -147,6 +149,8 @@ extension PlantingEventDTO {
         local.plannedFor = planned_for
         local.completedAt = completed_at
         local.notes = notes
+        local.xFeet = x_feet
+        local.yFeet = y_feet
         local.createdAt = created_at
         local.updatedAt = updated_at
         local.deletedAt = deleted_at

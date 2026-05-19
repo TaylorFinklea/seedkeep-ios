@@ -147,6 +147,10 @@ public struct PlantingEventDTO: Codable, Sendable, Equatable {
     public let planned_for: String
     public let completed_at: Int64?
     public let notes: String?
+    /// Position within the bed, measured in feet from the bottom-left
+    /// corner (origin 0,0). Both nil until the user places the event.
+    public let x_feet: Double?
+    public let y_feet: Double?
     public let created_at: Int64
     public let updated_at: Int64
     public let deleted_at: Int64?

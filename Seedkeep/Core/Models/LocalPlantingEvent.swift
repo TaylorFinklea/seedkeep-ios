@@ -18,6 +18,10 @@ public final class LocalPlantingEvent {
     public var plannedFor: String
     public var completedAt: Int64?
     public var notes: String?
+    /// Position within the bed, in feet from origin (0,0 = bottom-left).
+    /// Both nil until the user places the event in the layout.
+    public var xFeet: Double?
+    public var yFeet: Double?
     public var createdAt: Int64
     public var updatedAt: Int64
     public var deletedAt: Int64?
@@ -32,6 +36,8 @@ public final class LocalPlantingEvent {
         plannedFor: String,
         completedAt: Int64? = nil,
         notes: String? = nil,
+        xFeet: Double? = nil,
+        yFeet: Double? = nil,
         createdAt: Int64,
         updatedAt: Int64,
         deletedAt: Int64? = nil
@@ -45,6 +51,8 @@ public final class LocalPlantingEvent {
         self.plannedFor = plannedFor
         self.completedAt = completedAt
         self.notes = notes
+        self.xFeet = xFeet
+        self.yFeet = yFeet
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt

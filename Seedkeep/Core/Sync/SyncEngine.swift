@@ -535,6 +535,8 @@ public final class SyncEngine {
             plannedFor: input.planned_for,
             completedAt: input.completed_at,
             notes: input.notes,
+            xFeet: input.x_feet,
+            yFeet: input.y_feet,
             createdAt: now,
             updatedAt: now
         )
@@ -562,6 +564,8 @@ public final class SyncEngine {
             if let p = patch.planned_for { local.plannedFor = p }
             if let done = patch.completed_at { local.completedAt = done }
             if let n = patch.notes { local.notes = n }
+            if let x = patch.x_feet { local.xFeet = x }
+            if let y = patch.y_feet { local.yFeet = y }
             local.updatedAt = now
         }
         let payload = try JSONEncoder().encode(patch)

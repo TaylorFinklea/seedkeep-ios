@@ -26,6 +26,9 @@ struct AddPlantingEventView: View {
     @State private var selectedBedID: String?
     @State private var selectedSeedID: String?
     @State private var notes: String = ""
+    @State private var hasPosition: Bool = false
+    @State private var xFeet: Double = 1
+    @State private var yFeet: Double = 1
     @State private var saving = false
     @State private var error: String?
 
@@ -41,6 +44,7 @@ struct AddPlantingEventView: View {
                 actionSection
                 whereSection
                 frostWarningSection
+                positionSection
                 notesSection
                 errorSection
             }
@@ -121,11 +125,67 @@ struct AddPlantingEventView: View {
     }
 
     @ViewBuilder
+    private var positionSection: some View {
+        if let bed = selectedBed, let width = bed.widthFeet, let length = bed.lengthFeet,
+           width > 0, length > 0 {
+            Section {
+                Toggle("Place in bed", isOn: $hasPosition)
+                if hasPosition {
+                    HStack {
+                        Text("X")
+                        Slider(value: $xFeet, in: 0...width, step: 0.5)
+                        Text("\(formatFt(xFeet))′")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                    HStack {
+                        Text("Y")
+                        Slider(value: $yFeet, in: 0...length, step: 0.5)
+                        Text("\(formatFt(yFeet))′")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
+                    BedLayoutCanvas(
+                        widthFeet: width,
+                        lengthFeet: length,
+                        placements: [
+                            BedLayoutCanvas.Placement(
+                                id: "preview",
+                                x: xFeet, y: yFeet,
+                                spacingFeet: 0,
+                                label: "",
+                                isSowing: kind == .sowing
+                            )
+                        ]
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+            } header: {
+                Text("Position")
+            } footer: {
+                Text("Distance in feet from the bottom-left corner of the bed.")
+            }
+        }
+    }
+
+    @ViewBuilder
     private var notesSection: some View {
         Section("Notes") {
             TextField("Optional", text: $notes, axis: .vertical)
                 .lineLimit(2...6)
         }
+    }
+
+    private var selectedBed: LocalBed? {
+        guard let id = selectedBedID else { return nil }
+        return beds.first(where: { $0.id == id })
+    }
+
+    private func formatFt(_ v: Double) -> String {
+        v.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(v))" : String(format: "%.1f", v)
     }
 
     @ViewBuilder
@@ -165,7 +225,9 @@ struct AddPlantingEventView: View {
             kind: kind,
             planned_for: Self.yyyymmdd(plannedFor),
             completed_at: nil,
-            notes: notes.trimmedNonEmpty
+            notes: notes.trimmedNonEmpty,
+            x_feet: hasPosition ? xFeet : nil,
+            y_feet: hasPosition ? yFeet : nil
         )
         do {
             _ = try appEnv.sync.enqueueCreatePlantingEvent(input, householdID: household.id)

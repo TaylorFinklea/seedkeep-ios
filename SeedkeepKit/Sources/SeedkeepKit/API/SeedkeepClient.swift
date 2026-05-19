@@ -593,6 +593,8 @@ public actor SeedkeepClient {
         public var planned_for: String   // YYYY-MM-DD
         public var completed_at: Int64?
         public var notes: String?
+        public var x_feet: Double?
+        public var y_feet: Double?
         public init(
             bed_id: String? = nil,
             seed_id: String? = nil,
@@ -600,7 +602,9 @@ public actor SeedkeepClient {
             kind: PlantingEventKind,
             planned_for: String,
             completed_at: Int64? = nil,
-            notes: String? = nil
+            notes: String? = nil,
+            x_feet: Double? = nil,
+            y_feet: Double? = nil
         ) {
             self.bed_id = bed_id
             self.seed_id = seed_id
@@ -609,6 +613,8 @@ public actor SeedkeepClient {
             self.planned_for = planned_for
             self.completed_at = completed_at
             self.notes = notes
+            self.x_feet = x_feet
+            self.y_feet = y_feet
         }
     }
 
@@ -625,6 +631,8 @@ public actor SeedkeepClient {
         public var planned_for: String?
         public var completed_at: Int64?
         public var notes: String?
+        public var x_feet: Double?
+        public var y_feet: Double?
         public init(
             bed_id: String? = nil,
             seed_id: String? = nil,
@@ -632,7 +640,9 @@ public actor SeedkeepClient {
             kind: PlantingEventKind? = nil,
             planned_for: String? = nil,
             completed_at: Int64? = nil,
-            notes: String? = nil
+            notes: String? = nil,
+            x_feet: Double? = nil,
+            y_feet: Double? = nil
         ) {
             self.bed_id = bed_id
             self.seed_id = seed_id
@@ -641,6 +651,8 @@ public actor SeedkeepClient {
             self.planned_for = planned_for
             self.completed_at = completed_at
             self.notes = notes
+            self.x_feet = x_feet
+            self.y_feet = y_feet
         }
     }
 
