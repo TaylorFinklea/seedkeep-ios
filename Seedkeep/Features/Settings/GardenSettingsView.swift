@@ -53,8 +53,13 @@ struct GardenSettingsView: View {
                         Text("Zone \(zone)").tag(zone)
                     }
                 }
+                Button {
+                    autoFillFromZone()
+                } label: {
+                    Label("Auto-fill frost dates from zone", systemImage: "wand.and.sparkles")
+                }
             } footer: {
-                Text("Helpful for perennial seeds — Seedkeep will surface viability against the packet's listed zone range. Look up your zone at planthardiness.ars.usda.gov.")
+                Text("Auto-fill uses agronomic averages for your zone as a starting point. Your specific microclimate may be a week or two earlier or later — adjust the dates above once you know your site.")
             }
         }
         .navigationTitle("Garden settings")
@@ -99,5 +104,23 @@ struct GardenSettingsView: View {
 
     private func commitZone() {
         appEnv.preferences.hardinessZone = hardinessZone
+    }
+
+    /// Fill in last/first frost dates from the agronomic-baseline table
+    /// for the currently-selected zone. Overwrites any previously-set
+    /// dates — this is intended as a "rough draft" the user refines.
+    private func autoFillFromZone() {
+        guard let frost = HardinessZoneFrostData.dates(for: hardinessZone) else { return }
+        let cal = Calendar.current
+        let year = cal.component(.year, from: Date())
+        if let lastDate = frost.last.date(inYear: year, calendar: cal) {
+            hasLastFrost = true
+            lastFrostDate = lastDate
+        }
+        if let firstDate = frost.first.date(inYear: year, calendar: cal) {
+            hasFirstFrost = true
+            firstFrostDate = firstDate
+        }
+        commit()
     }
 }

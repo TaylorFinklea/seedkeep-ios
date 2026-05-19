@@ -21,6 +21,12 @@ struct BedDetailView: View {
     @State private var showAddEvent = false
     @State private var showEditBed = false
 
+    /// Catalog data keyed by catalog ID. Populated lazily on view appear:
+    /// for each event in this bed that has a seed with a catalog ID, we
+    /// fetch the catalog entry and cache it. Used to look up plant-spacing
+    /// for the layout canvas's rings. nil = "not found / not yet fetched".
+    @State private var catalogCache: [String: CatalogSeedDTO?] = [:]
+
     init(bedID: String) {
         self.bedID = bedID
         let id = bedID
@@ -75,6 +81,9 @@ struct BedDetailView: View {
                 .sheet(isPresented: $showAddEvent) {
                     AddPlantingEventView(bedID: bed.id, prefillSeedID: nil)
                 }
+                .task(id: allEvents.map(\.id)) {
+                    await refreshCatalogsForEvents()
+                }
             } else {
                 ContentUnavailableView(
                     "Bed unavailable",
@@ -95,7 +104,10 @@ struct BedDetailView: View {
                 BedLayoutCanvas(
                     widthFeet: width,
                     lengthFeet: length,
-                    placements: placements(for: bed)
+                    placements: placements(for: bed),
+                    onMove: { id, newX, newY in
+                        movePlacement(eventID: id, x: newX, y: newY)
+                    }
                 )
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
@@ -104,14 +116,20 @@ struct BedDetailView: View {
             } footer: {
                 Text(placedCount(for: bed) == 0
                      ? "Add a position to a planting event to see it on the layout."
-                     : "Plant positions in feet from the bottom-left of the bed.")
+                     : "Drag a placed event to reposition it. Snaps to a half-foot grid.")
             }
         }
     }
 
+    private func movePlacement(eventID: String, x: Double, y: Double) {
+        try? appEnv.sync.enqueueUpdatePlantingEvent(
+            id: eventID,
+            SeedkeepClient.UpdatePlantingEventInput(x_feet: x, y_feet: y)
+        )
+        Task { await appEnv.syncIfPossible() }
+    }
+
     private func placements(for bed: LocalBed) -> [BedLayoutCanvas.Placement] {
-        // Show every non-completed event that has been placed. Completed
-        // events fade out by default; uncomment to include them.
         allEvents.compactMap { event in
             guard let x = event.xFeet, let y = event.yFeet else { return nil }
             let kind = PlantingEventKind(rawValue: event.kindRaw)
@@ -119,10 +137,44 @@ struct BedDetailView: View {
                 id: event.id,
                 x: x,
                 y: y,
-                spacingFeet: 0,    // Phase 2C.2 will pull this from catalog
+                spacingFeet: spacingFeet(for: event),
                 label: seedName(for: event) ?? (kind?.displayName ?? ""),
                 isSowing: kind == .sowing
             )
+        }
+    }
+
+    /// Look up the seed → catalog → plant_spacing_inches chain and
+    /// convert to feet. Returns 0 when any link is missing — the canvas
+    /// renders just a dot in that case (no ring).
+    private func spacingFeet(for event: LocalPlantingEvent) -> Double {
+        guard let seedID = event.seedID,
+              let seed = seeds.first(where: { $0.id == seedID }),
+              let catalogID = seed.catalogID,
+              let catalog = catalogCache[catalogID] ?? nil,
+              let inches = catalog.plant_spacing_inches,
+              inches > 0
+        else { return 0 }
+        return Double(inches) / 12.0
+    }
+
+    /// Fetch + cache catalogs for every unique catalog-linked seed in
+    /// this bed. Skips IDs we already have (the cache stays populated
+    /// across multi-view appearances). Failed fetches store a `nil`
+    /// sentinel so we don't keep retrying.
+    @MainActor
+    private func refreshCatalogsForEvents() async {
+        var catalogIDs: Set<String> = []
+        for event in allEvents {
+            guard let seedID = event.seedID,
+                  let seed = seeds.first(where: { $0.id == seedID }),
+                  let catalogID = seed.catalogID else { continue }
+            if catalogCache[catalogID] != nil { continue }
+            catalogIDs.insert(catalogID)
+        }
+        for id in catalogIDs {
+            let result = try? await appEnv.client.catalogByID(id)
+            catalogCache[id] = result ?? nil
         }
     }
 

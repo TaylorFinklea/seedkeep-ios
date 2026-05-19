@@ -43,6 +43,7 @@ struct AddPlantingEventView: View {
             Form {
                 actionSection
                 whereSection
+                recommendationSection
                 frostWarningSection
                 positionSection
                 notesSection
@@ -88,6 +89,35 @@ struct AddPlantingEventView: View {
                 ForEach(seeds) { seed in
                     Text(seed.customName ?? "Unnamed seed").tag(Optional(seed.id))
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recommendationSection: some View {
+        if let rec = sowRecommendation {
+            Section {
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(rec.phrase) around \(longDate(rec.date))")
+                            .font(.subheadline.weight(.semibold))
+                        Text(rec.detail.capitalized(with: Locale(identifier: "en_US")))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.tint)
+                }
+                Button("Use this date") {
+                    plannedFor = rec.date
+                    if rec.kind != kind { kind = rec.kind }
+                }
+                .font(.footnote)
+            } header: {
+                Text("Recommended sow date")
+            } footer: {
+                Text("Computed from this packet's frost tolerance and sow method, anchored on your last-frost date.")
             }
         }
     }
@@ -282,6 +312,19 @@ struct AddPlantingEventView: View {
         let f = DateFormatter()
         f.dateFormat = "MMM d"
         return f.string(from: date)
+    }
+
+    private func longDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f.string(from: date)
+    }
+
+    private var sowRecommendation: SowRecommendation.Plan? {
+        guard let catalog = currentCatalog,
+              let lastFrost = appEnv.preferences.lastFrost else { return nil }
+        return SowRecommendation.recommend(for: catalog, lastFrost: lastFrost)
     }
 
     @MainActor
