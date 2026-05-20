@@ -18,6 +18,7 @@ public final class AppEnvironment {
     public let auth: AuthController
     public let container: ModelContainer
     public let sync: SyncEngine
+    public let recommendations: RecommendationStore
     public let preferences: AppPreferences
     public let apiKeys: APIKeyStore
     public let subscriptions: SubscriptionManager
@@ -32,10 +33,12 @@ public final class AppEnvironment {
         let auth = AuthController(client: client, tokenStore: store)
         let container = Self.makeModelContainer()
         let sync = SyncEngine(client: client, container: container)
+        let recommendations = RecommendationStore(client: client, container: container)
         let subscriptions = SubscriptionManager(client: client)
         return AppEnvironment(
             client: client, auth: auth, container: container,
-            sync: sync, preferences: prefs, apiKeys: apiKeys,
+            sync: sync, recommendations: recommendations,
+            preferences: prefs, apiKeys: apiKeys,
             subscriptions: subscriptions
         )
     }
@@ -45,6 +48,7 @@ public final class AppEnvironment {
         auth: AuthController,
         container: ModelContainer,
         sync: SyncEngine,
+        recommendations: RecommendationStore,
         preferences: AppPreferences,
         apiKeys: APIKeyStore,
         subscriptions: SubscriptionManager
@@ -53,6 +57,7 @@ public final class AppEnvironment {
         self.auth = auth
         self.container = container
         self.sync = sync
+        self.recommendations = recommendations
         self.preferences = preferences
         self.apiKeys = apiKeys
         self.subscriptions = subscriptions
