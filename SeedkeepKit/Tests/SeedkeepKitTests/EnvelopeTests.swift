@@ -255,6 +255,125 @@ struct EnvelopeTests {
         }
     }
 
+    @Test func decodesRecommendationDTO() throws {
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "catalogSeedId": "cs_abc",
+            "locationSignature": "12345|6a",
+            "computedAt": 1777570000000,
+            "source": "rule",
+            "confidence": 0.85,
+            "verdict": "plant_now",
+            "recommendedRange": { "start": "2026-05-01", "end": "2026-05-31" },
+            "indoorRange": null,
+            "dailyScores": {
+              "anchorDate": "2026-05-01",
+              "scores": [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,
+                         0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0.0,
+                         0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,
+                         0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0.0,
+                         0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,
+                         0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0.0]
+            },
+            "reasoning": "Soil temps in range; past last frost.",
+            "inputsUsed": ["frost_dates", "soil_temp"]
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<RecommendationDTO>.self, from: json)
+        switch env {
+        case .ok(let rec, _):
+            #expect(rec.catalogSeedId == "cs_abc")
+            #expect(rec.verdict == "plant_now")
+            #expect(rec.source == "rule")
+            #expect(rec.confidence == 0.85)
+            #expect(rec.recommendedRange?.start == "2026-05-01")
+            #expect(rec.indoorRange == nil)
+            #expect(rec.dailyScores.anchorDate == "2026-05-01")
+            #expect(rec.dailyScores.scores.count == 60)
+            #expect(rec.inputsUsed.count == 2)
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
+    @Test func decodesWireRecommendationBulkResponse() throws {
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "recommendations": [
+              {
+                "catalogSeedId": "cs_1",
+                "locationSignature": "12345|6a",
+                "computedAt": 1777570000000,
+                "source": "ai",
+                "confidence": 0.92,
+                "verdict": "plant_soon",
+                "recommendedRange": { "start": "2026-05-15", "end": "2026-06-15" },
+                "indoorRange": { "start": "2026-04-01", "end": "2026-04-30" },
+                "dailyScores": {
+                  "anchorDate": "2026-05-01",
+                  "scores": [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,
+                             0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0.0,
+                             0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,
+                             0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0.0,
+                             0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,
+                             0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0.0]
+                },
+                "reasoning": "Good window based on historical data.",
+                "inputsUsed": ["frost_dates","avg_temps"]
+              }
+            ],
+            "pending": ["cs_2", "cs_3"]
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<WireRecommendation.BulkResponse>.self, from: json)
+        switch env {
+        case .ok(let bulk, _):
+            #expect(bulk.recommendations.count == 1)
+            #expect(bulk.recommendations.first?.catalogSeedId == "cs_1")
+            #expect(bulk.recommendations.first?.verdict == "plant_soon")
+            #expect(bulk.recommendations.first?.indoorRange?.start == "2026-04-01")
+            #expect(bulk.pending == ["cs_2", "cs_3"])
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
+    @Test func decodesHouseholdLocationDTO() throws {
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "zip": "30301",
+            "latitude": 33.749,
+            "longitude": -84.388,
+            "usdaZone": "8a",
+            "avgLastFrost": "03-15",
+            "avgFirstFrost": "11-20"
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<HouseholdLocationDTO>.self, from: json)
+        switch env {
+        case .ok(let loc, _):
+            #expect(loc.zip == "30301")
+            #expect(loc.latitude == 33.749)
+            #expect(loc.usdaZone == "8a")
+            #expect(loc.avgLastFrost == "03-15")
+            #expect(loc.avgFirstFrost == "11-20")
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
     @Test func decodesSeedDTOWithTagIds() throws {
         let json = #"""
         {

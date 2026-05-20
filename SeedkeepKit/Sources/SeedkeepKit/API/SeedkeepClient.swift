@@ -666,6 +666,28 @@ public actor SeedkeepClient {
         try await deleteJSON(path: "/api/planting-events/\(id)")
     }
 
+    // MARK: - Recommendations
+
+    /// Sets (or updates) the geographic location for the current household.
+    /// The server resolves the zip code to lat/lon, USDA zone, and frost dates.
+    public func setHouseholdLocation(zip: String) async throws -> HouseholdLocationDTO {
+        struct Body: Encodable { let zip: String }
+        return try await sendJSON(method: "PUT", path: "/api/households/me/location", body: Body(zip: zip))
+    }
+
+    /// Fetches a cached planting recommendation for a single catalog seed.
+    public func recommendation(catalogSeedID: String) async throws -> RecommendationDTO {
+        try await getJSON(path: "/api/recommendations/\(catalogSeedID)")
+    }
+
+    /// Requests planting recommendations for multiple catalog seeds in one
+    /// round-trip. Seeds whose recommendations are still computing are
+    /// returned in `pending`.
+    public func bulkRecommendations(catalogSeedIDs: [String]) async throws -> WireRecommendation.BulkResponse {
+        struct Body: Encodable { let catalogSeedIds: [String] }
+        return try await postJSON(path: "/api/recommendations/bulk", body: Body(catalogSeedIds: catalogSeedIDs))
+    }
+
     // MARK: - Catalog
 
     public func catalogLookup(barcode: String) async throws -> CatalogSeedDTO? {
