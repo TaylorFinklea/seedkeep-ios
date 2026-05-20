@@ -125,6 +125,7 @@ public final class AppEnvironment {
             LocalPlantingEvent.self,
             LocalSyncCursor.self,
             LocalPendingWrite.self,
+            LocalRecommendation.self,
         ])
         let config = ModelConfiguration("seedkeep", schema: schema)
         do {

@@ -120,6 +120,43 @@ extension BedDTO {
     }
 }
 
+extension RecommendationDTO {
+    func makeLocal(fetchedAt: Int64) -> LocalRecommendation {
+        LocalRecommendation(
+            catalogSeedID: catalogSeedId,
+            locationSignature: locationSignature,
+            computedAt: computedAt,
+            source: source,
+            confidence: confidence,
+            verdict: verdict,
+            rangeStart: recommendedRange?.start,
+            rangeEnd: recommendedRange?.end,
+            indoorStart: indoorRange?.start,
+            indoorEnd: indoorRange?.end,
+            scoresAnchorDate: dailyScores.anchorDate,
+            dailyScoresJSON: (try? String(data: JSONEncoder().encode(dailyScores.scores), encoding: .utf8)) ?? "[]",
+            reasoning: reasoning,
+            fetchedAt: fetchedAt
+        )
+    }
+
+    func apply(to local: LocalRecommendation, fetchedAt: Int64) {
+        local.locationSignature = locationSignature
+        local.computedAt = computedAt
+        local.source = source
+        local.confidence = confidence
+        local.verdict = verdict
+        local.rangeStart = recommendedRange?.start
+        local.rangeEnd = recommendedRange?.end
+        local.indoorStart = indoorRange?.start
+        local.indoorEnd = indoorRange?.end
+        local.scoresAnchorDate = dailyScores.anchorDate
+        local.dailyScoresJSON = (try? String(data: JSONEncoder().encode(dailyScores.scores), encoding: .utf8)) ?? "[]"
+        local.reasoning = reasoning
+        local.fetchedAt = fetchedAt
+    }
+}
+
 extension PlantingEventDTO {
     func makeLocal() -> LocalPlantingEvent {
         LocalPlantingEvent(
