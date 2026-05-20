@@ -32,11 +32,8 @@ struct AddPlantingEventView: View {
     @State private var saving = false
     @State private var error: String?
 
-    /// Catalog metadata for the currently selected seed. Used to compute
-    /// the frost warning. Cached by catalogID inside the view so changing
-    /// the seed selection re-fetches lazily.
-    @State private var catalogCache: [String: CatalogSeedDTO?] = [:]
-    @State private var currentCatalog: CatalogSeedDTO?
+    /// Cached recommendation for the currently selected seed's catalog ID.
+    @State private var localRecommendation: LocalRecommendation?
 
     var body: some View {
         NavigationStack {
@@ -44,7 +41,6 @@ struct AddPlantingEventView: View {
                 actionSection
                 whereSection
                 recommendationSection
-                frostWarningSection
                 positionSection
                 notesSection
                 errorSection
@@ -55,10 +51,10 @@ struct AddPlantingEventView: View {
             .onAppear {
                 if selectedBedID == nil { selectedBedID = bedID }
                 if selectedSeedID == nil { selectedSeedID = prefillSeedID }
-                Task { await refreshCatalogForSelection() }
+                Task { await refreshRecommendationForSelection() }
             }
             .onChange(of: selectedSeedID) { _, _ in
-                Task { await refreshCatalogForSelection() }
+                Task { await refreshRecommendationForSelection() }
             }
         }
     }
@@ -93,63 +89,39 @@ struct AddPlantingEventView: View {
         }
     }
 
+    /// Recommendation section. Shows `RecommendationPanel` (which conveys
+    /// both the planting window and any frost-risk verdict) when the selected
+    /// seed has a catalog link. Includes a "Use recommended date" affordance
+    /// that sets the DatePicker to the recommendation's `rangeStart`.
+    ///
+    /// The frost-warning concern from the old `frostWarningSection` is now
+    /// communicated by the panel's verdict (e.g. `too_early` when the user
+    /// is before the window, which the server derives from the home ZIP's
+    /// frost dates). No separate frost-date logic is needed client-side.
     @ViewBuilder
     private var recommendationSection: some View {
-        if let rec = sowRecommendation {
+        if selectedCatalogID != nil {
             Section {
-                Label {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(rec.phrase) around \(longDate(rec.date))")
-                            .font(.subheadline.weight(.semibold))
-                        Text(rec.detail.capitalized(with: Locale(identifier: "en_US")))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "sparkles")
-                        .foregroundStyle(.tint)
-                }
-                Button("Use this date") {
-                    plannedFor = rec.date
-                    if rec.kind != kind { kind = rec.kind }
-                }
-                .font(.footnote)
-            } header: {
-                Text("Recommended sow date")
-            } footer: {
-                Text("Computed from this packet's frost tolerance and sow method, anchored on your last-frost date.")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var frostWarningSection: some View {
-        if let warning = frostWarning {
-            Section {
-                Label {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(warning.title)
-                            .font(.subheadline.weight(.semibold))
-                        Text(warning.detail)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "snowflake")
-                        .foregroundStyle(.orange)
-                }
-                .padding(.vertical, 2)
-            }
-        } else if let lastFrost = appEnv.preferences.lastFrost {
-            Section {
-                Label {
-                    Text("Last frost \(monthDayLabel(lastFrost))")
+                if appEnv.recommendations.needsHomeLocation {
+                    RecommendationPanel.needsLocation
+                } else {
+                    RecommendationPanel(
+                        recommendation: localRecommendation,
+                        refined: nil,
+                        userDate: plannedFor
+                    )
+                    if let start = localRecommendation?.rangeStart,
+                       let date = parseYYYYMMDD(start) {
+                        Button("Use recommended date") {
+                            plannedFor = date
+                        }
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } icon: {
-                    Image(systemName: "snowflake")
-                        .foregroundStyle(.tint)
+                    }
                 }
+            } header: {
+                Text("Planting window")
+            } footer: {
+                Text("Server-computed from this seed's catalog entry and your garden location.")
             }
         }
     }
@@ -212,6 +184,12 @@ struct AddPlantingEventView: View {
     private var selectedBed: LocalBed? {
         guard let id = selectedBedID else { return nil }
         return beds.first(where: { $0.id == id })
+    }
+
+    /// The catalog ID of the currently selected seed, or nil if none.
+    private var selectedCatalogID: String? {
+        guard let seedID = selectedSeedID else { return nil }
+        return seeds.first(where: { $0.id == seedID })?.catalogID
     }
 
     private func formatFt(_ v: Double) -> String {
@@ -278,81 +256,27 @@ struct AddPlantingEventView: View {
         return f.string(from: date)
     }
 
-    // MARK: - Frost warning
-
-    private struct FrostWarning {
-        let title: String
-        let detail: String
-    }
-
-    /// Returns a warning when the user schedules a sow or transplant before
-    /// the last frost AND the catalog marks the plant as tender. Harvests
-    /// and notes don't trigger it. Everything else just shows the no-op
-    /// reference banner.
-    private var frostWarning: FrostWarning? {
-        guard kind == .sowing || kind == .transplant else { return nil }
-        guard let lastFrost = appEnv.preferences.lastFrost else { return nil }
-        guard let tolerance = currentCatalog?.frost_tolerance, tolerance == "tender" else { return nil }
-        let cal = Calendar.current
-        let year = cal.component(.year, from: plannedFor)
-        guard let frostDate = lastFrost.date(inYear: year, calendar: cal) else { return nil }
-        guard plannedFor < frostDate else { return nil }
-        let label = monthDayLabel(lastFrost)
-        let name = currentCatalog?.common_name ?? "this plant"
-        switch kind {
-        case .sowing:
-            return FrostWarning(
-                title: "Before last frost",
-                detail: "\(name) is tender — direct-sowing before your last frost (\(label)) risks losing the planting. Consider starting indoors and transplanting after \(label), or pick a later date."
-            )
-        case .transplant:
-            return FrostWarning(
-                title: "Before last frost",
-                detail: "\(name) is tender and can be killed by frost — transplanting before your last frost (\(label)) risks losing the plant. Wait until after \(label), or be ready to cover and harden off carefully."
-            )
-        default:
-            return nil
-        }
-    }
-
-    private func monthDayLabel(_ md: MonthDay) -> String {
-        let cal = Calendar.current
-        guard let date = md.date(inYear: cal.component(.year, from: Date())) else {
-            return "\(md.month)/\(md.day)"
-        }
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f.string(from: date)
-    }
-
-    private func longDate(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .none
-        return f.string(from: date)
-    }
-
-    private var sowRecommendation: SowRecommendation.Plan? {
-        guard let catalog = currentCatalog,
-              let lastFrost = appEnv.preferences.lastFrost else { return nil }
-        return SowRecommendation.recommend(for: catalog, lastFrost: lastFrost)
-    }
+    // MARK: - Recommendation fetch
 
     @MainActor
-    private func refreshCatalogForSelection() async {
-        guard let seedID = selectedSeedID,
-              let catalogID = seeds.first(where: { $0.id == seedID })?.catalogID else {
-            currentCatalog = nil
+    private func refreshRecommendationForSelection() async {
+        guard let catalogID = selectedCatalogID else {
+            localRecommendation = nil
             return
         }
-        if let cached = catalogCache[catalogID] {
-            currentCatalog = cached
-            return
-        }
-        // Lookup miss — fetch and remember the result (including nil for
-        // 404, so we don't re-fetch every time the user toggles seeds).
-        let fetched = (try? await appEnv.client.catalogByID(catalogID)) ?? nil
-        catalogCache[catalogID] = fetched
-        currentCatalog = fetched
+        await appEnv.recommendations.refresh(catalogSeedID: catalogID)
+        localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
+    }
+
+    // MARK: - Date helpers
+
+    /// Parses a "YYYY-MM-DD" string to a `Date` (UTC midnight), used for
+    /// "Use recommended date" so the DatePicker gets set to the window start.
+    private func parseYYYYMMDD(_ s: String) -> Date? {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.date(from: s)
     }
 }

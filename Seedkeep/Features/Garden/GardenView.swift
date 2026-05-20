@@ -16,6 +16,7 @@ struct GardenView: View {
     private var openEvents: [LocalPlantingEvent]
 
     @State private var showAddBed = false
+    @State private var showWhatToPlant = false
 
     var body: some View {
         NavigationStack {
@@ -44,6 +45,14 @@ struct GardenView: View {
                 BedDetailView(bedID: bedID)
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showWhatToPlant = true
+                    } label: {
+                        Image(systemName: "calendar")
+                    }
+                    .accessibilityLabel("What to plant")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showAddBed = true
@@ -55,6 +64,16 @@ struct GardenView: View {
             }
             .sheet(isPresented: $showAddBed) {
                 AddBedView()
+            }
+            .sheet(isPresented: $showWhatToPlant) {
+                NavigationStack {
+                    WhatToPlantView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showWhatToPlant = false }
+                            }
+                        }
+                }
             }
             .refreshable {
                 await appEnv.syncIfPossible()

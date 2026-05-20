@@ -135,6 +135,21 @@ private struct SeedListContent: View {
         let locationByID = Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0.name) })
         let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
 
+        Group {
+            contentView(filtered: filtered, locationByID: locationByID, currentYear: currentYear)
+        }
+        .task(id: seeds.map(\.id).joined()) {
+            // Bulk-fetch planting-window recommendations for all visible
+            // catalog-linked seeds so verdict dots appear without individual
+            // refreshes.  The store deduplicates IDs internally.
+            let catalogIDs = seeds.compactMap(\.catalogID)
+            guard !catalogIDs.isEmpty else { return }
+            await appEnv.recommendations.bulkRefresh(catalogSeedIDs: catalogIDs)
+        }
+    }
+
+    @ViewBuilder
+    private func contentView(filtered: [LocalSeed], locationByID: [String: String], currentYear: Int) -> some View {
         if filtered.isEmpty {
             ContentUnavailableView(
                 seeds.isEmpty ? "No seeds yet" : "No matches",

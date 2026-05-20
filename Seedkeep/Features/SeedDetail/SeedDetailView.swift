@@ -28,6 +28,10 @@ struct SeedDetailView: View {
     @State private var uploadError: String?
     @State private var showPlanEvent = false
 
+    /// Cached recommendation for this seed's catalog entry. Loaded
+    /// asynchronously in the `.task(id:)` alongside the catalog fetch.
+    @State private var localRecommendation: LocalRecommendation?
+
     /// Local edit buffers for the Identity section. Mirrored from the seed
     /// on appear so TextFields can bind to non-optional Strings; pushed back
     /// through the sync queue on each change, flushed on disappear (same
@@ -95,6 +99,10 @@ struct SeedDetailView: View {
                                 try? appEnv.sync.setLocalGrowingInfo(seedID: seed.id, snapshot: snap)
                             }
                         }
+                        // Refresh the planting-window recommendation from the server
+                        // and read back the cached result for the panel.
+                        await appEnv.recommendations.refresh(catalogSeedID: catalogID)
+                        localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
                     }
                 }
             } else {
@@ -568,6 +576,22 @@ struct SeedDetailView: View {
             }
         } footer: {
             Text("Add a sow, transplant, harvest, or note tied to this seed and (optionally) a bed.")
+        }
+
+        // Planting-window recommendation — only shown when the seed has a
+        // catalog link (manually-entered seeds have no server recommendation).
+        if seed.catalogID != nil {
+            Section("Planting window") {
+                if appEnv.recommendations.needsHomeLocation {
+                    RecommendationPanel.needsLocation
+                } else {
+                    RecommendationPanel(
+                        recommendation: localRecommendation,
+                        refined: nil,
+                        userDate: nil
+                    )
+                }
+            }
         }
     }
 

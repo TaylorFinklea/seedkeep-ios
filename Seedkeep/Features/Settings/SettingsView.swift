@@ -29,16 +29,6 @@ struct SettingsView: View {
 
                 Section("Garden") {
                     NavigationLink {
-                        GardenSettingsView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Frost dates & hardiness zone", systemImage: "snowflake")
-                            Text(gardenSettingsSummary)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    NavigationLink {
                         HomeLocationSettingsView()
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
@@ -153,17 +143,6 @@ struct SettingsView: View {
         }
     }
 
-    private var gardenSettingsSummary: String {
-        var parts: [String] = []
-        if let last = appEnv.preferences.lastFrost {
-            parts.append("Last frost \(monthDayLabel(last))")
-        }
-        if let zone = appEnv.preferences.hardinessZone {
-            parts.append("Zone \(zone)")
-        }
-        return parts.isEmpty ? "Not set" : parts.joined(separator: " · ")
-    }
-
     private var homeLocationSummary: String {
         switch (appEnv.preferences.homeZip, appEnv.preferences.cachedUsdaZone) {
         case (let zip?, let zone?):
@@ -173,16 +152,6 @@ struct SettingsView: View {
         default:
             return "Not set"
         }
-    }
-
-    private func monthDayLabel(_ md: MonthDay) -> String {
-        let cal = Calendar.current
-        guard let date = md.date(inYear: cal.component(.year, from: Date())) else {
-            return "\(md.month)/\(md.day)"
-        }
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f.string(from: date)
     }
 
     private var apiKeysStatusText: String {

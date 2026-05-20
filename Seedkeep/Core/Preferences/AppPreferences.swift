@@ -57,11 +57,6 @@ public final class AppPreferences {
         static let serverURLOverride = "seedkeep.serverURL"
         static let aiProvider = "seedkeep.aiProvider"
         static let cachedTier = "seedkeep.cachedTier"
-        static let lastFrostMonth = "seedkeep.garden.lastFrostMonth"
-        static let lastFrostDay = "seedkeep.garden.lastFrostDay"
-        static let firstFrostMonth = "seedkeep.garden.firstFrostMonth"
-        static let firstFrostDay = "seedkeep.garden.firstFrostDay"
-        static let hardinessZone = "seedkeep.garden.hardinessZone"
         static let homeZip = "seedkeep.location.homeZip"
         static let cachedUsdaZone = "seedkeep.location.usdaZone"
     }
@@ -79,11 +74,6 @@ public final class AppPreferences {
         // dispatching to a path the UI can no longer reach.
         self._aiProvider = (stored == .hosted && !Self.isHostedTierEnabled) ? .free : stored
         self._cachedTier = defaults.string(forKey: Key.cachedTier)
-        self._lastFrostMonth = defaults.object(forKey: Key.lastFrostMonth) as? Int
-        self._lastFrostDay = defaults.object(forKey: Key.lastFrostDay) as? Int
-        self._firstFrostMonth = defaults.object(forKey: Key.firstFrostMonth) as? Int
-        self._firstFrostDay = defaults.object(forKey: Key.firstFrostDay) as? Int
-        self._hardinessZone = defaults.object(forKey: Key.hardinessZone) as? Int
         self._homeZip = defaults.string(forKey: Key.homeZip)
         self._cachedUsdaZone = defaults.string(forKey: Key.cachedUsdaZone)
     }
@@ -138,50 +128,6 @@ public final class AppPreferences {
         }
     }
 
-    // MARK: - Phase 2B: Garden settings
-
-    /// Average last spring frost — stored as month + day, year-agnostic.
-    /// nil means the user hasn't entered one yet; UI surfaces it as a
-    /// "Set your last frost date" CTA in Garden Settings.
-    private var _lastFrostMonth: Int?
-    private var _lastFrostDay: Int?
-    public var lastFrost: MonthDay? {
-        get { MonthDay(month: _lastFrostMonth, day: _lastFrostDay) }
-        set {
-            _lastFrostMonth = newValue?.month
-            _lastFrostDay = newValue?.day
-            persistMonthDay(newValue, monthKey: Key.lastFrostMonth, dayKey: Key.lastFrostDay)
-        }
-    }
-
-    /// Average first fall frost — same shape, surfaces "is this packet
-    /// worth starting in late August?" guidance later.
-    private var _firstFrostMonth: Int?
-    private var _firstFrostDay: Int?
-    public var firstFrost: MonthDay? {
-        get { MonthDay(month: _firstFrostMonth, day: _firstFrostDay) }
-        set {
-            _firstFrostMonth = newValue?.month
-            _firstFrostDay = newValue?.day
-            persistMonthDay(newValue, monthKey: Key.firstFrostMonth, dayKey: Key.firstFrostDay)
-        }
-    }
-
-    /// USDA hardiness zone (1–13). Used to compare against a catalog
-    /// entry's hardiness_zone_min/max when surfacing perennial viability.
-    private var _hardinessZone: Int?
-    public var hardinessZone: Int? {
-        get { _hardinessZone }
-        set {
-            _hardinessZone = newValue
-            if let v = newValue {
-                defaults.set(v, forKey: Key.hardinessZone)
-            } else {
-                defaults.removeObject(forKey: Key.hardinessZone)
-            }
-        }
-    }
-
     // MARK: - Phase 2C: Home location (ZIP-based)
 
     /// The 5-digit ZIP code the user entered for their home location.
@@ -215,43 +161,4 @@ public final class AppPreferences {
         }
     }
 
-    private func persistMonthDay(_ value: MonthDay?, monthKey: String, dayKey: String) {
-        if let value {
-            defaults.set(value.month, forKey: monthKey)
-            defaults.set(value.day, forKey: dayKey)
-        } else {
-            defaults.removeObject(forKey: monthKey)
-            defaults.removeObject(forKey: dayKey)
-        }
-    }
-}
-
-/// Year-agnostic month+day pair. Frost dates repeat annually, so we
-/// store just the calendar slot and let the UI render it against the
-/// current year as needed.
-public struct MonthDay: Hashable, Sendable {
-    public let month: Int   // 1..12
-    public let day: Int     // 1..31 (Calendar handles month-day validity at render time)
-
-    public init?(month: Int?, day: Int?) {
-        guard let m = month, let d = day,
-              (1...12).contains(m), (1...31).contains(d) else { return nil }
-        self.month = m
-        self.day = d
-    }
-
-    public init(month: Int, day: Int) {
-        self.month = month
-        self.day = day
-    }
-
-    /// Build a Date in the current year (or the supplied year) for
-    /// comparing against event dates that come in as full Dates.
-    public func date(inYear year: Int, calendar: Calendar = .current) -> Date? {
-        var components = DateComponents()
-        components.year = year
-        components.month = month
-        components.day = day
-        return calendar.date(from: components)
-    }
 }
