@@ -62,6 +62,8 @@ public final class AppPreferences {
         static let firstFrostMonth = "seedkeep.garden.firstFrostMonth"
         static let firstFrostDay = "seedkeep.garden.firstFrostDay"
         static let hardinessZone = "seedkeep.garden.hardinessZone"
+        static let homeZip = "seedkeep.location.homeZip"
+        static let cachedUsdaZone = "seedkeep.location.usdaZone"
     }
 
     private let defaults: UserDefaults
@@ -82,6 +84,8 @@ public final class AppPreferences {
         self._firstFrostMonth = defaults.object(forKey: Key.firstFrostMonth) as? Int
         self._firstFrostDay = defaults.object(forKey: Key.firstFrostDay) as? Int
         self._hardinessZone = defaults.object(forKey: Key.hardinessZone) as? Int
+        self._homeZip = defaults.string(forKey: Key.homeZip)
+        self._cachedUsdaZone = defaults.string(forKey: Key.cachedUsdaZone)
     }
 
     private var _serverURLOverride: URL?
@@ -174,6 +178,39 @@ public final class AppPreferences {
                 defaults.set(v, forKey: Key.hardinessZone)
             } else {
                 defaults.removeObject(forKey: Key.hardinessZone)
+            }
+        }
+    }
+
+    // MARK: - Phase 2C: Home location (ZIP-based)
+
+    /// The 5-digit ZIP code the user entered for their home location.
+    /// nil means the user hasn't set one yet.
+    private var _homeZip: String?
+    public var homeZip: String? {
+        get { _homeZip }
+        set {
+            _homeZip = newValue
+            if let v = newValue {
+                defaults.set(v, forKey: Key.homeZip)
+            } else {
+                defaults.removeObject(forKey: Key.homeZip)
+            }
+        }
+    }
+
+    /// The USDA hardiness zone string resolved from `homeZip` by the server
+    /// (e.g. "7b"). Cached locally so the UI can display it without a
+    /// round-trip on launch.
+    private var _cachedUsdaZone: String?
+    public var cachedUsdaZone: String? {
+        get { _cachedUsdaZone }
+        set {
+            _cachedUsdaZone = newValue
+            if let v = newValue {
+                defaults.set(v, forKey: Key.cachedUsdaZone)
+            } else {
+                defaults.removeObject(forKey: Key.cachedUsdaZone)
             }
         }
     }

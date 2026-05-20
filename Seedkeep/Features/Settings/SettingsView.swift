@@ -38,6 +38,16 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    NavigationLink {
+                        HomeLocationSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Home location", systemImage: "location")
+                            Text(homeLocationSummary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 Section("Backend") {
@@ -152,6 +162,17 @@ struct SettingsView: View {
             parts.append("Zone \(zone)")
         }
         return parts.isEmpty ? "Not set" : parts.joined(separator: " · ")
+    }
+
+    private var homeLocationSummary: String {
+        switch (appEnv.preferences.homeZip, appEnv.preferences.cachedUsdaZone) {
+        case (let zip?, let zone?):
+            return "\(zip) · Zone \(zone)"
+        case (let zip?, nil):
+            return zip
+        default:
+            return "Not set"
+        }
     }
 
     private func monthDayLabel(_ md: MonthDay) -> String {
