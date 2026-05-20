@@ -104,6 +104,7 @@ targets:
           - Default
         com.apple.developer.associated-domains:
           - "applinks:seedkeep.app"
+        com.apple.developer.weatherkit: true
 
   SeedkeepTests:
     type: bundle.unit-test
@@ -116,3 +117,4 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER).tests
+        GENERATE_INFOPLIST_FILE: YES
