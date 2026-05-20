@@ -18,9 +18,9 @@ iOS client for Seedkeep. Phase 1 ships a household seed library with offline-fir
 - [x] `GrowingInfoSnapshot` on `LocalSeed` — snapshots catalog growing info onto the seed so manual / offline entries carry growing info too (build 15)
 - [x] Scan-confirm hang eliminated — UIImage resize + base64 encode moved off MainActor (build 16)
 - [x] Per-seed Type field with `LibraryView` "Group by type" toggle (build 16)
-- [ ] **WeatherKit-driven planting windows** beyond frost dates (humidity, soil-temp proxy, recent rain) — not yet scoped
-- [ ] **Extension-calendar integration** (regional planting calendars from state cooperative-extension feeds) — not yet scoped
-- [ ] **TestFlight feedback triage** — pull tester feedback / crash logs from App Store Connect for builds 11–16 before scoping the next chunk
+- [x] **Smart planting window** (Phase B, merged to `main` 2026-05-20) — server-driven recommendations: home-ZIP location, `RecommendationStore`, `WeatherKitRefiner`, `RecommendationPanel`, four UI surfaces (Library dot, seed detail, planting event, "What to plant" view). Replaced the old local `SowRecommendation` engine. Not yet TestFlight-cut (gated on the Phase A server deploy + a 0.2.0 build).
+- [ ] **Extension-calendar integration** (regional planting calendars from state cooperative-extension feeds) — deferred to 0.3.0+ per the smart-planting-window spec.
+- [ ] **TestFlight feedback triage** — pull tester feedback / crash logs from App Store Connect for builds 11–16.
 
 ### Next
 - [ ] **Hosted-tier unflag** — register `app.seedkeep.ios.hosted.{monthly,yearly}` products in App Store Connect, set `APPLE_IAP_SHARED_SECRET` + `ANTHROPIC_API_KEY` on Fly, flip `AppPreferences.isHostedTierEnabled = true`. Ships as 0.1.1.

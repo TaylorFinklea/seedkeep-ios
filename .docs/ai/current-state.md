@@ -8,6 +8,19 @@
 
 ## Last Session Summary
 
+**Date**: 2026-05-20 — Phase B: smart planting window (iOS client)
+
+- Built the **iOS client side of the smart-planting-window feature** (0.2.0) and merged it to `main` (commit `666ac46`). Plan: `.docs/ai/plans/2026-05-20-smart-planting-window-ios.md`. Design spec: `~/git/seedkeep/.docs/ai/specs/2026-05-20-smart-planting-window-design.md`. Executed as 8 tasks via subagent-driven development on branch `smart-planting-window-ios` (merged, worktree cleaned up).
+- **SeedkeepKit** — `Recommendation.swift` DTOs (`RecommendationDTO`, `DailyScoresDTO`, `DateRangeDTO`, `HouseholdLocationDTO`, `WireRecommendation.BulkResponse`) + client methods `setHouseholdLocation(zip:)`, `recommendation(catalogSeedID:)`, `bulkRecommendations(catalogSeedIDs:)`. 14/14 kit tests.
+- **`LocalRecommendation`** — 9th SwiftData `@Model`, registered in `AppEnvironment.makeModelContainer()`; `RecommendationDTO` mapping in `Mapping.swift`.
+- **`WeatherKitRefiner`** (`Core/Recommendation/`) — pure `refine(...)` (frost / heavy-rain / sustained-heat / ideal-stretch rules, tested) + a thin `fetchForecast` WeatherKit call. WeatherKit entitlement added to `project.yml`.
+- **`RecommendationStore`** (`Core/Recommendation/`, owned by `AppEnvironment.recommendations`) — fetch/cache/refine coordinator; `updateEpoch` observable drives view reactivity; `needsHomeLocation` flag.
+- **`RecommendationPanel`** (`Features/Recommendation/`) — reusable view: verdict badge, recommended window, 60-day suitability gradient, weather note. `VerdictPalette.swift` shares verdict colors.
+- **Four UI surfaces** wired: Library `SeedRow` verdict dot, `SeedDetailView` panel, `AddPlantingEventView` panel (replacing the old sow-recommendation + frost-warning sections), new `WhatToPlantView` (Garden tab, urgency-grouped).
+- **`HomeLocationSettingsView`** — home-ZIP entry (Settings → Garden); resolves zone/lat-lon/frost server-side.
+- **Removed** the old local engine: `SowRecommendation.swift`, `HardinessZoneFrostData.swift`, `GardenSettingsView.swift` (manual frost-date entry) — the server now owns frost/zone via the home ZIP. `AppPreferences` frost/zone keys + `MonthDay` removed.
+- A final code review found 6 issues (recommendation reactivity, verdict-dot visibility, WeatherKit never invoked, a refiner range crash, lat/lon not persisted, color divergence) — all fixed in commit `666ac46`.
+
 **Date**: 2026-05-19
 
 - Cut TestFlight build 16 (0.1.0 / 16) — current latest on App Store Connect.
@@ -30,24 +43,30 @@
 
 ## Build Status
 
-- `xcodebuild -scheme Seedkeep -destination 'generic/platform=iOS Simulator' build` last verified green at build 16 cut (2026-05-19).
-- `cd SeedkeepKit && swift test` — 11/11 last documented at F4 completion; no SeedkeepKit-touching changes since (Phase 2A/B/C and 2C.1 work was app-target + server side).
-- `MARKETING_VERSION = 0.1.0`, `CURRENT_PROJECT_VERSION = 16` in `project.yml`.
-- Garden feature surface: `Seedkeep/Features/Garden/{GardenView, AddBedView, BedDetailView, AddPlantingEventView, BedLayoutCanvas}.swift` + SwiftData `LocalBed` and `LocalPlantingEvent`.
-- TestFlight: 0.1.0 build 16 is the latest uploaded; build 16 is the current top of `main`.
+- `xcodebuild -scheme Seedkeep -destination 'generic/platform=iOS Simulator' build` → **BUILD SUCCEEDED** on merged `main` (2026-05-20).
+- `cd SeedkeepKit && swift test` → **14/14** (added 3 Recommendation DTO decode tests). App test target `SeedkeepTests` → 15/15 (added `WeatherKitRefinerTests`).
+- `MARKETING_VERSION = 0.1.0`, `CURRENT_PROJECT_VERSION = 16` in `project.yml` — **not yet bumped for 0.2.0**; no TestFlight build cut with Phase B yet.
+- SwiftData model count is now **9** (`LocalRecommendation` added).
+- `main` is **not pushed to origin** — Phase B is merged locally only.
 
 ## Blockers
 
-- Hosted tier still feature-flagged off (`AppPreferences.isHostedTierEnabled = false`). To unflag: register `app.seedkeep.ios.hosted.{monthly,yearly}` in App Store Connect, set `APPLE_IAP_SHARED_SECRET` + `ANTHROPIC_API_KEY` on Fly via `fly secrets set`. Bundle ID is `app.seedkeep.ios`. (Carried over from F4.)
-- F5 end-to-end real-device verification across all three tiers still notionally open, but Free + BYOK have shipped to TestFlight builds 11+ without regressions — the remaining gap is the Hosted-tier path, which is gated by the flag above.
-- Pending-photo-upload offline queue still deferred post-Phase-1 (documented in roadmap).
+- **Phase B depends on the Phase A server being deployed.** The recommendation routes + `PUT /households/me/location` exist in `seedkeep-server` `main` (pushed to origin) but are **not deployed** to `seedkeep-server.fly.dev` yet. Until deploy, the iOS recommendation surfaces will get connection errors. Deploy steps are in `seedkeep-server/.docs/ai/current-state.md`.
+- **WeatherKit capability** must be enabled for the App ID (`app.seedkeep.ios`) in the Apple Developer portal (Certificates, Identifiers & Profiles → Identifiers → WeatherKit). The build succeeds without it, but live `fetchForecast` calls fail until it's on.
+- Phase B not verified on device or cut to TestFlight (Task 8 device-smoke + TestFlight are deploy-gated).
+- Minor: `WeatherKitRefiner.fetchForecast` uses `precipitationAmount` (deprecated in favor of `precipitationAmountByType`) — a warning, not an error; fine to leave or modernize later.
+- Hosted tier still feature-flagged off (`AppPreferences.isHostedTierEnabled = false`); unflag = App Store Connect products + Fly secrets. Pending-photo-upload offline queue still deferred.
 
 ## Next concrete step
 
-Phase 2A/B/C and 2C.1 shipped through TestFlight build 16. The remaining Phase 2 surface still to scope:
+1. **Deploy Phase A** (`seedkeep-server`) — see `seedkeep-server/.docs/ai/current-state.md`. Until then the iOS recommendation features can't be exercised end-to-end.
+2. **Enable WeatherKit** for `app.seedkeep.ios` in the Apple Developer portal.
+3. **Push `main`**, bump `CURRENT_PROJECT_VERSION`, **cut a 0.2.0 TestFlight build**, verify the smart-planting-window surfaces on a real device against the live server.
 
-1. **Garden plan completion** — the Plan tab placeholder is gone (Garden tab is real now), but the documented Phase 2 surface includes WeatherKit-driven planting windows beyond frost dates, and extension-calendar integration. Neither has a tracked task yet — needs a brainstorming session to decide what ships in 0.2.0.
-2. **TestFlight feedback triage** — six TestFlight builds (11–16) shipped Phase 2 features over ~2 weeks. Worth pulling tester feedback / crash logs from App Store Connect before scoping the next chunk.
+Earlier Phase 2 surface still open (lower priority):
+
+1. **Extension-calendar integration** — deferred to 0.3.0+ per the smart-planting-window spec. (WeatherKit-driven planting windows: done — that's the Phase B work above.)
+2. **TestFlight feedback triage** — TestFlight builds 11–16 shipped Phase 2 features over ~2 weeks. Worth pulling tester feedback / crash logs from App Store Connect.
 3. **Hosted tier unflag** — purely a configuration step (App Store Connect product setup + two `fly secrets set` calls + a one-line iOS code change). Could ship as 0.1.1 once products are approved.
 
 Pre-existing follow-ups still open:
