@@ -59,6 +59,8 @@ public final class AppPreferences {
         static let cachedTier = "seedkeep.cachedTier"
         static let homeZip = "seedkeep.location.homeZip"
         static let cachedUsdaZone = "seedkeep.location.usdaZone"
+        static let cachedLatitude = "seedkeep.location.latitude"
+        static let cachedLongitude = "seedkeep.location.longitude"
     }
 
     private let defaults: UserDefaults
@@ -76,6 +78,8 @@ public final class AppPreferences {
         self._cachedTier = defaults.string(forKey: Key.cachedTier)
         self._homeZip = defaults.string(forKey: Key.homeZip)
         self._cachedUsdaZone = defaults.string(forKey: Key.cachedUsdaZone)
+        self._cachedLatitude = defaults.object(forKey: Key.cachedLatitude) as? Double
+        self._cachedLongitude = defaults.object(forKey: Key.cachedLongitude) as? Double
     }
 
     private var _serverURLOverride: URL?
@@ -157,6 +161,38 @@ public final class AppPreferences {
                 defaults.set(v, forKey: Key.cachedUsdaZone)
             } else {
                 defaults.removeObject(forKey: Key.cachedUsdaZone)
+            }
+        }
+    }
+
+    // MARK: - Cached coordinates (resolved from homeZip by the server)
+
+    /// Latitude of the home location, resolved from the ZIP by the server and
+    /// cached so `WeatherKitRefiner` can request a local forecast without a
+    /// network round-trip.  nil until the user has saved a ZIP at least once.
+    private var _cachedLatitude: Double?
+    public var cachedLatitude: Double? {
+        get { _cachedLatitude }
+        set {
+            _cachedLatitude = newValue
+            if let v = newValue {
+                defaults.set(v, forKey: Key.cachedLatitude)
+            } else {
+                defaults.removeObject(forKey: Key.cachedLatitude)
+            }
+        }
+    }
+
+    /// Longitude of the home location (see `cachedLatitude`).
+    private var _cachedLongitude: Double?
+    public var cachedLongitude: Double? {
+        get { _cachedLongitude }
+        set {
+            _cachedLongitude = newValue
+            if let v = newValue {
+                defaults.set(v, forKey: Key.cachedLongitude)
+            } else {
+                defaults.removeObject(forKey: Key.cachedLongitude)
             }
         }
     }

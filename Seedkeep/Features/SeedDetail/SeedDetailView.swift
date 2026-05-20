@@ -32,6 +32,10 @@ struct SeedDetailView: View {
     /// asynchronously in the `.task(id:)` alongside the catalog fetch.
     @State private var localRecommendation: LocalRecommendation?
 
+    /// WeatherKit-refined recommendation, computed after the baseline loads
+    /// when the household's lat/lon are available.
+    @State private var refinedRecommendation: RefinedRecommendation?
+
     /// Local edit buffers for the Identity section. Mirrored from the seed
     /// on appear so TextFields can bind to non-optional Strings; pushed back
     /// through the sync queue on each change, flushed on disappear (same
@@ -103,6 +107,18 @@ struct SeedDetailView: View {
                         // and read back the cached result for the panel.
                         await appEnv.recommendations.refresh(catalogSeedID: catalogID)
                         localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
+                        // Apply WeatherKit refinement when coordinates are available.
+                        if let lat = appEnv.preferences.cachedLatitude,
+                           let lon = appEnv.preferences.cachedLongitude {
+                            let growingInfo = effectiveGrowingInfo(seed)
+                            refinedRecommendation = await appEnv.recommendations.refinedRecommendation(
+                                for: catalogID,
+                                householdLat: lat,
+                                householdLon: lon,
+                                frostTolerance: growingInfo?.frost_tolerance,
+                                soilTempMaxF: growingInfo?.soil_temp_max_f
+                            )
+                        }
                     }
                 }
             } else {
@@ -587,7 +603,7 @@ struct SeedDetailView: View {
                 } else {
                     RecommendationPanel(
                         recommendation: localRecommendation,
-                        refined: nil,
+                        refined: refinedRecommendation,
                         userDate: nil
                     )
                 }

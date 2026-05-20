@@ -184,6 +184,34 @@ struct HeavyRainRuleTests {
         #expect(result.dailyScores[7] > 0.0)
     }
 
+    @Test("heavy rain day 3+ before anchor does not crash (start > end guard)")
+    func heavyRainBeforeAnchorDoesNotTrap() {
+        // anchor = "2025-05-01"; rain day is 4 days before anchor (offset -4).
+        // scoreIndex returns -4, so start = max(0,-4) = 0, end = min(9,-4+2) = -2.
+        // Without the guard this would produce 0...-2 which traps at runtime.
+        let rainDate = dateFromAnchor(anchor, offsetDays: -4)
+        let earlyRainDay = ForecastDay(
+            date: rainDate,
+            lowTempF: 50,
+            highTempF: 68,
+            precipitationInches: 0.8
+        )
+        let forecast = [earlyRainDay] + (0..<9).map { neutralDay(anchor: anchor, offset: $0) }
+        // Must not crash; scores for the 10-element window should be unchanged.
+        let result = WeatherKitRefiner.refine(
+            verdict: "plant_now",
+            scores: baseScores,
+            anchorDate: anchor,
+            frostTolerance: nil,
+            soilTempMaxF: nil,
+            forecast: forecast
+        )
+        // The rain day is entirely before the score array — no scores should be zeroed.
+        for score in result.dailyScores {
+            #expect(score > 0.0)
+        }
+    }
+
     @Test("light rain below threshold does not zero scores")
     func lightRainBelowThresholdUnchanged() {
         var forecast = (0..<10).map { neutralDay(anchor: anchor, offset: $0) }

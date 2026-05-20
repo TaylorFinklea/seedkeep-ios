@@ -93,6 +93,8 @@ struct HomeLocationSettingsView: View {
             let location = try await appEnv.client.setHouseholdLocation(zip: zipText)
             appEnv.preferences.homeZip = location.zip
             appEnv.preferences.cachedUsdaZone = location.usdaZone
+            appEnv.preferences.cachedLatitude = location.latitude
+            appEnv.preferences.cachedLongitude = location.longitude
             appEnv.recommendations.needsHomeLocation = false
             saveState = .success(location)
         } catch let err as SeedkeepError {

@@ -261,26 +261,14 @@ private struct VerdictInfo {
         }
     }
 
+    /// Delegates to `VerdictPalette` — shared source of truth with `SeedRow`.
     var foregroundColor: Color {
-        switch raw {
-        case "plant_now":  return Color(red: 0.10, green: 0.55, blue: 0.20)  // dark green
-        case "plant_soon": return Color(red: 0.70, green: 0.50, blue: 0.00)  // amber
-        case "too_early":  return Color(red: 0.40, green: 0.45, blue: 0.50)  // slate
-        case "late":       return Color(red: 0.75, green: 0.35, blue: 0.00)  // orange
-        case "too_late":   return Color(red: 0.75, green: 0.10, blue: 0.10)  // red
-        default:           return .secondary
-        }
+        VerdictPalette.foregroundColorFallback(for: raw)
     }
 
+    /// Delegates to `VerdictPalette`.
     var backgroundColor: Color {
-        switch raw {
-        case "plant_now":  return Color(red: 0.85, green: 0.96, blue: 0.87)
-        case "plant_soon": return Color(red: 1.00, green: 0.95, blue: 0.75)
-        case "too_early":  return Color(red: 0.88, green: 0.90, blue: 0.92)
-        case "late":       return Color(red: 1.00, green: 0.92, blue: 0.82)
-        case "too_late":   return Color(red: 0.98, green: 0.88, blue: 0.88)
-        default:           return Color(.systemGray5)
-        }
+        VerdictPalette.backgroundColor(for: raw)
     }
 }
 

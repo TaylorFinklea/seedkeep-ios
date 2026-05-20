@@ -25,6 +25,8 @@ struct WhatToPlantView: View {
 
     var body: some View {
         List {
+            // Track updateEpoch so SwiftUI re-renders after each upsert batch.
+            let _ = appEnv.recommendations.updateEpoch
             if appEnv.recommendations.needsHomeLocation {
                 Section {
                     RecommendationPanel.needsLocation

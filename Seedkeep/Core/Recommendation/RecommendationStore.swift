@@ -21,6 +21,11 @@ public final class RecommendationStore {
     /// UI can surface the "set your ZIP" prompt.
     public var needsHomeLocation: Bool = false
 
+    /// Incremented after every successful SwiftData save so `@Observable`
+    /// SwiftUI views can track it as a dependency and re-render after
+    /// `refresh` / `bulkRefresh` upserts new data.
+    public private(set) var updateEpoch: Int = 0
+
     // MARK: - In-memory caches (non-persisted)
 
     /// WeatherKit-refined results keyed by `catalogSeedID`.
@@ -186,6 +191,7 @@ public final class RecommendationStore {
                 context.insert(dto.makeLocal(fetchedAt: now))
             }
             try context.save()
+            updateEpoch += 1
         } catch {
             print("[RecommendationStore] upsert(\(id)) SwiftData error: \(error.localizedDescription)")
         }

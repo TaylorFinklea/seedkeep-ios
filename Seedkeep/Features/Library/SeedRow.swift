@@ -33,13 +33,15 @@ struct SeedRow: View {
                         .padding(.vertical, 2)
                         .background(.tint.opacity(0.18), in: .capsule)
                         .foregroundStyle(.tint)
-                    // Verdict dot — shown immediately after the type capsule
-                    // when a cached recommendation exists for this seed.
-                    if let dotColor = verdictDotColor {
-                        Circle()
-                            .fill(dotColor)
-                            .frame(width: 8, height: 8)
-                    }
+                }
+                // Verdict dot — shown immediately after the type capsule (or at
+                // the start of the row when no type is set) whenever a cached
+                // recommendation exists for this seed.
+                let _ = appEnv.recommendations.updateEpoch
+                if let dotColor = verdictDotColor {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: 8, height: 8)
                 }
                 if let company = seed.customCompany?.nilIfBlank {
                     Text(company)
@@ -76,21 +78,14 @@ struct SeedRow: View {
         .padding(.vertical, 2)
     }
 
-    /// Color for the verdict dot placed after the type capsule. Returns nil
-    /// when the seed has no catalog link, no cached recommendation, or the
-    /// verdict is unknown/absent — in that case no dot is shown.
+    /// Color for the verdict dot placed in the second row. Returns nil when the
+    /// seed has no catalog link, no cached recommendation, or the verdict is
+    /// unknown/absent — in that case no dot is shown.
     private var verdictDotColor: Color? {
         guard let catalogID = seed.catalogID,
               let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
         else { return nil }
-        switch verdict {
-        case "plant_now":  return Color(red: 0.10, green: 0.55, blue: 0.20) // green
-        case "plant_soon": return Color(red: 0.80, green: 0.60, blue: 0.00) // amber
-        case "too_early":  return Color(red: 0.55, green: 0.58, blue: 0.62) // grey
-        case "late":       return Color(red: 0.85, green: 0.40, blue: 0.00) // orange
-        case "too_late":   return Color(red: 0.80, green: 0.12, blue: 0.12) // red
-        default:           return nil
-        }
+        return VerdictPalette.foregroundColor(for: verdict)
     }
 
     private var displayTitle: String {

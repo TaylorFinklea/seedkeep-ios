@@ -93,6 +93,9 @@ struct WeatherKitRefiner {
             let rainIndex = Self.scoreIndex(for: day.date, anchor: anchor)
             let start = max(0, rainIndex)
             let end = min(currentScores.count - 1, rainIndex + 2)
+            // When the rain day is well before the anchor (rainIndex ≤ -3),
+            // end can be less than start — guard prevents a range-trap crash.
+            guard start <= end else { continue }
             guard start < currentScores.count else { continue }
             for i in start...end {
                 currentScores[i] = 0.0

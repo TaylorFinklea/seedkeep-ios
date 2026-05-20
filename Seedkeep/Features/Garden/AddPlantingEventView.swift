@@ -35,6 +35,9 @@ struct AddPlantingEventView: View {
     /// Cached recommendation for the currently selected seed's catalog ID.
     @State private var localRecommendation: LocalRecommendation?
 
+    /// WeatherKit-refined recommendation for the currently selected seed.
+    @State private var refinedRecommendation: RefinedRecommendation?
+
     var body: some View {
         NavigationStack {
             Form {
@@ -107,7 +110,7 @@ struct AddPlantingEventView: View {
                 } else {
                     RecommendationPanel(
                         recommendation: localRecommendation,
-                        refined: nil,
+                        refined: refinedRecommendation,
                         userDate: plannedFor
                     )
                     if let start = localRecommendation?.rangeStart,
@@ -262,10 +265,26 @@ struct AddPlantingEventView: View {
     private func refreshRecommendationForSelection() async {
         guard let catalogID = selectedCatalogID else {
             localRecommendation = nil
+            refinedRecommendation = nil
             return
         }
         await appEnv.recommendations.refresh(catalogSeedID: catalogID)
         localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
+        // Apply WeatherKit refinement when coordinates are available.
+        // Growing-info fields come from the selected seed's local snapshot.
+        if let lat = appEnv.preferences.cachedLatitude,
+           let lon = appEnv.preferences.cachedLongitude {
+            let growingInfo: GrowingInfoSnapshot? = seeds
+                .first(where: { $0.id == selectedSeedID })
+                .flatMap { $0.growingInfo }
+            refinedRecommendation = await appEnv.recommendations.refinedRecommendation(
+                for: catalogID,
+                householdLat: lat,
+                householdLon: lon,
+                frostTolerance: growingInfo?.frost_tolerance,
+                soilTempMaxF: growingInfo?.soil_temp_max_f
+            )
+        }
     }
 
     // MARK: - Date helpers
