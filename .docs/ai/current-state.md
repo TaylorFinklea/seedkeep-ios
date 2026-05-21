@@ -8,6 +8,14 @@
 
 ## Last Session Summary
 
+**Date**: 2026-05-21 — 0.2.0 shipped: server live + TestFlight build 17
+
+- **Server deployed** — `seedkeep-server` Phase A is live on Fly (release v9): migrations 0007/0008 applied, `zip_locations` seeded (33,751 rows), `/api/health` 200. The recommendation surfaces now have a live API.
+- **WeatherKit** capability enabled for `app.seedkeep.ios` in the Apple Developer portal.
+- **TestFlight build 17 cut** — `MARKETING_VERSION` 0.1.0 → 0.2.0, `CURRENT_PROJECT_VERSION` 16 → 17 via `scripts/release.sh --minor`; archived, uploaded to TestFlight (release commit `0c27e58`). `main` pushed to origin.
+- **`release.sh` signing fix** (commit `cbbb991`) — the archive step now passes the App Store Connect API key so `-allowProvisioningUpdates` can regenerate provisioning profiles without an Apple ID in Xcode. Build 17 first failed to archive because the new WeatherKit entitlement forced a profile regeneration that needs portal auth; the API key satisfies it.
+- **Still pending**: on-device verification of the four planting-window surfaces against the live server.
+
 **Date**: 2026-05-20 — Phase B: smart planting window (iOS client)
 
 - Built the **iOS client side of the smart-planting-window feature** (0.2.0) and merged it to `main` (commit `666ac46`). Plan: `.docs/ai/plans/2026-05-20-smart-planting-window-ios.md`. Design spec: `~/git/seedkeep/.docs/ai/specs/2026-05-20-smart-planting-window-design.md`. Executed as 8 tasks via subagent-driven development on branch `smart-planting-window-ios` (merged, worktree cleaned up).
@@ -45,23 +53,20 @@
 
 - `xcodebuild -scheme Seedkeep -destination 'generic/platform=iOS Simulator' build` → **BUILD SUCCEEDED** on merged `main` (2026-05-20).
 - `cd SeedkeepKit && swift test` → **14/14** (added 3 Recommendation DTO decode tests). App test target `SeedkeepTests` → 15/15 (added `WeatherKitRefinerTests`).
-- `MARKETING_VERSION = 0.1.0`, `CURRENT_PROJECT_VERSION = 16` in `project.yml` — **not yet bumped for 0.2.0**; no TestFlight build cut with Phase B yet.
+- `MARKETING_VERSION = 0.2.0`, `CURRENT_PROJECT_VERSION = 17` in `project.yml` — **TestFlight build 17 cut** 2026-05-21 (release commit `0c27e58`), uploaded to App Store Connect.
 - SwiftData model count is now **9** (`LocalRecommendation` added).
-- `main` is **not pushed to origin** — Phase B is merged locally only.
+- `main` is pushed to origin through the build-17 release commits (`0c27e58`, `cbbb991`).
 
 ## Blockers
 
-- **Phase B depends on the Phase A server being deployed.** The recommendation routes + `PUT /households/me/location` exist in `seedkeep-server` `main` (pushed to origin) but are **not deployed** to `seedkeep-server.fly.dev` yet. Until deploy, the iOS recommendation surfaces will get connection errors. Deploy steps are in `seedkeep-server/.docs/ai/current-state.md`.
-- **WeatherKit capability** must be enabled for the App ID (`app.seedkeep.ios`) in the Apple Developer portal (Certificates, Identifiers & Profiles → Identifiers → WeatherKit). The build succeeds without it, but live `fetchForecast` calls fail until it's on.
-- Phase B not verified on device or cut to TestFlight (Task 8 device-smoke + TestFlight are deploy-gated).
+- **Build 17 not yet verified on device.** The four planting-window surfaces talk to the live server (`seedkeep-server.fly.dev`, Fly release v9) but haven't been exercised on a real device via TestFlight — verify recommendations + WeatherKit refinement once build 17 finishes processing.
 - Minor: `WeatherKitRefiner.fetchForecast` uses `precipitationAmount` (deprecated in favor of `precipitationAmountByType`) — a warning, not an error; fine to leave or modernize later.
 - Hosted tier still feature-flagged off (`AppPreferences.isHostedTierEnabled = false`); unflag = App Store Connect products + Fly secrets. Pending-photo-upload offline queue still deferred.
 
 ## Next concrete step
 
-1. **Deploy Phase A** (`seedkeep-server`) — see `seedkeep-server/.docs/ai/current-state.md`. Until then the iOS recommendation features can't be exercised end-to-end.
-2. **Enable WeatherKit** for `app.seedkeep.ios` in the Apple Developer portal.
-3. **Push `main`**, bump `CURRENT_PROJECT_VERSION`, **cut a 0.2.0 TestFlight build**, verify the smart-planting-window surfaces on a real device against the live server.
+1. **Verify build 17 on device** — once TestFlight finishes processing 0.2.0 (17), install it and exercise the four planting-window surfaces (Library verdict dot, seed-detail panel, Garden "what to plant", planting-event panel) + WeatherKit refinement against the live server (`seedkeep-server.fly.dev`).
+2. **0.2.0 App Store release** — once device-verified, submit 0.2.0 for App Store review (M2 milestone).
 
 Earlier Phase 2 surface still open (lower priority):
 
