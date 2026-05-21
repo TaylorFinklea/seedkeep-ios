@@ -98,6 +98,7 @@ EXPORT_OPTIONS="$REPO_ROOT/Seedkeep/ExportOptions.plist"
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
 
 step "Archiving Release for generic iOS"
+# Auth keys let -allowProvisioningUpdates regenerate the profile without a signed-in Xcode account.
 xcodebuild \
     -project "$PROJECT" \
     -scheme "$SCHEME" \
@@ -105,6 +106,9 @@ xcodebuild \
     -archivePath "$ARCHIVE_PATH" \
     -destination 'generic/platform=iOS' \
     -allowProvisioningUpdates \
+    -authenticationKeyPath "$ASC_KEY_PATH" \
+    -authenticationKeyID "$ASC_KEY_ID" \
+    -authenticationKeyIssuerID "$ASC_ISSUER" \
     archive 2>&1 | grep -E "Archive Succeeded|error:|\*\*" | head -5
 
 [[ -d "$ARCHIVE_PATH" ]] || fail "Archive failed — $ARCHIVE_PATH not created"
