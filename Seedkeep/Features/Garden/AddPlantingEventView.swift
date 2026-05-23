@@ -70,8 +70,70 @@ struct AddPlantingEventView: View {
                     Label(k.displayName, systemImage: k.systemImage).tag(k)
                 }
             }
+            // Strict window check: when the chosen date sits outside the
+            // recommendation's outdoor window we tint the DatePicker and
+            // append a caption row.  Information only — Save remains enabled
+            // (a power-user planning a late succession shouldn't be blocked).
             DatePicker("Planned for", selection: $plannedFor, displayedComponents: .date)
+                .tint(outOfWindowMessage != nil ? .orange : .accentColor)
+                .foregroundStyle(outOfWindowMessage != nil ? .orange : .primary)
+            if let msg = outOfWindowMessage {
+                Label {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                }
+            }
         }
+    }
+
+    // MARK: - Out-of-window detection
+
+    /// Caption to show under the DatePicker when `plannedFor` falls outside
+    /// the recommendation's outdoor window. Returns `nil` when:
+    ///   - there's no recommendation yet (still loading),
+    ///   - the recommendation has no outdoor window (`rangeStart`/`rangeEnd` nil),
+    ///   - or `plannedFor` is inside `[rangeStart, rangeEnd]` (strict, inclusive).
+    ///
+    /// `rangeStart`/`rangeEnd` are YYYY-MM-DD strings at UTC midnight; compare
+    /// at day granularity in UTC so a date picker showing "Apr 15" matches
+    /// rangeStart="2026-04-15" regardless of local timezone offset.
+    private var outOfWindowMessage: String? {
+        guard let rec = localRecommendation,
+              let startStr = rec.rangeStart,
+              let endStr = rec.rangeEnd,
+              let start = parseYYYYMMDD(startStr),
+              let end = parseYYYYMMDD(endStr) else {
+            return nil
+        }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let chosen = cal.startOfDay(for: plannedFor)
+        let startDay = cal.startOfDay(for: start)
+        let endDay = cal.startOfDay(for: end)
+        if chosen >= startDay && chosen <= endDay { return nil }
+
+        // Terse, factual, single-edge: the panel below already shows the full
+        // "Apr 15 – Jul 25" window, so the caption just has to say which side
+        // you're off and when the window flips. The icon carries the warning.
+        if chosen < startDay {
+            return "Window opens \(formattedDate(start))"
+        }
+        return "Window closed \(formattedDate(end))"
+    }
+
+    /// "Apr 15"-style formatter for date captions. Treats `date` as UTC midnight
+    /// so it matches how `rangeStart`/`rangeEnd` were parsed.
+    private func formattedDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        f.locale = .current
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: date)
     }
 
     @ViewBuilder
