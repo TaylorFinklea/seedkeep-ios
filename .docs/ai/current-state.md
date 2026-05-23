@@ -8,6 +8,18 @@
 
 ## Last Session Summary
 
+**Date**: 2026-05-23 — TestFlight build 18: out-of-window warning on Plan event screen
+
+- User reported the Plan event screen gives **no signal** when the planned date is months outside the recommendation window — picking Oct 13 for an Apr 15 – Jul 25 outdoor window saved silently with no warning. Root cause: the verdict badge is today-anchored (not date-anchored), and the 60-day gradient's "Your date" marker clips dates outside the score span — so a far-future date got zero visual feedback.
+- **Added strict in-window check** in `AddPlantingEventView` (`Seedkeep/Features/Garden/AddPlantingEventView.swift`, commit `8e079e5`). When `plannedFor` is outside `[rangeStart, rangeEnd]` (UTC-day comparison to match how the server emits the window):
+  - DatePicker tints orange (`.tint(.orange)` + `.foregroundStyle(.orange)`)
+  - Caption row beneath says `Window opens MMM d` (before window) or `Window closed MMM d` (after)
+  - Save remains enabled — power-users planning late successions shouldn't be blocked
+- The `RecommendationPanel` was kept read-only; the validation lives in the caller. Cheap to extend the warning to other planting surfaces if needed.
+- **TestFlight build 18 cut** (commit `709c755`) — `release.sh` default (build-only bump), 0.2.0 (17 → 18). Archive succeeded, export succeeded, uploaded to App Store Connect. Same 0.2.0 review record.
+- Companion server work — see `seedkeep-server/.docs/ai/current-state.md` for Fly v12 (Kansas added to extension calendars). With KS bundled, the user can finally test extension hits from their own ZIP (66109) without flipping to a VA/CA ZIP.
+- **Build 17 device-verification is still open** — adding build 18 means there are now two builds on TestFlight needing on-device exercise of the planting-window surfaces.
+
 **Date**: 2026-05-21 — 0.2.0 shipped: server live + TestFlight build 17
 
 - **Server deployed** — `seedkeep-server` Phase A is live on Fly (release v9): migrations 0007/0008 applied, `zip_locations` seeded (33,751 rows), `/api/health` 200. The recommendation surfaces now have a live API.
