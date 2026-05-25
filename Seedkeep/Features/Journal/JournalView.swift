@@ -39,6 +39,12 @@ struct JournalView: View {
     var body: some View {
         NavigationStack {
             List {
+                if filterParent == nil {
+                    RetrospectiveCard()
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
                 if entries.isEmpty {
                     ContentUnavailableView(
                         "Start your garden journal",
