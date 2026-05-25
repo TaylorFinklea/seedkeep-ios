@@ -3,7 +3,8 @@ import SwiftData
 
 /// Top-level Journal tab. Read-only feed of `LocalJournalEntry` rows
 /// reverse-sorted by `occurredOn`. Pull-to-refresh hits the server feed
-/// via `JournalStore.refresh()`. Compose / detail come in T5.
+/// via `JournalStore.refresh()`. Rows + the toolbar "+" both push into
+/// `JournalEntryView`.
 struct JournalView: View {
     @Environment(AppEnvironment.self) private var appEnv
 
@@ -13,6 +14,11 @@ struct JournalView: View {
         order: .reverse
     )
     private var entries: [LocalJournalEntry]
+
+    enum Route: Hashable {
+        case existing(String)   // entry id
+        case new
+    }
 
     var body: some View {
         NavigationStack {
@@ -26,12 +32,28 @@ struct JournalView: View {
                     .listRowBackground(Color.clear)
                 } else {
                     ForEach(entries) { entry in
-                        entryRow(entry)
+                        NavigationLink(value: Route.existing(entry.id)) {
+                            entryRow(entry)
+                        }
                     }
                 }
             }
             .navigationTitle("Journal")
-            // TODO (T5): toolbar "+ New entry" button + navigation destination
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .existing(let id):
+                    JournalEntryView(entryID: id)
+                case .new:
+                    JournalEntryView(entryID: nil)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink(value: Route.new) {
+                        Label("New entry", systemImage: "plus")
+                    }
+                }
+            }
             .refreshable {
                 await appEnv.journal.refresh()
             }
