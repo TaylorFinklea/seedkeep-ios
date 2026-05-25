@@ -77,6 +77,7 @@ struct SeedDetailView: View {
                     provenanceSection(seed)
                     notesSection(seed)
                     plantSection(seed)
+                    EntityScopedJournalSection(parent: .seed(seed.id))
                     deleteSection(seed)
                 }
                 .sheet(isPresented: $showPlanEvent) {

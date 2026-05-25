@@ -56,6 +56,8 @@ struct BedDetailView: View {
                     eventSection(title: "Upcoming", events: upcomingEvents, defaultEmptyHidden: false)
                     eventSection(title: "Done", events: doneEvents, defaultEmptyHidden: true)
 
+                    EntityScopedJournalSection(parent: .bed(bed.id))
+
                     Section {
                         Button(role: .destructive) {
                             Task { await deleteBed() }
