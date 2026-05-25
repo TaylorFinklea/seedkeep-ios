@@ -14,8 +14,10 @@ struct JournalEntryView: View {
     @Environment(\.modelContext) private var modelContext
 
     @Query private var photos: [LocalJournalEntryPhoto]
+    @Query private var checklistItems: [LocalJournalChecklistItem]
 
     @State private var occurredOn: Date = Date()
+    @State private var newItemText: String = ""
     @State private var entryBody: String = ""
     @State private var seedID: String?
     @State private var bedID: String?
@@ -33,6 +35,9 @@ struct JournalEntryView: View {
         let id = entryID ?? "__none__"
         _photos = Query(
             filter: #Predicate<LocalJournalEntryPhoto> { $0.entryID == id },
+            sort: \.sortOrder)
+        _checklistItems = Query(
+            filter: #Predicate<LocalJournalChecklistItem> { $0.entryID == id },
             sort: \.sortOrder)
     }
 
@@ -86,7 +91,31 @@ struct JournalEntryView: View {
                 }
             }
 
-            // TODO (T8): checklist section
+            Section("Checklist") {
+                if checklistItems.isEmpty && entryID == nil {
+                    Text("Save the entry before adding checklist items")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(checklistItems) { item in
+                        checklistRow(item)
+                    }
+                    if let entryID {
+                        HStack {
+                            TextField("New item", text: $newItemText)
+                                .textFieldStyle(.plain)
+                                .onSubmit { Task { await addItem(entryID: entryID) } }
+                            Button {
+                                Task { await addItem(entryID: entryID) }
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundStyle(.tint)
+                            }
+                            .disabled(newItemText.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
+                    }
+                }
+            }
 
             if let errorMessage {
                 Section {
@@ -178,6 +207,66 @@ struct JournalEntryView: View {
                     Label("Delete photo", systemImage: "trash")
                 }
             }
+    }
+
+    @ViewBuilder
+    private func checklistRow(_ item: LocalJournalChecklistItem) -> some View {
+        HStack {
+            Button {
+                Task { await toggle(item) }
+            } label: {
+                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(item.completed ? Color.green : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            Text(item.text)
+                .strikethrough(item.completed, color: .secondary)
+                .foregroundStyle(item.completed ? .secondary : .primary)
+            Spacer()
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                Task { await deleteItem(item) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private func addItem(entryID: String) async {
+        let text = newItemText.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        do {
+            let dto = try await appEnv.client.addChecklistItem(entryId: entryID, text: text)
+            modelContext.insert(dto.makeLocal())
+            try modelContext.save()
+            newItemText = ""
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func toggle(_ item: LocalJournalChecklistItem) async {
+        let newCompleted = !item.completed
+        do {
+            var patch = SeedkeepClient.UpdateChecklistItemInput()
+            patch.completed = newCompleted
+            let dto = try await appEnv.client.updateChecklistItem(item.id, patch)
+            dto.apply(to: item)
+            try modelContext.save()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteItem(_ item: LocalJournalChecklistItem) async {
+        do {
+            try await appEnv.client.deleteChecklistItem(item.id)
+            modelContext.delete(item)
+            try modelContext.save()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     @MainActor
