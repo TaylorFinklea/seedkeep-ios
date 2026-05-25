@@ -8,6 +8,20 @@
 
 ## Last Session Summary
 
+**Date**: 2026-05-25 — Phase 3 (Journal) shipped to TestFlight (build 19, 0.3.0)
+
+- Subagent-driven implementation of the 10-task plan at `.docs/ai/plans/2026-05-24-phase-3-journal-ios.md`. All 9 build commits executed on worktree branch `phase-3-journal-ios` (one task per commit, two-stage review per task), fast-forward merged to main, pushed, release cut.
+- **SeedkeepKit** — `Models/JournalEntry.swift` with 6 DTOs (`JournalEntryDTO`, `JournalEntryPhotoDTO`, `JournalChecklistItemDTO`, `RetrospectiveYearDTO`, `RetrospectiveResponseDTO`) + `typealias JournalFeedResponseDTO = DeltaPage<JournalEntryDTO>` to reuse the existing delta-sync envelope. 13 client methods on `SeedkeepClient` (feed, CRUD, photos list/upload/delete/binary-fetch, checklist list/add/update/delete, retrospective). 4 new decode tests; total **18/18** (was 14).
+- **Three new SwiftData models** (the 10th–12th) — `LocalJournalEntry` (with derived `parentKind` enum), `LocalJournalEntryPhoto`, `LocalJournalChecklistItem`. Mapping extensions in `Mapping.swift`. Registered in `AppEnvironment` schema.
+- **SyncEngine** drains `journal_entries` via `pullJournalEntries(householdID:)` + `upsertJournalEntries(_:)`; on server soft-delete, hard-deletes the local entry AND cascade-cleans its photos + checklist items via `cleanupJournalEntryChildren(...)`.
+- **New top-level Journal tab** between Garden and Random — 6 tabs now. `JournalView` is the chronological feed (`@Query` sorted by `occurredOn DESC`, filtered by `deletedAt == nil`) with an optional `filterParent` for entity-scoped views.
+- **`JournalEntryView`** — Form-based create/edit with `DatePicker`, multi-line `TextField` body, `AttachedEntityPicker` (None/seed/bed/planting-event), photo gallery (`PhotosPicker`, off-MainActor resize copied from `ScanFlow`, async upload with `X-Photo-Width`/`X-Photo-Height` headers, context-menu delete, thumbnail subview that fetches binary on appear), and checklist UI (tappable rows with strikethrough on completed + `.swipeActions` delete + TextField with `+` button to add).
+- **`EntityScopedJournalSection`** — collapsible "Journal" section showing the last 3 entries scoped to a parent entity. Mounted in `SeedDetailView` and `BedDetailView`. Skipped in `AddPlantingEventView` because it's create-only — flag for future planting-event detail surface.
+- **`RetrospectiveCard`** — top-of-feed card calling `/api/journal/retrospective?on=<today MM-DD>`. Hidden when no prior-year entries. Server-side current-year filter (added during server T8 smoke debugging) means first-year gardeners see nothing here until they have history.
+- **TestFlight build 19 cut** (commit `06f0459`) — `release.sh --minor` bumped 0.2.0 (18) → 0.3.0 (19). `** ARCHIVE SUCCEEDED **` + `** EXPORT SUCCEEDED **`. Uploaded to App Store Connect; processing.
+- Companion server work — see `seedkeep-server/.docs/ai/current-state.md` for Fly v15 (3 tables + 10 routes + smoke 11/11).
+- Pending: on-device verification of every surface against `seedkeep-server.fly.dev`. Build 17 + 18 + 19 all need device exercise eventually; 19 is the latest.
+
 **Date**: 2026-05-23 — TestFlight build 18: out-of-window warning on Plan event screen
 
 - User reported the Plan event screen gives **no signal** when the planned date is months outside the recommendation window — picking Oct 13 for an Apr 15 – Jul 25 outdoor window saved silently with no warning. Root cause: the verdict badge is today-anchored (not date-anchored), and the 60-day gradient's "Your date" marker clips dates outside the score span — so a far-future date got zero visual feedback.
