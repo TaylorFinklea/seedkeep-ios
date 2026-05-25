@@ -1,10 +1,9 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Six-tab root: Library / Garden / Journal / Random / Settings / You.
-/// Garden is the Phase 2 entry point (beds + planting events). Journal
-/// is the Phase 3 entry point — read-only feed in T4, compose + detail
-/// follow. Random and Settings shipped in C-ios.
+/// Seven-tab root: Library / Garden / Journal / Random / Assistant /
+/// Settings / You. Assistant is the Phase 4 entry point — Sprout, the
+/// BYOK AI assistant. Journal (Phase 3) is the conversation substrate.
 struct MainTabView: View {
     var body: some View {
         TabView {
@@ -19,6 +18,9 @@ struct MainTabView: View {
 
             RandomPickView()
                 .tabItem { Label("Random", systemImage: "shuffle") }
+
+            AssistantView()
+                .tabItem { Label("Sprout", systemImage: "sparkles") }
 
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
