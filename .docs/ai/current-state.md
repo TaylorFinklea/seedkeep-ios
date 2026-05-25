@@ -8,6 +8,23 @@
 
 ## Last Session Summary
 
+**Date**: 2026-05-25 (afternoon) — Phase 4 (Sprout) shipped to TestFlight (build 20, 0.4.0)
+
+- Inline-executed the 10-task plan at `.docs/ai/plans/2026-05-25-phase-4-sprout-ios.md` on worktree branch `phase-4-sprout-ios`. ~6 commits (some tasks bundled where their boundaries blurred — T6/T7/T8 became one commit since the UI surface is coherent and the coordinator was already streaming-ready from T5).
+- **SeedkeepKit** — `Models/Assistant.swift` (8 DTOs + `AssistantStreamEvent` enum + SSE-payload decoder), 9 thread/key client methods on `SeedkeepClient`, `AssistantStream.swift` with URLSessionDataDelegate-based SSE streaming (URLSession.bytes buffers HTTP/2 frames — bad UX for typewriter streaming, so we use the delegate pattern from SimmerSmith). 27 kit tests (was 18; +9 assistant decode + parser tests).
+- **Four new SwiftData models** (13th-16th): `LocalAssistantThread`, `LocalAssistantMessage`, `LocalAssistantToolCall`, `LocalAssistantKeyStatus`. The API key itself is NEVER stored locally — only a configured/not-configured flag.
+- **AIAssistantCoordinator** (`Core/Assistant/AIAssistantCoordinator.swift`) — @Observable state machine: `currentThreadID`, `streamingState` (idle / streaming / awaitingConfirmation / error), `pageContext` bus, `keyConfigured` flag. `send()` / `confirmToolCall()` / `cancelToolCall()` drive the SSE event loop and persist deltas to SwiftData as they arrive; @Query re-renders give the typewriter effect with no view-side animation code.
+- **SyncEngine** drains `assistant_threads` via the existing delta-sync flow; cascade-cleans messages + tool_calls when a thread is soft-deleted. `refreshAssistantThread(_:)` pulls full thread detail (server has no top-level messages endpoint — messages come down nested in `GET /threads/:id`).
+- **MainTabView** now 7 tabs (Library | Garden | Journal | Random | **Sprout** | Settings | You). Tab routing via `AppEnvironment.requestedTab` so the sparkle button can switch tabs programmatically.
+- **AssistantView** — thread list + 4 starter prompts ("What did I plant in May 2024?" / "Help me plan Bed A for June" / "Did peppers do well last year?" / "Add a journal entry for today"). Empty state when the key isn't configured points to Settings.
+- **AssistantThreadView** — message list + composer + auto-scroll-to-last. Streaming-aware: composer disables while a stream is in flight, "Sprout is thinking…" hint while idle-streaming.
+- **AssistantToolCallCard + ProposedChangeCard** — inline tool-call status + Confirm/Cancel buttons for destructive ops. Was→Becomes diff renderer is functional but minimal (T8 polish item).
+- **TopBarSparkleButton** + `.publishesAssistantContext(...)` view modifier — global "ask Sprout" affordance. Mounted on Library, Garden, SeedDetail. Other detail views can opt in with one line of view modifier.
+- **AssistantKeySettingsView** — Settings → "Sprout (AI assistant)" → AI assistant key. SecureField for write, Replace + Revoke for re-management. Privacy disclosure explains AES-256-GCM server-side encryption and that Anthropic bills directly.
+- **TestFlight build 20** (commit `02c02eb`) — `release.sh --minor` bumped 0.3.0 → 0.4.0 / 19 → 20. `** ARCHIVE SUCCEEDED **` + `** EXPORT SUCCEEDED **`. Uploaded to App Store Connect; processing.
+- Companion server work — see `seedkeep-server/.docs/ai/current-state.md` for Fly v17 (4 tables + 5 routes + tool registry + smoke 18/18).
+- Pending: on-device verification of every surface against `seedkeep-server.fly.dev`. Builds 17-20 all need device exercise; 20 is the latest.
+
 **Date**: 2026-05-25 — Phase 3 (Journal) shipped to TestFlight (build 19, 0.3.0)
 
 - Subagent-driven implementation of the 10-task plan at `.docs/ai/plans/2026-05-24-phase-3-journal-ios.md`. All 9 build commits executed on worktree branch `phase-3-journal-ios` (one task per commit, two-stage review per task), fast-forward merged to main, pushed, release cut.
