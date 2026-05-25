@@ -715,6 +715,246 @@ public actor SeedkeepClient {
         public let deleted_at: Int64?
     }
 
+    // MARK: - Journal (Phase 3)
+
+    /// `GET /api/journal` — delta-sync paginated feed. Mirrors the same
+    /// envelope used by seeds/beds/etc. (`{ items, cursor, has_more }`).
+    /// Filters are server-side: `seedId` / `bedId` / `plantingEventId`
+    /// scope to a parent, and `fromDate` / `toDate` constrain
+    /// `occurred_on` (YYYY-MM-DD strings).
+    public func journalFeed(
+        since: Int64 = 0,
+        limit: Int? = nil,
+        seedId: String? = nil,
+        bedId: String? = nil,
+        plantingEventId: String? = nil,
+        fromDate: String? = nil,
+        toDate: String? = nil
+    ) async throws -> JournalFeedResponseDTO {
+        var q = deltaQuery(since: since, limit: limit)
+        if let seedId { q.append(.init(name: "seed_id", value: seedId)) }
+        if let bedId { q.append(.init(name: "bed_id", value: bedId)) }
+        if let plantingEventId { q.append(.init(name: "planting_event_id", value: plantingEventId)) }
+        if let fromDate { q.append(.init(name: "from_date", value: fromDate)) }
+        if let toDate { q.append(.init(name: "to_date", value: toDate)) }
+        return try await getJSON(path: "/api/journal", query: q)
+    }
+
+    /// Body for `POST /api/journal`. Encoded as snake_case to match the
+    /// server's zod schema; response is the camelCase `JournalEntryDTO`.
+    public struct CreateJournalEntryInput: Codable, Sendable {
+        public var occurredOn: String           // 'YYYY-MM-DD'
+        public var body: String
+        public var seedId: String?
+        public var bedId: String?
+        public var plantingEventId: String?
+
+        public init(
+            occurredOn: String,
+            body: String,
+            seedId: String? = nil,
+            bedId: String? = nil,
+            plantingEventId: String? = nil
+        ) {
+            self.occurredOn = occurredOn
+            self.body = body
+            self.seedId = seedId
+            self.bedId = bedId
+            self.plantingEventId = plantingEventId
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case occurredOn = "occurred_on"
+            case body
+            case seedId = "seed_id"
+            case bedId = "bed_id"
+            case plantingEventId = "planting_event_id"
+        }
+    }
+
+    public func createJournalEntry(_ input: CreateJournalEntryInput) async throws -> JournalEntryDTO {
+        struct Wrapper: Codable, Sendable { let entry: JournalEntryDTO }
+        let res: Wrapper = try await postJSON(path: "/api/journal", body: input)
+        return res.entry
+    }
+
+    /// Body for `PATCH /api/journal/:id`. Uses Swift's double-optional
+    /// (`String??`) on parent-ref fields so callers can express three
+    /// states: omit (no change), `.some(nil)` (clear / null), or
+    /// `.some(value)` (set). Encoder honors that distinction so PATCH
+    /// only sends what the caller actually wants to change.
+    public struct UpdateJournalEntryInput: Sendable {
+        public var occurredOn: String?
+        public var body: String?
+        public var seedId: String??
+        public var bedId: String??
+        public var plantingEventId: String??
+
+        public init(
+            occurredOn: String? = nil,
+            body: String? = nil,
+            seedId: String?? = nil,
+            bedId: String?? = nil,
+            plantingEventId: String?? = nil
+        ) {
+            self.occurredOn = occurredOn
+            self.body = body
+            self.seedId = seedId
+            self.bedId = bedId
+            self.plantingEventId = plantingEventId
+        }
+    }
+
+    public func updateJournalEntry(_ id: String, _ patch: UpdateJournalEntryInput) async throws -> JournalEntryDTO {
+        struct Wrapper: Codable, Sendable { let entry: JournalEntryDTO }
+        // Hand-rolled Encodable so we can distinguish "omit" vs "set null"
+        // for the parent-ref fields. Mirrors the pattern in `updateTag`.
+        struct Body: Encodable {
+            let patch: UpdateJournalEntryInput
+            enum CodingKeys: String, CodingKey {
+                case occurredOn = "occurred_on"
+                case body
+                case seedId = "seed_id"
+                case bedId = "bed_id"
+                case plantingEventId = "planting_event_id"
+            }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                if let v = patch.occurredOn { try c.encode(v, forKey: .occurredOn) }
+                if let v = patch.body { try c.encode(v, forKey: .body) }
+                if let v = patch.seedId { try c.encode(v, forKey: .seedId) }
+                if let v = patch.bedId { try c.encode(v, forKey: .bedId) }
+                if let v = patch.plantingEventId { try c.encode(v, forKey: .plantingEventId) }
+            }
+        }
+        let res: Wrapper = try await patchJSON(path: "/api/journal/\(id)", body: Body(patch: patch))
+        return res.entry
+    }
+
+    /// `DELETE /api/journal/:id` — soft-deletes the entry.
+    public func deleteJournalEntry(_ id: String) async throws {
+        let _: DeleteResult = try await deleteJSON(path: "/api/journal/\(id)")
+    }
+
+    // MARK: - Journal photos
+
+    public func listJournalEntryPhotos(entryId: String) async throws -> [JournalEntryPhotoDTO] {
+        struct Wrapper: Codable, Sendable { let photos: [JournalEntryPhotoDTO] }
+        let res: Wrapper = try await getJSON(path: "/api/journal/\(entryId)/photos")
+        return res.photos
+    }
+
+    /// Uploads a single photo attached to a journal entry. Mirrors
+    /// `uploadSeedPhoto`: the server expects raw image bytes as the body
+    /// (not multipart), with `Content-Type` naming the format and the
+    /// optional `X-Photo-Width` / `X-Photo-Height` request headers for
+    /// dimensions when the client knows them.
+    public func uploadJournalPhoto(
+        entryId: String,
+        jpegData: Data,
+        width: Int? = nil,
+        height: Int? = nil
+    ) async throws -> JournalEntryPhotoDTO {
+        struct Wrapper: Codable, Sendable { let photo: JournalEntryPhotoDTO }
+        let url = configuration.baseURL.appendingPathComponent("/api/journal/\(entryId)/photos")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        if let width { req.setValue(String(width), forHTTPHeaderField: "X-Photo-Width") }
+        if let height { req.setValue(String(height), forHTTPHeaderField: "X-Photo-Height") }
+        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = jpegData
+        let res: Wrapper = try await perform(req)
+        return res.photo
+    }
+
+    /// `DELETE /api/journal/photos/:photoId`.
+    public func deleteJournalPhoto(_ photoId: String) async throws {
+        let _: DeleteResult = try await deleteJSON(path: "/api/journal/photos/\(photoId)")
+    }
+
+    /// Fetches a single journal photo's raw bytes from R2 via the
+    /// Worker. Mirrors `fetchSeedPhotoData`.
+    public func journalPhotoData(photoId: String) async throws -> Data {
+        let url = configuration.baseURL.appendingPathComponent("/api/journal/photos/\(photoId)")
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await configuration.session.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw SeedkeepError(code: "fetch_failed", message: "Could not fetch journal photo bytes")
+        }
+        return data
+    }
+
+    // MARK: - Journal checklist
+
+    public func listJournalChecklistItems(entryId: String) async throws -> [JournalChecklistItemDTO] {
+        struct Wrapper: Codable, Sendable { let items: [JournalChecklistItemDTO] }
+        let res: Wrapper = try await getJSON(path: "/api/journal/\(entryId)/checklist")
+        return res.items
+    }
+
+    public func addChecklistItem(entryId: String, text: String) async throws -> JournalChecklistItemDTO {
+        struct Body: Encodable { let text: String }
+        struct Wrapper: Codable, Sendable { let item: JournalChecklistItemDTO }
+        let res: Wrapper = try await postJSON(
+            path: "/api/journal/\(entryId)/checklist",
+            body: Body(text: text)
+        )
+        return res.item
+    }
+
+    /// Body for `PATCH /api/journal/checklist/:itemId`. Plain optionals
+    /// for `text`/`completed`/`sortOrder` (no clearing semantics — the
+    /// server treats absent fields as "unchanged"; none of these are
+    /// nullable in storage).
+    public struct UpdateChecklistItemInput: Codable, Sendable {
+        public var text: String?
+        public var completed: Bool?
+        public var sortOrder: Int?
+
+        public init(text: String? = nil, completed: Bool? = nil, sortOrder: Int? = nil) {
+            self.text = text
+            self.completed = completed
+            self.sortOrder = sortOrder
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case text
+            case completed
+            case sortOrder = "sort_order"
+        }
+    }
+
+    public func updateChecklistItem(
+        _ itemId: String,
+        _ patch: UpdateChecklistItemInput
+    ) async throws -> JournalChecklistItemDTO {
+        struct Wrapper: Codable, Sendable { let item: JournalChecklistItemDTO }
+        let res: Wrapper = try await patchJSON(
+            path: "/api/journal/checklist/\(itemId)",
+            body: patch
+        )
+        return res.item
+    }
+
+    public func deleteChecklistItem(_ itemId: String) async throws {
+        let _: DeleteResult = try await deleteJSON(path: "/api/journal/checklist/\(itemId)")
+    }
+
+    // MARK: - Journal retrospective
+
+    /// `GET /api/journal/retrospective?on=MM-DD` — returns entries from
+    /// prior years on (or near) the anchor date. Used by the "this day
+    /// in your garden, N years ago" view.
+    public func journalRetrospective(on anchor: String) async throws -> RetrospectiveResponseDTO {
+        try await getJSON(
+            path: "/api/journal/retrospective",
+            query: [.init(name: "on", value: anchor)]
+        )
+    }
+
     // MARK: - Internals
 
     private struct EmptyBody: Encodable {}
