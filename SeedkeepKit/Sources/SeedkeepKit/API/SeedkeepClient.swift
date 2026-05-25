@@ -955,6 +955,96 @@ public actor SeedkeepClient {
         )
     }
 
+    // MARK: - Assistant (Phase 4 — Sprout)
+
+    /// List assistant threads (delta-sync friendly). `since=0` excludes
+    /// soft-deletes; any non-zero `since` includes them so clients purge.
+    public func assistantThreads(since: Int64 = 0, limit: Int? = nil) async throws -> AssistantThreadFeedDTO {
+        var components = URLComponents(string: "/assistant/threads")!
+        components.queryItems = deltaQuery(since: since, limit: limit)
+        return try await getJSON(path: components.url!.absoluteString)
+    }
+
+    public struct CreateAssistantThreadInput: Encodable, Sendable {
+        public let title: String?
+        public let threadKind: String?
+        public init(title: String? = nil, threadKind: String? = nil) {
+            self.title = title; self.threadKind = threadKind
+        }
+        enum CodingKeys: String, CodingKey {
+            case title; case threadKind = "thread_kind"
+        }
+    }
+
+    public func createAssistantThread(title: String = "", threadKind: String = "chat") async throws -> AssistantThreadDTO {
+        struct Wrapper: Decodable { let thread: AssistantThreadDTO }
+        let body = CreateAssistantThreadInput(
+            title: title.isEmpty ? nil : title,
+            threadKind: threadKind == "chat" ? nil : threadKind)
+        let r: Wrapper = try await postJSON(path: "/assistant/threads", body: body)
+        return r.thread
+    }
+
+    public func assistantThread(id: String) async throws -> AssistantThreadDetailDTO {
+        return try await getJSON(path: "/assistant/threads/\(id)")
+    }
+
+    public struct UpdateAssistantThreadInput: Encodable, Sendable {
+        public let title: String
+        public init(title: String) { self.title = title }
+    }
+
+    public func updateAssistantThread(_ id: String, title: String) async throws -> AssistantThreadDTO {
+        struct Wrapper: Decodable { let thread: AssistantThreadDTO }
+        let r: Wrapper = try await patchJSON(
+            path: "/assistant/threads/\(id)",
+            body: UpdateAssistantThreadInput(title: title))
+        return r.thread
+    }
+
+    public func deleteAssistantThread(_ id: String) async throws {
+        struct DeleteResp: Decodable { let id: String }
+        _ = try await deleteJSON(path: "/assistant/threads/\(id)") as DeleteResp
+    }
+
+    // ── Key management ─────────────────────────────────────────────────────
+
+    public struct SetAssistantKeyInput: Encodable, Sendable {
+        public let provider: String
+        public let key: String
+        public init(provider: String = "anthropic", key: String) {
+            self.provider = provider; self.key = key
+        }
+    }
+
+    public func setAssistantKey(provider: String = "anthropic", key: String) async throws -> AssistantKeyProviderStatus {
+        return try await sendJSON(
+            method: "PUT",
+            path: "/households/me/assistant_key",
+            body: SetAssistantKeyInput(provider: provider, key: key))
+    }
+
+    public func deleteAssistantKey(provider: String = "anthropic") async throws {
+        struct DeleteResp: Decodable { let provider: String; let configured: Bool }
+        var components = URLComponents(string: "/households/me/assistant_key")!
+        components.queryItems = [.init(name: "provider", value: provider)]
+        _ = try await deleteJSON(path: components.url!.absoluteString) as DeleteResp
+    }
+
+    public func assistantKeyStatus() async throws -> AssistantKeyStatusDTO {
+        return try await getJSON(path: "/households/me/assistant_key")
+    }
+
+    // ── Tool-call cancel (confirm + stream are in Task 2 because they stream SSE) ──
+
+    public func cancelAssistantToolCall(_ id: String) async throws -> AssistantToolCallDTO {
+        struct Wrapper: Decodable { let toolCall: AssistantToolCallDTO }
+        let r: Wrapper = try await postJSON(
+            path: "/assistant/tool_calls/\(id)/cancel",
+            body: EmptyBody())
+        return r.toolCall
+    }
+
     // MARK: - Internals
 
     private struct EmptyBody: Encodable {}
