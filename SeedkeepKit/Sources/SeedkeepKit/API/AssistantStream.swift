@@ -10,11 +10,13 @@ extension SeedkeepClient {
 
     /// Send a user message and stream Sprout's response.
     /// Yields `AssistantStreamEvent` values as the server emits them.
+    /// Async because SeedkeepClient is an actor — the call awaits the
+    /// actor's hop. The returned stream is independent of the actor.
     public func streamAssistantResponse(
         threadId: String,
         text: String,
         pageContext: AssistantPageContextPayload? = nil
-    ) -> AsyncThrowingStream<AssistantStreamEvent, Error> {
+    ) async -> AsyncThrowingStream<AssistantStreamEvent, Error> {
         return openSSE(
             path: "/assistant/threads/\(threadId)/stream",
             method: "POST",
@@ -26,7 +28,7 @@ extension SeedkeepClient {
     /// and resumes the LLM conversation in a fresh SSE stream.
     public func confirmAssistantToolCall(
         _ id: String
-    ) -> AsyncThrowingStream<AssistantStreamEvent, Error> {
+    ) async -> AsyncThrowingStream<AssistantStreamEvent, Error> {
         return openSSE(
             path: "/assistant/tool_calls/\(id)/confirm",
             method: "POST",

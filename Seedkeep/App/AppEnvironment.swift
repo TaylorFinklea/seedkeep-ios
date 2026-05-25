@@ -20,6 +20,7 @@ public final class AppEnvironment {
     public let sync: SyncEngine
     public let recommendations: RecommendationStore
     let journal: JournalStore
+    let assistant: AIAssistantCoordinator
     public let preferences: AppPreferences
     public let apiKeys: APIKeyStore
     public let subscriptions: SubscriptionManager
@@ -36,11 +37,13 @@ public final class AppEnvironment {
         let sync = SyncEngine(client: client, container: container)
         let recommendations = RecommendationStore(client: client, container: container)
         let journal = JournalStore(client: client, container: container)
+        let assistant = AIAssistantCoordinator(client: client, container: container)
+        assistant.wireSync(sync)
         let subscriptions = SubscriptionManager(client: client)
         return AppEnvironment(
             client: client, auth: auth, container: container,
             sync: sync, recommendations: recommendations,
-            journal: journal,
+            journal: journal, assistant: assistant,
             preferences: prefs, apiKeys: apiKeys,
             subscriptions: subscriptions
         )
@@ -53,6 +56,7 @@ public final class AppEnvironment {
         sync: SyncEngine,
         recommendations: RecommendationStore,
         journal: JournalStore,
+        assistant: AIAssistantCoordinator,
         preferences: AppPreferences,
         apiKeys: APIKeyStore,
         subscriptions: SubscriptionManager
@@ -63,6 +67,7 @@ public final class AppEnvironment {
         self.sync = sync
         self.recommendations = recommendations
         self.journal = journal
+        self.assistant = assistant
         self.preferences = preferences
         self.apiKeys = apiKeys
         self.subscriptions = subscriptions
