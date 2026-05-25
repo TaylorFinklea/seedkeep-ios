@@ -42,6 +42,7 @@ public final class SyncEngine {
             try await pullSeeds(householdID: householdID)
             try await pullBeds(householdID: householdID)
             try await pullPlantingEvents(householdID: householdID)
+            try await pullJournalEntries(householdID: householdID)
             try await flushPending()
             lastError = nil
         } catch let err as SeedkeepError {
@@ -107,6 +108,18 @@ public final class SyncEngine {
             try upsertPlantingEvents(page.items)
             since = page.cursor
             try saveCursor(householdID: householdID, kind: "planting_events", cursor: since)
+            if !page.has_more { break }
+        } while true
+    }
+
+    private func pullJournalEntries(householdID: String) async throws {
+        let cursor = currentCursor(householdID: householdID, kind: "journal_entries")
+        var since = cursor
+        repeat {
+            let page = try await client.journalFeed(since: since)
+            try upsertJournalEntries(page.items)
+            since = page.cursor
+            try saveCursor(householdID: householdID, kind: "journal_entries", cursor: since)
             if !page.has_more { break }
         } while true
     }
@@ -714,6 +727,46 @@ public final class SyncEngine {
             }
         }
         try context.save()
+    }
+
+    private func upsertJournalEntries(_ items: [JournalEntryDTO]) throws {
+        let context = ModelContext(container)
+        for dto in items {
+            let id = dto.id
+            let descriptor = FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == id })
+            if let existing = try context.fetch(descriptor).first {
+                if dto.deletedAt != nil {
+                    // Soft-delete server-side → hard-delete locally + clean
+                    // up orphaned children (photos + checklist items). Per
+                    // spec decision #6, children are owned strictly by the
+                    // parent and don't carry their own deleted_at — they
+                    // go away with the parent on the client.
+                    try cleanupJournalEntryChildren(entryID: existing.id, context: context)
+                    context.delete(existing)
+                } else {
+                    dto.apply(to: existing)
+                }
+            } else if dto.deletedAt == nil {
+                context.insert(dto.makeLocal())
+            }
+        }
+        try context.save()
+    }
+
+    /// Hard-delete local journal photos + checklist items for an entry whose
+    /// parent is going away. Called when a journal entry is soft-deleted on
+    /// the server and we're hard-deleting it locally.
+    private func cleanupJournalEntryChildren(entryID: String, context: ModelContext) throws {
+        let photoDescriptor = FetchDescriptor<LocalJournalEntryPhoto>(
+            predicate: #Predicate { $0.entryID == entryID })
+        for photo in try context.fetch(photoDescriptor) {
+            context.delete(photo)
+        }
+        let itemDescriptor = FetchDescriptor<LocalJournalChecklistItem>(
+            predicate: #Predicate { $0.entryID == entryID })
+        for item in try context.fetch(itemDescriptor) {
+            context.delete(item)
+        }
     }
 
     /// Refreshes a seed's photo rows from `GET /api/seeds/:id`. Used after
