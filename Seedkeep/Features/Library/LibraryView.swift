@@ -36,6 +36,7 @@ struct LibraryView: View {
             .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.large)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search seeds")
+            .publishesAssistantContext(pageType: "library")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
@@ -45,6 +46,7 @@ struct LibraryView: View {
                     }
                     .accessibilityLabel("Library options")
                 }
+                ToolbarItem(placement: .topBarTrailing) { TopBarSparkleButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingScan = true

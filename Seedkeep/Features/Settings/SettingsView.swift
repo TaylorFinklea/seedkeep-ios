@@ -40,6 +40,14 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Sprout (AI assistant)") {
+                    NavigationLink {
+                        AssistantKeySettingsView()
+                    } label: {
+                        Label("AI assistant key", systemImage: "sparkles")
+                    }
+                }
+
                 Section("Backend") {
                     NavigationLink {
                         ServerSettingsView()

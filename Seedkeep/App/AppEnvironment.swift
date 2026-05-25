@@ -25,6 +25,15 @@ public final class AppEnvironment {
     public let apiKeys: APIKeyStore
     public let subscriptions: SubscriptionManager
 
+    /// Lets feature views request a tab switch (e.g. TopBarSparkleButton →
+    /// Assistant). MainTabView observes this and binds it to the TabView's
+    /// selection. nil means leave whatever's current.
+    public var requestedTab: AppTab?
+
+    public enum AppTab: Hashable {
+        case library, garden, journal, random, assistant, settings, you
+    }
+
     public static func live() -> AppEnvironment {
         let bundleDefaultURL = Self.resolveBundleDefaultURL()
         let prefs = AppPreferences(bundleDefaultURL: bundleDefaultURL)

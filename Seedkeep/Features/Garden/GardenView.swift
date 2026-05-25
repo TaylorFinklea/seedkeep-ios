@@ -41,6 +41,7 @@ struct GardenView: View {
                 }
             }
             .navigationTitle("Garden")
+            .publishesAssistantContext(pageType: "garden")
             .navigationDestination(for: String.self) { bedID in
                 BedDetailView(bedID: bedID)
             }
@@ -53,6 +54,7 @@ struct GardenView: View {
                     }
                     .accessibilityLabel("What to plant")
                 }
+                ToolbarItem(placement: .topBarTrailing) { TopBarSparkleButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showAddBed = true
