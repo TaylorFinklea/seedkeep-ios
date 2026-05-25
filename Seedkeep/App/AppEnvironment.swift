@@ -139,6 +139,10 @@ public final class AppEnvironment {
             LocalJournalEntry.self,
             LocalJournalEntryPhoto.self,
             LocalJournalChecklistItem.self,
+            LocalAssistantThread.self,
+            LocalAssistantMessage.self,
+            LocalAssistantToolCall.self,
+            LocalAssistantKeyStatus.self,
         ])
         let config = ModelConfiguration("seedkeep", schema: schema)
         do {

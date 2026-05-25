@@ -270,3 +270,60 @@ extension JournalChecklistItemDTO {
         local.updatedAt = updatedAt
     }
 }
+
+// MARK: - Assistant (Phase 4)
+
+extension AssistantThreadDTO {
+    func makeLocal() -> LocalAssistantThread {
+        LocalAssistantThread(
+            id: id, householdID: householdId, title: title, threadKind: threadKind,
+            createdAt: createdAt, updatedAt: updatedAt, deletedAt: deletedAt)
+    }
+    func apply(to local: LocalAssistantThread) {
+        local.householdID = householdId
+        local.title = title
+        local.threadKind = threadKind
+        local.createdAt = createdAt
+        local.updatedAt = updatedAt
+        local.deletedAt = deletedAt
+    }
+}
+
+extension AssistantMessageDTO {
+    func makeLocal() -> LocalAssistantMessage {
+        LocalAssistantMessage(
+            id: id, threadID: threadId, role: role, contentJSON: contentJson,
+            pageContext: pageContext, model: model, usageJSON: usageJson, createdAt: createdAt)
+    }
+    func apply(to local: LocalAssistantMessage) {
+        local.threadID = threadId
+        local.role = role
+        local.contentJSON = contentJson
+        local.pageContext = pageContext
+        local.model = model
+        local.usageJSON = usageJson
+        local.createdAt = createdAt
+    }
+}
+
+extension AssistantToolCallDTO {
+    func makeLocal() -> LocalAssistantToolCall {
+        LocalAssistantToolCall(
+            id: id, messageID: messageId, threadID: threadId, toolName: toolName,
+            argsJSON: argsJson, status: status, resultJSON: resultJson,
+            proposedChangeJSON: proposedChangeJson, confirmedAt: confirmedAt,
+            createdAt: createdAt, updatedAt: updatedAt)
+    }
+    func apply(to local: LocalAssistantToolCall) {
+        local.messageID = messageId
+        local.threadID = threadId
+        local.toolName = toolName
+        local.argsJSON = argsJson
+        local.status = status
+        local.resultJSON = resultJson
+        local.proposedChangeJSON = proposedChangeJson
+        local.confirmedAt = confirmedAt
+        local.createdAt = createdAt
+        local.updatedAt = updatedAt
+    }
+}
