@@ -43,6 +43,7 @@ public final class SyncEngine {
             try await pullBeds(householdID: householdID)
             try await pullPlantingEvents(householdID: householdID)
             try await pullJournalEntries(householdID: householdID)
+            try await pullAssistantThreads(householdID: householdID)
             try await flushPending()
             lastError = nil
         } catch let err as SeedkeepError {
@@ -120,6 +121,18 @@ public final class SyncEngine {
             try upsertJournalEntries(page.items)
             since = page.cursor
             try saveCursor(householdID: householdID, kind: "journal_entries", cursor: since)
+            if !page.has_more { break }
+        } while true
+    }
+
+    private func pullAssistantThreads(householdID: String) async throws {
+        let cursor = currentCursor(householdID: householdID, kind: "assistant_threads")
+        var since = cursor
+        repeat {
+            let page = try await client.assistantThreads(since: since)
+            try upsertAssistantThreads(page.items)
+            since = page.cursor
+            try saveCursor(householdID: householdID, kind: "assistant_threads", cursor: since)
             if !page.has_more { break }
         } while true
     }
@@ -767,6 +780,70 @@ public final class SyncEngine {
         for item in try context.fetch(itemDescriptor) {
             context.delete(item)
         }
+    }
+
+    private func upsertAssistantThreads(_ items: [AssistantThreadDTO]) throws {
+        let context = ModelContext(container)
+        for dto in items {
+            let id = dto.id
+            let descriptor = FetchDescriptor<LocalAssistantThread>(predicate: #Predicate { $0.id == id })
+            if let existing = try context.fetch(descriptor).first {
+                if dto.deletedAt != nil {
+                    // Soft-delete server-side → hard-delete locally + cascade
+                    // children (messages, tool calls). Per spec, messages are
+                    // append-only and tear down with the parent.
+                    try cleanupAssistantThreadChildren(threadID: existing.id, context: context)
+                    context.delete(existing)
+                } else {
+                    dto.apply(to: existing)
+                }
+            } else if dto.deletedAt == nil {
+                context.insert(dto.makeLocal())
+            }
+        }
+        try context.save()
+    }
+
+    /// Hard-delete local assistant messages + tool calls for a thread that's
+    /// being soft-deleted server-side. Per the Phase 4 spec, messages are
+    /// append-only and don't have their own deleted_at — they're owned by
+    /// the thread.
+    private func cleanupAssistantThreadChildren(threadID: String, context: ModelContext) throws {
+        let messageDescriptor = FetchDescriptor<LocalAssistantMessage>(
+            predicate: #Predicate { $0.threadID == threadID })
+        for message in try context.fetch(messageDescriptor) {
+            context.delete(message)
+        }
+        let toolDescriptor = FetchDescriptor<LocalAssistantToolCall>(
+            predicate: #Predicate { $0.threadID == threadID })
+        for tool in try context.fetch(toolDescriptor) {
+            context.delete(tool)
+        }
+    }
+
+    /// Refresh a single thread's messages + tool calls from the detail route.
+    /// Called by AssistantThreadView on appear so cross-device updates land
+    /// without waiting for the next syncAll sweep.
+    public func refreshAssistantThread(_ threadID: String) async throws {
+        let detail = try await client.assistantThread(id: threadID)
+        let context = ModelContext(container)
+        // Update the thread row too in case its updated_at changed.
+        try upsertAssistantThreads([detail.thread])
+        // Upsert every message + tool call we got. The server is the source
+        // of truth for both; if a local row exists, apply; else insert.
+        for dto in detail.messages {
+            let id = dto.id
+            let d = FetchDescriptor<LocalAssistantMessage>(predicate: #Predicate { $0.id == id })
+            if let existing = try context.fetch(d).first { dto.apply(to: existing) }
+            else { context.insert(dto.makeLocal()) }
+        }
+        for dto in detail.toolCalls {
+            let id = dto.id
+            let d = FetchDescriptor<LocalAssistantToolCall>(predicate: #Predicate { $0.id == id })
+            if let existing = try context.fetch(d).first { dto.apply(to: existing) }
+            else { context.insert(dto.makeLocal()) }
+        }
+        try context.save()
     }
 
     /// Refreshes a seed's photo rows from `GET /api/seeds/:id`. Used after
