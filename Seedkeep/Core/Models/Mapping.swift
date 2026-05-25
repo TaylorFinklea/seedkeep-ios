@@ -193,3 +193,80 @@ extension PlantingEventDTO {
         local.deletedAt = deleted_at
     }
 }
+
+// MARK: - JournalEntry
+
+extension JournalEntryDTO {
+    func makeLocal() -> LocalJournalEntry {
+        LocalJournalEntry(
+            id: id,
+            householdID: householdId,
+            occurredOn: occurredOn,
+            body: body,
+            seedID: seedId,
+            bedID: bedId,
+            plantingEventID: plantingEventId,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt
+        )
+    }
+
+    func apply(to local: LocalJournalEntry) {
+        local.householdID = householdId
+        local.occurredOn = occurredOn
+        local.body = body
+        local.seedID = seedId
+        local.bedID = bedId
+        local.plantingEventID = plantingEventId
+        local.createdAt = createdAt
+        local.updatedAt = updatedAt
+        local.deletedAt = deletedAt
+    }
+}
+
+extension JournalEntryPhotoDTO {
+    func makeLocal() -> LocalJournalEntryPhoto {
+        LocalJournalEntryPhoto(
+            id: id,
+            entryID: entryId,
+            storageKey: storageKey,
+            sortOrder: sortOrder,
+            width: width,
+            height: height,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    func apply(to local: LocalJournalEntryPhoto) {
+        local.entryID = entryId
+        local.storageKey = storageKey
+        local.sortOrder = sortOrder
+        local.width = width
+        local.height = height
+        local.createdAt = createdAt
+        local.updatedAt = updatedAt
+    }
+}
+
+extension JournalChecklistItemDTO {
+    func makeLocal() -> LocalJournalChecklistItem {
+        LocalJournalChecklistItem(
+            id: id,
+            entryID: entryId,
+            text: text,
+            completed: completed,
+            sortOrder: sortOrder,
+            updatedAt: updatedAt
+        )
+    }
+
+    func apply(to local: LocalJournalChecklistItem) {
+        local.entryID = entryId
+        local.text = text
+        local.completed = completed
+        local.sortOrder = sortOrder
+        local.updatedAt = updatedAt
+    }
+}
