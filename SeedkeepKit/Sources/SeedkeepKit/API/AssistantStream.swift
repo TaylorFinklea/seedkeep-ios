@@ -18,7 +18,7 @@ extension SeedkeepClient {
         pageContext: AssistantPageContextPayload? = nil
     ) async -> AsyncThrowingStream<AssistantStreamEvent, Error> {
         return openSSE(
-            path: "/assistant/threads/\(threadId)/stream",
+            path: "/api/assistant/threads/\(threadId)/stream",
             method: "POST",
             body: StreamRequestBody(text: text, pageContext: pageContext)
         )
@@ -30,7 +30,7 @@ extension SeedkeepClient {
         _ id: String
     ) async -> AsyncThrowingStream<AssistantStreamEvent, Error> {
         return openSSE(
-            path: "/assistant/tool_calls/\(id)/confirm",
+            path: "/api/assistant/tool_calls/\(id)/confirm",
             method: "POST",
             body: EmptyStreamBody()
         )
