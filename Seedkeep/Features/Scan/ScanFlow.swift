@@ -73,12 +73,12 @@ struct ScanFlow: View {
 
     private var navTitle: String {
         switch phase {
-        case .scanning: return "Scan"
-        case .lookingUp: return "Looking up…"
-        case .captureFront: return "Capture front"
-        case .promptForBack: return "Capture back"
-        case .extracting: return "Extracting…"
-        case .error: return "Scan failed"
+        case .scanning: return "Scriptorium"
+        case .lookingUp: return "Reading…"
+        case .captureFront: return "Front of the packet"
+        case .promptForBack: return "Back of the packet"
+        case .extracting: return "Reading…"
+        case .error: return "Could not read"
         }
     }
 
@@ -395,46 +395,76 @@ struct ScanFlow: View {
 
 // MARK: - Overlays
 
+// MARK: - Camera overlays
+//
+// These sit on top of the live camera feed (dark + photographic), so
+// chrome stays dark/black to keep prompts readable over arbitrary
+// scenes. The herbarium typography (IM Fell SC small-caps for headers,
+// Spectral italic for prompts) carries the design language without
+// breaking legibility.
+
 private struct ScanningOverlay: View {
     let onCaptureWithoutBarcode: () -> Void
 
     var body: some View {
         VStack {
             Spacer()
-            HStack {
-                Spacer()
-                ScanReticle()
-                Spacer()
-            }
+            ScanReticle()
             Spacer()
-            VStack(spacing: 12) {
-                Text("Point at the barcode on the seed packet")
-                    .font(.callout)
+            VStack(spacing: 14) {
+                Text("READ THE BARCODE")
+                    .font(HerbFont.smallCaps(size: 11))
+                    .tracking(2)
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
                     .background(.black.opacity(0.6), in: .capsule)
                 Button {
                     onCaptureWithoutBarcode()
                 } label: {
-                    Text("No barcode? Capture front photo")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(.regularMaterial, in: .capsule)
+                    Text("No barcode — read the front")
+                        .font(HerbFont.bodyItalic(size: 14))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 11)
+                        .background(.black.opacity(0.55), in: .capsule)
                 }
             }
-            .padding(.bottom, 32)
+            .padding(.bottom, 36)
         }
     }
 }
 
+/// Reticle as four corner brackets — reads as a scholar's viewfinder
+/// rather than a generic rounded rectangle.
 private struct ScanReticle: View {
     var body: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(.white.opacity(0.9), lineWidth: 3)
-            .frame(width: 260, height: 160)
-            .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+        ZStack {
+            ForEach(0..<4, id: \.self) { corner in
+                CornerBracket()
+                    .stroke(.white.opacity(0.92), lineWidth: 2.5)
+                    .frame(width: 24, height: 24)
+                    .rotationEffect(.degrees(Double(corner) * 90))
+                    .offset(
+                        x: (corner == 1 || corner == 2) ? 130 : -130,
+                        y: (corner >= 2) ? 80 : -80
+                    )
+            }
+        }
+        .frame(width: 280, height: 180)
+        .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+    }
+}
+
+/// L-shape bracket facing into the reticle's upper-left corner. Rotations
+/// + offsets paint the other three corners.
+private struct CornerBracket: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: 0, y: rect.height))
+        p.addLine(to: CGPoint(x: 0, y: 0))
+        p.addLine(to: CGPoint(x: rect.width, y: 0))
+        return p
     }
 }
 
@@ -446,12 +476,18 @@ private struct FrontPromptOverlay: View {
     var body: some View {
         VStack {
             Spacer()
-            VStack(spacing: 12) {
+            VStack(spacing: 14) {
                 if let barcode {
                     VStack(spacing: 4) {
-                        Label("Barcode captured", systemImage: "checkmark.circle.fill")
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.white)
+                        HStack(spacing: 6) {
+                            Text("✓")
+                                .font(.system(size: 14))
+                                .foregroundStyle(HerbColor.verdictNow)
+                            Text("BARCODE READ")
+                                .font(HerbFont.smallCaps(size: 10))
+                                .tracking(1.5)
+                                .foregroundStyle(.white)
+                        }
                         Text(barcode)
                             .font(.caption.monospaced())
                             .foregroundStyle(.white.opacity(0.85))
@@ -460,33 +496,35 @@ private struct FrontPromptOverlay: View {
                     .padding(.vertical, 10)
                     .background(.black.opacity(0.6), in: .capsule)
                 }
-                Text("This packet is new — take a front photo so we can extract details.")
-                    .font(.callout.weight(.medium))
+                Text("New packet — read the front to extract details.")
+                    .font(HerbFont.bodyItalic(size: 14))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
                     .background(.black.opacity(0.6), in: .capsule)
                 HStack(spacing: 12) {
                     Button(role: .cancel) { onCancel() } label: {
                         Text("Restart")
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(.regularMaterial, in: .capsule)
-                    }
-                    Button {
-                        onCaptureFront()
-                    } label: {
-                        Text("Capture front")
-                            .font(.headline)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 12)
-                            .background(.tint, in: .capsule)
+                            .font(HerbFont.smallCaps(size: 11))
+                            .tracking(1.5)
                             .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .background(.black.opacity(0.55), in: .capsule)
+                    }
+                    Button { onCaptureFront() } label: {
+                        Text("READ FRONT")
+                            .font(HerbFont.smallCaps(size: 12))
+                            .tracking(2)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 13)
+                            .background(HerbColor.sepia, in: .capsule)
                     }
                 }
             }
-            .padding(.bottom, 32)
+            .padding(.bottom, 36)
         }
     }
 }
@@ -498,34 +536,36 @@ private struct BackPromptOverlay: View {
     var body: some View {
         VStack {
             Spacer()
-            VStack(spacing: 12) {
-                Text("Now flip the packet over and capture the back")
-                    .font(.callout.weight(.medium))
+            VStack(spacing: 14) {
+                Text("Now the back — flip the packet over.")
+                    .font(HerbFont.bodyItalic(size: 14))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
                     .background(.black.opacity(0.6), in: .capsule)
                 HStack(spacing: 12) {
                     Button(role: .cancel) { onCancel() } label: {
                         Text("Restart")
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(.regularMaterial, in: .capsule)
-                    }
-                    Button {
-                        onCaptureBack()
-                    } label: {
-                        Text("Capture back")
-                            .font(.headline)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 12)
-                            .background(.tint, in: .capsule)
+                            .font(HerbFont.smallCaps(size: 11))
+                            .tracking(1.5)
                             .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .background(.black.opacity(0.55), in: .capsule)
+                    }
+                    Button { onCaptureBack() } label: {
+                        Text("READ BACK")
+                            .font(HerbFont.smallCaps(size: 12))
+                            .tracking(2)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 13)
+                            .background(HerbColor.sepia, in: .capsule)
                     }
                 }
             }
-            .padding(.bottom, 32)
+            .padding(.bottom, 36)
         }
     }
 }
@@ -535,22 +575,26 @@ private struct StatusOverlay: View {
     let subtitle: String
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             ProgressView()
                 .progressViewStyle(.circular)
                 .controlSize(.large)
                 .tint(.white)
-            Text(title)
-                .font(.headline)
+            Text(title.uppercased())
+                .font(HerbFont.smallCaps(size: 13))
+                .tracking(2)
                 .foregroundStyle(.white)
             Text(subtitle)
-                .font(.footnote)
+                .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(.white.opacity(0.85))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
         }
         .padding(28)
-        .background(.black.opacity(0.55), in: .rect(cornerRadius: 18))
+        .background(.black.opacity(0.6), in: .rect(cornerRadius: 4))
+        .overlay(
+            Rectangle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+        )
     }
 }
 
@@ -559,20 +603,32 @@ private struct ErrorOverlay: View {
     let onRetry: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .font(.largeTitle)
-            Text(message)
-                .font(.callout)
+        VStack(spacing: 14) {
+            Text("⚠")
+                .font(.system(size: 32))
+                .foregroundStyle(HerbColor.ochre)
+            Text("COULD NOT READ")
+                .font(HerbFont.smallCaps(size: 12))
+                .tracking(2)
                 .foregroundStyle(.white)
+            Text(message)
+                .font(HerbFont.bodyItalic(size: 13))
+                .foregroundStyle(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
-            Button("Try again", action: onRetry)
-                .buttonStyle(.borderedProminent)
+            Button { onRetry() } label: {
+                Text("TRY AGAIN")
+                    .font(HerbFont.smallCaps(size: 11))
+                    .tracking(2)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 11)
+                    .background(HerbColor.sepia, in: .capsule)
+            }
         }
-        .padding(20)
-        .background(.black.opacity(0.65), in: .rect(cornerRadius: 18))
+        .padding(24)
+        .background(.black.opacity(0.7), in: .rect(cornerRadius: 4))
+        .overlay(Rectangle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
         .padding(.horizontal, 32)
     }
 }

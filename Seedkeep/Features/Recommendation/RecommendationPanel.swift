@@ -56,36 +56,35 @@ struct RecommendationPanel: View {
     private func verdictBadge(for rec: LocalRecommendation) -> some View {
         let effectiveVerdict = refined?.verdict ?? rec.verdict
         let info = VerdictInfo(raw: effectiveVerdict)
-        return HStack(spacing: 6) {
-            if effectiveVerdict == "unknown" {
-                // Dashed-border treatment for unknown state
-                Text(info.label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(info.foregroundColor)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(
-                                info.foregroundColor.opacity(0.6),
-                                style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
-                            )
-                    )
-            } else {
-                Text(info.label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(info.foregroundColor)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(info.backgroundColor, in: .capsule)
-            }
+        let herbColor = herbVerdictColor(for: effectiveVerdict)
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(herbColor)
+                .frame(width: 9, height: 9)
+            Text(info.label)
+                .font(HerbFont.smallCaps(size: 11))
+                .tracking(1.4)
+                .foregroundStyle(HerbColor.ink)
+                .textCase(.uppercase)
             Spacer()
-            // Confidence indicator — only show when data is from AI/server
             if rec.source == "ai" {
-                Label("AI", systemImage: "sparkles")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Text("✦ AI")
+                    .font(HerbFont.smallCaps(size: 9))
+                    .tracking(1.2)
+                    .foregroundStyle(HerbColor.sepia)
+                    .textCase(.uppercase)
             }
+        }
+    }
+
+    private func herbVerdictColor(for raw: String) -> Color {
+        switch raw {
+        case "plant_now":  return HerbColor.verdictNow
+        case "plant_soon": return HerbColor.verdictSoon
+        case "too_early":  return HerbColor.verdictEarly
+        case "late":       return HerbColor.verdictClose
+        case "too_late":   return HerbColor.verdictMiss
+        default:           return HerbColor.inkFaint
         }
     }
 
@@ -93,38 +92,36 @@ struct RecommendationPanel: View {
 
     @ViewBuilder
     private func windowDates(for rec: LocalRecommendation) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             if let start = rec.rangeStart, let end = rec.rangeEnd {
                 let startStr = formattedDate(start) ?? start
                 let endStr = formattedDate(end) ?? end
-                Label {
-                    Text("Outdoor window: \(startStr) – \(endStr)")
-                        .font(.subheadline)
-                } icon: {
-                    Image(systemName: "calendar")
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("OUTDOOR")
+                        .font(HerbFont.smallCaps(size: 9))
+                        .tracking(1.4)
+                        .foregroundStyle(HerbColor.sepia)
+                    Text("\(startStr) – \(endStr)")
+                        .font(HerbFont.bodyItalic(size: 13))
+                        .foregroundStyle(HerbColor.ink)
                 }
             } else if rec.rangeStart == nil && rec.rangeEnd == nil {
-                Label {
-                    Text("No outdoor window computed")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } icon: {
-                    Image(systemName: "calendar.badge.minus")
-                        .foregroundStyle(.secondary)
-                }
+                Text("No outdoor window computed")
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
 
             if let iStart = rec.indoorStart, let iEnd = rec.indoorEnd {
                 let iStartStr = formattedDate(iStart) ?? iStart
                 let iEndStr = formattedDate(iEnd) ?? iEnd
-                Label {
-                    Text("Start indoors: \(iStartStr) – \(iEndStr)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } icon: {
-                    Image(systemName: "house")
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("INDOORS")
+                        .font(HerbFont.smallCaps(size: 9))
+                        .tracking(1.4)
+                        .foregroundStyle(HerbColor.sepia)
+                    Text("\(iStartStr) – \(iEndStr)")
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.inkSoft)
                 }
             }
         }
@@ -149,16 +146,19 @@ struct RecommendationPanel: View {
             // Date axis labels
             HStack {
                 Text(shortDate(anchorStr) ?? "Today")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(HerbFont.smallCaps(size: 8))
+                    .tracking(1.2)
+                    .foregroundStyle(HerbColor.sepia)
                 Spacer()
-                Text("+30d")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                Text("+30D")
+                    .font(HerbFont.smallCaps(size: 8))
+                    .tracking(1.2)
+                    .foregroundStyle(HerbColor.sepia)
                 Spacer()
-                Text("+60d")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                Text("+60D")
+                    .font(HerbFont.smallCaps(size: 8))
+                    .tracking(1.2)
+                    .foregroundStyle(HerbColor.sepia)
             }
         }
     }
@@ -168,13 +168,13 @@ struct RecommendationPanel: View {
     @ViewBuilder
     private var weatherNoteRow: some View {
         if let note = refined?.weatherNote {
-            Label {
+            HStack(alignment: .top, spacing: 8) {
+                Text("☁")
+                    .font(.system(size: 12))
+                    .foregroundStyle(HerbColor.sepia)
                 Text(note)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } icon: {
-                Image(systemName: "cloud.sun")
-                    .foregroundStyle(.tint)
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
         }
     }
@@ -185,8 +185,8 @@ struct RecommendationPanel: View {
     private func reasoningRow(for rec: LocalRecommendation) -> some View {
         if let reasoning = rec.reasoning, !reasoning.isEmpty {
             Text(reasoning)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(HerbFont.bodyItalic(size: 11))
+                .foregroundStyle(HerbColor.inkSoft)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -194,13 +194,11 @@ struct RecommendationPanel: View {
     // MARK: - Loading placeholder
 
     private var loadingPlaceholder: some View {
-        Label {
-            Text("Loading planting window…")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        } icon: {
-            ProgressView()
-                .controlSize(.small)
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small).tint(HerbColor.sepia)
+            Text("Reading the planting window…")
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
         }
     }
 
@@ -228,19 +226,21 @@ struct RecommendationPanel: View {
     // MARK: - No-location variant
 
     /// Lightweight static view: shown when `RecommendationStore.needsHomeLocation`
-    /// is true.  Callers pick which variant to display.
+    /// is true. Callers pick which variant to display.
     static var needsLocation: some View {
-        Label {
+        HStack(alignment: .top, spacing: 10) {
+            Text("⊘")
+                .font(.system(size: 14))
+                .foregroundStyle(HerbColor.ochre)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Location required")
-                    .font(.subheadline.weight(.semibold))
-                Text("Set your garden location to get planting recommendations. Go to **Settings → Home location**.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Text("LOCATION REQUIRED")
+                    .font(HerbFont.smallCaps(size: 10))
+                    .tracking(1.5)
+                    .foregroundStyle(HerbColor.ink)
+                Text("Set your garden location in Settings → Home location to see planting windows.")
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
-        } icon: {
-            Image(systemName: "location.slash")
-                .foregroundStyle(.orange)
         }
     }
 }
