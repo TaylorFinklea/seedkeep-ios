@@ -28,50 +28,55 @@ struct AssistantThreadView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(messages) { message in
-                            MessageBubble(
-                                message: message,
-                                toolCalls: toolCalls.filter { $0.messageID == message.id },
-                                onConfirmTool: { id in
-                                    Task { await confirm(toolCallID: id) }
-                                },
-                                onCancelTool: { id in
-                                    Task { await cancel(toolCallID: id) }
-                                }
-                            )
-                            .id(message.id)
-                        }
-                        if isStreaming {
-                            HStack {
-                                ProgressView().controlSize(.small)
-                                Text("Sprout is thinking…")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
+        ZStack {
+            VellumBackground()
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(messages) { message in
+                                MessageBubble(
+                                    message: message,
+                                    toolCalls: toolCalls.filter { $0.messageID == message.id },
+                                    onConfirmTool: { id in
+                                        Task { await confirm(toolCallID: id) }
+                                    },
+                                    onCancelTool: { id in
+                                        Task { await cancel(toolCallID: id) }
+                                    }
+                                )
+                                .id(message.id)
                             }
-                            .padding(.horizontal)
+                            if isStreaming {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small).tint(HerbColor.sepia)
+                                    Text("Sprout is composing…")
+                                        .font(HerbFont.bodyItalic(size: 12))
+                                        .foregroundStyle(HerbColor.inkSoft)
+                                }
+                                .padding(.horizontal)
+                            }
                         }
+                        .padding(.vertical, 12)
                     }
-                    .padding(.vertical, 12)
+                    .onChange(of: messages.count) { _, _ in
+                        if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
                 }
-                .onChange(of: messages.count) { _, _ in
-                    if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.rose)
+                        .padding(.horizontal)
                 }
+
+                Rectangle()
+                    .fill(HerbColor.inkFaint)
+                    .frame(height: 0.5)
+
+                composer
             }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal)
-            }
-
-            Divider()
-
-            composer
         }
         .navigationTitle("Sprout")
         .navigationBarTitleDisplayMode(.inline)
@@ -89,22 +94,28 @@ struct AssistantThreadView: View {
     @ViewBuilder
     private var composer: some View {
         let canSend = !composerText.trimmingCharacters(in: .whitespaces).isEmpty && !isStreaming
-        HStack(alignment: .bottom) {
+        HStack(alignment: .bottom, spacing: 8) {
             TextField("Ask Sprout…", text: $composerText, axis: .vertical)
+                .font(HerbFont.handwritten(size: 17))
                 .lineLimit(1...5)
-                .textFieldStyle(.roundedBorder)
+                .padding(8)
+                .background(HerbColor.vellumHi)
+                .overlay(
+                    Rectangle()
+                        .strokeBorder(HerbColor.inkFaint, lineWidth: 0.5)
+                )
             Button {
                 Task { await send() }
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 28))
-                    .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(canSend ? HerbColor.sepia : HerbColor.inkFaint)
             }
             .disabled(!canSend)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-        .background(.thinMaterial)
+        .background(HerbColor.vellumLo.opacity(0.5))
     }
 
     private var isStreaming: Bool {

@@ -37,8 +37,28 @@ struct BedDetailView: View {
     var body: some View {
         Group {
             if let bed = beds.first {
-                Form {
-                    layoutSection(bed)
+                ZStack {
+                    VellumBackground()
+                    Form {
+                        Section {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Plot · the abbey grounds")
+                                    .font(HerbFont.smallCaps(size: 10))
+                                    .tracking(2)
+                                    .foregroundStyle(HerbColor.sepia)
+                                    .textCase(.uppercase)
+                                Text(bed.name)
+                                    .font(HerbFont.display(size: 30))
+                                    .foregroundStyle(HerbColor.ink)
+                                Text(formatDims(bed) ?? "—")
+                                    .font(HerbFont.bodyItalic(size: 12))
+                                    .foregroundStyle(HerbColor.inkSoft)
+                            }
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                            .listRowSeparator(.hidden)
+                        }
+                        layoutSection(bed)
                     Section("Bed") {
                         LabeledContent("Name", value: bed.name)
                         if let desc = bed.bedDescription, !desc.isEmpty {
@@ -67,6 +87,8 @@ struct BedDetailView: View {
                     } footer: {
                         Text("Deleting a bed unlinks its planting events; the events themselves stick around so harvest history isn't lost.")
                     }
+                    }
+                    .scrollContentBackground(.hidden)
                 }
                 .navigationTitle(bed.name)
                 .navigationBarTitleDisplayMode(.inline)

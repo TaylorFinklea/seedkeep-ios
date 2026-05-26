@@ -23,27 +23,41 @@ struct AssistantView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            List {
-                if !appEnv.assistant.keyConfigured {
-                    emptyKeyState
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                } else if threads.isEmpty {
-                    starterPromptsList
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                } else {
-                    ForEach(threads) { thread in
-                        NavigationLink(value: thread.id) {
-                            threadRow(thread)
-                        }
+            ZStack {
+                VellumBackground()
+                List {
+                    Section {
+                        headingBlock
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
                     }
-                    .onDelete(perform: deleteThreads)
+                    if !appEnv.assistant.keyConfigured {
+                        emptyKeyState
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    } else if threads.isEmpty {
+                        starterPromptsList
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    } else {
+                        ForEach(threads) { thread in
+                            NavigationLink(value: thread.id) {
+                                threadRow(thread)
+                            }
+                            .listRowBackground(Color.clear)
+                        }
+                        .onDelete(perform: deleteThreads)
+                    }
+                    if let errorMessage {
+                        Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) }
+                            .listRowBackground(Color.clear)
+                    }
                 }
-                if let errorMessage {
-                    Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) }
-                }
+                .scrollContentBackground(.hidden)
+                .listStyle(.plain)
             }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationTitle("Sprout")
             .navigationDestination(for: String.self) { id in
                 AssistantThreadView(threadID: id)
@@ -71,16 +85,34 @@ struct AssistantView: View {
     // MARK: - Subviews
 
     @ViewBuilder
+    private var headingBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FolioStrip(section: "Scriptorium", folio: max(threads.count, 1))
+                .padding(.horizontal, -16)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Sprout")
+                    .font(HerbFont.display(size: 38))
+                    .foregroundStyle(HerbColor.ink)
+                Text("The household scribe · \(HerbRomanNumeral.string(for: threads.count)) correspondences")
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
+            }
+            ScholarRule(verticalMargin: 8)
+        }
+    }
+
+    @ViewBuilder
     private var emptyKeyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "key.slash")
                 .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("Sprout needs your Anthropic key")
-                .font(.headline)
-            Text("Open Settings → AI Assistant and paste your Anthropic API key. Sprout will use it to read your garden data and help you plan.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(HerbColor.sepia.opacity(0.65))
+            Text("Sprout awaits a key")
+                .font(HerbFont.display(size: 22))
+                .foregroundStyle(HerbColor.ink)
+            Text("Open Settings → AI Assistant and paste your Anthropic API key. Sprout will then read your garden and help you plan.")
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
                 .multilineTextAlignment(.center)
         }
         .padding(.vertical, 48)
@@ -89,18 +121,9 @@ struct AssistantView: View {
 
     @ViewBuilder
     private var starterPromptsList: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.tint)
-                Text("Ask Sprout anything")
-                    .font(.title2.weight(.semibold))
-                Text("A few ideas to get started:")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.bottom, 8)
+        VStack(alignment: .leading, spacing: 10) {
+            Rubric(text: "to begin", number: 1)
+                .padding(.bottom, 4)
 
             ForEach(Self.starterPrompts, id: \.self) { prompt in
                 Button {
@@ -108,31 +131,46 @@ struct AssistantView: View {
                 } label: {
                     HStack {
                         Text(prompt)
+                            .font(HerbFont.bodyItalic(size: 13))
+                            .foregroundStyle(HerbColor.ink)
                             .multilineTextAlignment(.leading)
-                            .foregroundStyle(.primary)
                         Spacer()
-                        Image(systemName: "arrow.right.circle")
-                            .foregroundStyle(.tint)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 11))
+                            .foregroundStyle(HerbColor.sepia)
                     }
-                    .padding()
-                    .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
+                    .padding(12)
+                    .background(HerbColor.vellumHi)
+                    .overlay(
+                        Rectangle()
+                            .strokeBorder(HerbColor.inkFaint, lineWidth: 0.5)
+                    )
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 24)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
     private func threadRow(_ thread: LocalAssistantThread) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(thread.title.isEmpty ? "Untitled" : thread.title)
-                .font(.body)
-                .lineLimit(1)
-            Text(Self.formatDate(thread.updatedAt))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 12) {
+            Text("✦")
+                .font(HerbFont.smallCaps(size: 11))
+                .foregroundStyle(HerbColor.sepia)
+                .frame(width: 14)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                    .font(HerbFont.body(size: 14))
+                    .foregroundStyle(HerbColor.ink)
+                    .lineLimit(1)
+                Text(Self.formatDate(thread.updatedAt))
+                    .font(HerbFont.bodyItalic(size: 11))
+                    .foregroundStyle(HerbColor.inkSoft)
+            }
         }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Actions
