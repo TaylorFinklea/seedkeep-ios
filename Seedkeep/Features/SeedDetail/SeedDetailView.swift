@@ -65,20 +65,30 @@ struct SeedDetailView: View {
     var body: some View {
         Group {
             if let seed = seedQuery.first {
-                Form {
-                    identitySection(seed)
-                    photosSection(seed)
-                    growingInfoSection(seed)
-                    lifecycleSection(seed)
-                    if seed.state != .wishlist {
-                        quantitySection(seed)
+                ZStack {
+                    VellumBackground()
+                    Form {
+                        Section {
+                            herbariumHero(seed)
+                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets())
+                                .listRowSeparator(.hidden)
+                        }
+                        identitySection(seed)
+                        photosSection(seed)
+                        growingInfoSection(seed)
+                        lifecycleSection(seed)
+                        if seed.state != .wishlist {
+                            quantitySection(seed)
+                        }
+                        storageSection(seed)
+                        provenanceSection(seed)
+                        notesSection(seed)
+                        plantSection(seed)
+                        EntityScopedJournalSection(parent: .seed(seed.id))
+                        deleteSection(seed)
                     }
-                    storageSection(seed)
-                    provenanceSection(seed)
-                    notesSection(seed)
-                    plantSection(seed)
-                    EntityScopedJournalSection(parent: .seed(seed.id))
-                    deleteSection(seed)
+                    .scrollContentBackground(.hidden)
                 }
                 .sheet(isPresented: $showPlanEvent) {
                     AddPlantingEventView(bedID: nil, prefillSeedID: seedID)
@@ -131,6 +141,78 @@ struct SeedDetailView: View {
                 )
             }
         }
+    }
+
+    // MARK: - Herbarium hero
+
+    /// Top "specimen page" block — scholarly binomial + italic display
+    /// name, central pressed-plant illustration with a hand-drawn ruler.
+    /// Pulled into the Form as a section-less row with transparent
+    /// background so it floats on the vellum.
+    @ViewBuilder
+    private func herbariumHero(_ seed: LocalSeed) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(scientificDisplay(seed))
+                .font(HerbFont.bodyItalic(size: 14))
+                .foregroundStyle(HerbColor.sepia)
+            Text(seed.customName ?? "Untitled specimen")
+                .font(HerbFont.display(size: 32))
+                .foregroundStyle(HerbColor.ink)
+                .lineSpacing(0)
+            Text(familyLine(seed))
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
+                .padding(.top, 2)
+            ScholarRule(verticalMargin: 8)
+            ZStack {
+                PressedPlant(kind: PressedPlant.Kind.from(seed.customType), size: 200)
+                    .frame(height: 200)
+                HStack {
+                    Spacer()
+                    rulerColumn
+                }
+                .padding(.trailing, 12)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 6)
+    }
+
+    @ViewBuilder
+    private var rulerColumn: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<9) { i in
+                HStack(spacing: 4) {
+                    Text("\(i)")
+                        .font(HerbFont.smallCaps(size: 7))
+                        .foregroundStyle(HerbColor.sepia)
+                    Rectangle()
+                        .fill(HerbColor.sepia)
+                        .frame(width: 10, height: 0.6)
+                }
+                if i < 8 {
+                    Rectangle()
+                        .fill(HerbColor.sepia)
+                        .frame(width: 0.6, height: 20)
+                }
+            }
+            Text("INCHES")
+                .font(HerbFont.smallCaps(size: 7))
+                .tracking(1)
+                .foregroundStyle(HerbColor.sepia)
+                .padding(.top, 4)
+        }
+    }
+
+    private func scientificDisplay(_ seed: LocalSeed) -> String {
+        if let snap = seed.growingInfo?.scientific_name, !snap.isEmpty { return snap }
+        return seed.customType ?? "—"
+    }
+
+    private func familyLine(_ seed: LocalSeed) -> String {
+        let variety = seed.customVariety.map { ", \($0)" } ?? ""
+        return "cv. \((seed.customCompany ?? "—").lowercased())\(variety)"
     }
 
     // MARK: - Sections
