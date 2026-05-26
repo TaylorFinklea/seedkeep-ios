@@ -50,6 +50,19 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         NSCameraUsageDescription: "Seedkeep needs the camera to scan seed-packet barcodes and capture front/back photos for AI catalog extraction."
         NSPhotoLibraryUsageDescription: "Seedkeep can attach photos from your library to seed entries."
+        # Bundled fonts for the Herbarium design system. The .ttf files live
+        # in Seedkeep/Resources/Fonts/. Each entry must match the on-disk
+        # filename exactly. PostScript names (used in .custom(...)): see
+        # `HerbFont.swift`.
+        UIAppFonts:
+          - "Fonts/Spectral-Light.ttf"
+          - "Fonts/Spectral-LightItalic.ttf"
+          - "Fonts/Spectral-Regular.ttf"
+          - "Fonts/Spectral-Italic.ttf"
+          - "Fonts/Spectral-Medium.ttf"
+          - "Fonts/IMFellEnglishSC-Regular.ttf"
+          - "Fonts/Caveat-Regular.ttf"
+          - "Fonts/Caveat-Medium.ttf"
         # iPhone is portrait-locked (the UI is designed around the single-
         # hand thumb reach). iPad needs all four orientations declared
         # because Stage Manager / Split View resize apps to arbitrary
