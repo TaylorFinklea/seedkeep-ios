@@ -54,7 +54,6 @@ struct GardenView: View {
                     }
                     .accessibilityLabel("What to plant")
                 }
-                ToolbarItem(placement: .topBarTrailing) { TopBarSparkleButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showAddBed = true
@@ -80,6 +79,7 @@ struct GardenView: View {
             .refreshable {
                 await appEnv.syncIfPossible()
             }
+            .overlay(alignment: .bottomTrailing) { SproutFAB() }
         }
     }
 

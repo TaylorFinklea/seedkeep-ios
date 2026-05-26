@@ -46,7 +46,6 @@ struct LibraryView: View {
                     }
                     .accessibilityLabel("Library options")
                 }
-                ToolbarItem(placement: .topBarTrailing) { TopBarSparkleButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showingScan = true
@@ -88,6 +87,7 @@ struct LibraryView: View {
             .refreshable {
                 await appEnv.syncIfPossible()
             }
+            .overlay(alignment: .bottomTrailing) { SproutFAB() }
         }
     }
 }

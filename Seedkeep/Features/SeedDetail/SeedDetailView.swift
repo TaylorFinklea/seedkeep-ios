@@ -86,7 +86,6 @@ struct SeedDetailView: View {
                 .navigationTitle(seed.customName ?? "Seed")
                 .navigationBarTitleDisplayMode(.inline)
                 .publishesAssistantContext(pageType: "seed", entityID: seed.id, label: seed.customName)
-                .toolbar { ToolbarItem(placement: .topBarTrailing) { TopBarSparkleButton() } }
                 .task(id: seed.id) {
                     // Refresh photos on first appearance so the grid is
                     // current even if the local store predates new uploads.
