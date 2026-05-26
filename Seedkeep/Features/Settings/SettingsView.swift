@@ -73,6 +73,11 @@ struct SettingsView: View {
                         } label: {
                             Label("AI assistant key", systemImage: "sparkles")
                         }
+                        NavigationLink {
+                            MCPSettingsView()
+                        } label: {
+                            Label("Connect Claude / MCP", systemImage: "link")
+                        }
                         Toggle(isOn: $sparkleOnEveryPage) {
                             Label("Sparkle on every page", systemImage: "wand.and.stars")
                         }

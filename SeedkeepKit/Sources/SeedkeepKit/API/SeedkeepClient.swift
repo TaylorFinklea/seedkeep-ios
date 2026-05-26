@@ -734,6 +734,44 @@ public actor SeedkeepClient {
         return res.id
     }
 
+    // MARK: - MCP tokens (Phase 4 E)
+
+    /// Metadata about an issued MCP token. Returned by list + on create
+    /// (with the raw token value only on create).
+    public struct MCPTokenDTO: Decodable, Sendable, Identifiable, Equatable {
+        public let id: String
+        public let label: String
+        public let created_at: Int64
+        public let last_used_at: Int64?
+    }
+
+    public struct MCPTokenSecretDTO: Decodable, Sendable, Equatable {
+        public let id: String
+        public let label: String
+        public let token: String      // raw secret — shown ONCE
+        public let created_at: Int64
+    }
+
+    /// Issue a new MCP bearer token. The returned `.token` is the only
+    /// time the raw secret is visible — store it immediately.
+    public func createMCPToken(label: String?) async throws -> MCPTokenSecretDTO {
+        struct Body: Encodable, Sendable { let label: String? }
+        return try await postJSON(
+            path: "/api/mcp/tokens",
+            body: Body(label: label))
+    }
+
+    public func listMCPTokens() async throws -> [MCPTokenDTO] {
+        struct Wrapper: Decodable, Sendable { let tokens: [MCPTokenDTO] }
+        let r: Wrapper = try await getJSON(path: "/api/mcp/tokens")
+        return r.tokens
+    }
+
+    public func revokeMCPToken(_ id: String) async throws {
+        struct Resp: Decodable, Sendable { let id: String }
+        _ = try await deleteJSON(path: "/api/mcp/tokens/\(id)") as Resp
+    }
+
     // MARK: - Journal (Phase 3)
 
     /// `GET /api/journal` — delta-sync paginated feed. Mirrors the same
