@@ -715,6 +715,25 @@ public actor SeedkeepClient {
         public let deleted_at: Int64?
     }
 
+    /// Phase 4 D · submit a free-form correction / observation about a
+    /// catalog entry. Stored on the server and reviewed out of band; no
+    /// in-app review UI for the queue yet. Returns the feedback id.
+    public func submitCatalogFeedback(
+        catalogID: String,
+        body: String,
+        fieldHint: String? = nil
+    ) async throws -> String {
+        struct Input: Encodable, Sendable {
+            let body: String
+            let field_hint: String?
+        }
+        struct Response: Decodable, Sendable { let id: String }
+        let res: Response = try await postJSON(
+            path: "/api/catalog/\(catalogID)/feedback",
+            body: Input(body: body, field_hint: fieldHint))
+        return res.id
+    }
+
     // MARK: - Journal (Phase 3)
 
     /// `GET /api/journal` — delta-sync paginated feed. Mirrors the same

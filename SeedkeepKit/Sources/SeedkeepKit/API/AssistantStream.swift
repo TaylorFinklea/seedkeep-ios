@@ -15,13 +15,30 @@ extension SeedkeepClient {
     public func streamAssistantResponse(
         threadId: String,
         text: String,
-        pageContext: AssistantPageContextPayload? = nil
+        pageContext: AssistantPageContextPayload? = nil,
+        attachment: AssistantImageAttachment? = nil
     ) async -> AsyncThrowingStream<AssistantStreamEvent, Error> {
         return openSSE(
             path: "/api/assistant/threads/\(threadId)/stream",
             method: "POST",
-            body: StreamRequestBody(text: text, pageContext: pageContext)
+            body: StreamRequestBody(
+                text: text,
+                pageContext: pageContext,
+                attachment: attachment
+            )
         )
+    }
+
+    /// Phase 4 B — optional image attached to a user message. Server
+    /// passes this through to Anthropic as a vision content block, so
+    /// Sprout can answer "what should I plant in this corner?" prompts.
+    public struct AssistantImageAttachment: Encodable, Sendable {
+        public let media_type: String   // "image/jpeg" | "image/png" | ...
+        public let data: String         // base64 (no data: prefix)
+        public init(media_type: String, data: String) {
+            self.media_type = media_type
+            self.data = data
+        }
     }
 
     /// Confirm a proposed tool call. The server applies the deferred mutation
@@ -41,9 +58,11 @@ extension SeedkeepClient {
     private struct StreamRequestBody: Encodable {
         let text: String
         let pageContext: AssistantPageContextPayload?
+        let attachment: AssistantImageAttachment?
         enum CodingKeys: String, CodingKey {
             case text
             case pageContext = "page_context"
+            case attachment
         }
     }
 

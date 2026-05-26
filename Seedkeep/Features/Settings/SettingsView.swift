@@ -58,6 +58,11 @@ struct SettingsView: View {
                                     .foregroundStyle(HerbColor.inkSoft)
                             }
                         }
+                        NavigationLink {
+                            NotificationsSettingsView()
+                        } label: {
+                            Label("Notifications", systemImage: "bell")
+                        }
                     } header: {
                         Rubric(text: "garden")
                     }

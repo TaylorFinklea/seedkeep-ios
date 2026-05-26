@@ -51,6 +51,9 @@ struct SeedDetailView: View {
     /// Stays nil for manually-entered seeds or while loading.
     @State private var catalog: CatalogSeedDTO?
 
+    /// True while the catalog-feedback sheet is presented (Phase 4 D).
+    @State private var showCatalogFeedback = false
+
     init(seedID: String) {
         self.seedID = seedID
         let id = seedID
@@ -364,10 +367,36 @@ struct SeedDetailView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                // Phase 4 D — let the user flag a correction. Only
+                // surface for catalog-linked seeds, since the queue
+                // submits a `catalog_seed_id`.
+                if seed.catalogID != nil {
+                    Button {
+                        showCatalogFeedback = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("◇")
+                                .foregroundStyle(HerbColor.sepia)
+                            Text("Suggest a correction")
+                                .font(HerbFont.smallCaps(size: 10))
+                                .tracking(1.4)
+                                .foregroundStyle(HerbColor.sepia)
+                                .textCase(.uppercase)
+                        }
+                    }
+                }
             } header: {
                 Text("Growing info")
             } footer: {
                 Text(growingInfoFooter(seed))
+            }
+            .sheet(isPresented: $showCatalogFeedback) {
+                if let catalogID = seed.catalogID {
+                    CatalogFeedbackSheet(
+                        catalogID: catalogID,
+                        catalogName: catalog?.common_name ?? seed.customName
+                    )
+                }
             }
         }
     }

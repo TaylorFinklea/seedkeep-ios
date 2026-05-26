@@ -571,6 +571,31 @@ public final class SyncEngine {
 
     // MARK: - Planting events (Phase 2)
 
+    /// Schedule a local "planned for today" reminder for the event, but
+    /// only when the user has the planting-reminders toggle on. The
+    /// scheduling itself is silent on permission denial.
+    private func scheduleEventReminder(_ event: LocalPlantingEvent) {
+        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.events") else { return }
+        guard event.completedAt == nil, event.deletedAt == nil else { return }
+        let eventID = event.id
+        let plannedFor = event.plannedFor
+        let kindLabel = event.kindRaw.replacingOccurrences(of: "_", with: " ").capitalized
+        let seedName: String? = {
+            guard let seedID = event.seedID else { return nil }
+            let context = ModelContext(container)
+            let descriptor = FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == seedID })
+            return (try? context.fetch(descriptor))?.first?.customName
+        }()
+        Task { @MainActor in
+            await NotificationsCenter.shared.schedulePlantingEventReminder(
+                eventID: eventID,
+                plannedFor: plannedFor,
+                kindLabel: kindLabel,
+                seedName: seedName
+            )
+        }
+    }
+
     public func enqueueCreatePlantingEvent(_ input: SeedkeepClient.CreatePlantingEventInput, householdID: String) throws -> LocalPlantingEvent {
         let id = "pe_local_\(UUID().uuidString)"
         let now = Self.nowMs()
@@ -599,6 +624,10 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        // Phase 4 C — schedule a local "Planned for today" reminder. No-op
+        // when the user has notifications off; permission check happens
+        // inside the call.
+        scheduleEventReminder(local)
         return local
     }
 
@@ -625,6 +654,16 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        // Phase 4 C — reschedule (or cancel, if completed) the reminder.
+        if let local = try fetchPlantingEvent(id: id, in: context) {
+            if local.completedAt != nil {
+                Task { @MainActor in
+                    NotificationsCenter.shared.cancelPlantingEventReminder(eventID: id)
+                }
+            } else {
+                scheduleEventReminder(local)
+            }
+        }
     }
 
     public func enqueueDeletePlantingEvent(id: String) throws {
@@ -641,6 +680,10 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        // Phase 4 C — drop any pending reminder for this event.
+        Task { @MainActor in
+            NotificationsCenter.shared.cancelPlantingEventReminder(eventID: id)
+        }
     }
 
     // MARK: - SwiftData helpers

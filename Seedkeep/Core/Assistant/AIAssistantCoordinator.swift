@@ -121,7 +121,11 @@ final class AIAssistantCoordinator {
     /// Inserts the user message + the assistant message locally as the
     /// stream produces events. The thread/message rows are visible to the
     /// view via @Query — SwiftData re-renders give the typewriter effect.
-    func send(text: String, contextOverride: AIPageContext? = nil) async throws {
+    func send(
+        text: String,
+        contextOverride: AIPageContext? = nil,
+        attachment: SeedkeepClient.AssistantImageAttachment? = nil
+    ) async throws {
         guard let threadID = currentThreadID else {
             throw NSError(domain: "Sprout", code: 0, userInfo: [NSLocalizedDescriptionKey: "No thread open"])
         }
@@ -130,7 +134,12 @@ final class AIAssistantCoordinator {
         let ctx = contextOverride ?? pageContext
         let payload = ctx.map { AssistantPageContextPayload(pageType: $0.pageType, entityId: $0.entityID, label: $0.label) }
 
-        let stream = await client.streamAssistantResponse(threadId: threadID, text: text, pageContext: payload)
+        let stream = await client.streamAssistantResponse(
+            threadId: threadID,
+            text: text,
+            pageContext: payload,
+            attachment: attachment
+        )
         try await consumeStream(stream, threadID: threadID)
     }
 
