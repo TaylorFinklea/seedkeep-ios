@@ -38,28 +38,51 @@ struct JournalView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if filterParent == nil {
-                    RetrospectiveCard()
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            ZStack {
+                VellumBackground()
+                List {
+                    if filterParent == nil {
+                        Section {
+                            headingBlock
+                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets())
+                                .listRowSeparator(.hidden)
+                            RetrospectiveCard()
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        }
+                    }
+                    if entries.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "book.closed")
+                                .font(.system(size: 32))
+                                .foregroundStyle(HerbColor.sepia.opacity(0.6))
+                            Text("Begin the daybook")
+                                .font(HerbFont.display(size: 22))
+                                .foregroundStyle(HerbColor.ink)
+                            Text("Track what passed in the garden today. Tap + to write the first entry.")
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                }
-                if entries.isEmpty {
-                    ContentUnavailableView(
-                        "Start your garden journal",
-                        systemImage: "book.closed",
-                        description: Text("Track what happened in the garden over time. Tap + to add your first entry.")
-                    )
-                    .listRowBackground(Color.clear)
-                } else {
-                    ForEach(entries) { entry in
-                        NavigationLink(value: Route.existing(entry.id)) {
-                            entryRow(entry)
+                    } else {
+                        ForEach(entries) { entry in
+                            NavigationLink(value: Route.existing(entry.id)) {
+                                entryRow(entry)
+                            }
+                            .listRowBackground(Color.clear)
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .listStyle(.plain)
             }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationTitle("Journal")
             .navigationDestination(for: Route.self) { route in
                 switch route {
@@ -102,14 +125,75 @@ struct JournalView: View {
     }
 
     @ViewBuilder
-    private func entryRow(_ entry: LocalJournalEntry) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(entry.occurredOn)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(entry.body.isEmpty ? "(empty)" : entry.body)
-                .font(.body)
-                .lineLimit(3)
+    private var headingBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FolioStrip(section: "Daybook", folio: max(entries.count, 1))
+                .padding(.horizontal, -16)
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Daybook")
+                        .font(HerbFont.display(size: 38))
+                        .foregroundStyle(HerbColor.ink)
+                    Text("\(HerbRomanNumeral.string(for: entries.count)) entries · the household garden")
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.inkSoft)
+                }
+                Spacer()
+            }
+            ScholarRule(verticalMargin: 8)
         }
+    }
+
+    @ViewBuilder
+    private func entryRow(_ entry: LocalJournalEntry) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            dateRoundel(ymd: entry.occurredOn)
+                .frame(width: 44)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(entry.body.isEmpty ? "(no entry)" : entry.body)
+                    .font(HerbFont.body(size: 13))
+                    .foregroundStyle(HerbColor.ink)
+                    .lineLimit(3)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func dateRoundel(ymd: String) -> some View {
+        let parts = parseYMD(ymd)
+        VStack(spacing: 1) {
+            Text(parts.monthAbbrev)
+                .font(HerbFont.smallCaps(size: 8))
+                .tracking(1.5)
+                .foregroundStyle(HerbColor.sepia)
+                .textCase(.uppercase)
+            Text("\(parts.day)")
+                .font(HerbFont.bodyEmph(size: 26))
+                .foregroundStyle(HerbColor.ink)
+            Text(parts.yearRoman)
+                .font(HerbFont.smallCaps(size: 7))
+                .tracking(1)
+                .foregroundStyle(HerbColor.inkFaint)
+        }
+    }
+
+    private func parseYMD(_ ymd: String) -> (monthAbbrev: String, day: Int, yearRoman: String) {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(secondsFromGMT: 0)
+        guard let date = parser.date(from: ymd) else { return ("MAY", 1, "MMXXVI") }
+        let cal = Calendar(identifier: .gregorian)
+        let comps = cal.dateComponents([.day, .month, .year], from: date)
+        let f = DateFormatter()
+        f.dateFormat = "MMM"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return (
+            f.string(from: date),
+            comps.day ?? 1,
+            HerbRomanNumeral.string(for: comps.year ?? 2026, lowercase: false)
+        )
     }
 }

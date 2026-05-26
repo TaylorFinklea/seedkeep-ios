@@ -20,26 +20,40 @@ struct GardenView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if beds.isEmpty {
-                    ContentUnavailableView {
-                        Label("No beds yet", systemImage: "square.grid.3x3.topleft.filled")
-                    } description: {
-                        Text("Beds are the spaces you plant in — \"Back garden\", \"Greenhouse shelf\", \"Front raised bed\". Each one gets its own planting timeline.")
-                    } actions: {
-                        Button("Add your first bed") { showAddBed = true }
-                            .buttonStyle(.borderedProminent)
-                    }
-                } else {
-                    List {
-                        ForEach(beds) { bed in
-                            NavigationLink(value: bed.id) {
-                                BedRow(bed: bed, openEvents: openEventsFor(bedID: bed.id))
+            ZStack {
+                VellumBackground()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        FolioStrip(section: "Hortus", folio: max(beds.count, 1))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Abbey grounds")
+                                .font(HerbFont.display(size: 38))
+                                .foregroundStyle(HerbColor.ink)
+                            Text("\(HerbRomanNumeral.string(for: beds.count)) plots in the household garden")
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                        .padding(.horizontal, 26)
+                        ScholarRule(verticalMargin: 12)
+                            .padding(.horizontal, 22)
+                        if beds.isEmpty {
+                            emptyState
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(Array(beds.enumerated()), id: \.element.id) { (idx, bed) in
+                                    NavigationLink(value: bed.id) {
+                                        BedRow(bed: bed, romanIndex: idx + 1, openEvents: openEventsFor(bedID: bed.id))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
+                            .padding(.horizontal, 22)
+                            .padding(.bottom, 96)
                         }
                     }
                 }
             }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationTitle("Garden")
             .publishesAssistantContext(pageType: "garden")
             .navigationDestination(for: String.self) { bedID in
@@ -86,48 +100,82 @@ struct GardenView: View {
     private func openEventsFor(bedID: String) -> [LocalPlantingEvent] {
         openEvents.filter { $0.bedID == bedID }
     }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "square.grid.3x3.topleft.filled")
+                .font(.system(size: 32))
+                .foregroundStyle(HerbColor.sepia.opacity(0.6))
+            Text("No plots yet")
+                .font(HerbFont.display(size: 22))
+                .foregroundStyle(HerbColor.ink)
+            Text("Beds are the spaces you plant in — 'south wall', 'dooryard', 'cloister herb plot'. Each one carries its own timeline.")
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Button {
+                showAddBed = true
+            } label: {
+                Text("Lay out your first plot")
+                    .font(HerbFont.smallCaps(size: 11))
+                    .tracking(2)
+                    .textCase(.uppercase)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(HerbColor.sepia)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
 }
 
 private struct BedRow: View {
     let bed: LocalBed
+    let romanIndex: Int
     let openEvents: [LocalPlantingEvent]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        HStack(alignment: .top, spacing: 12) {
+            Text(HerbRomanNumeral.string(for: romanIndex, lowercase: false))
+                .font(HerbFont.smallCaps(size: 14))
+                .foregroundStyle(HerbColor.sepia)
+                .frame(width: 28, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(bed.name)
-                    .font(.body.weight(.medium))
-                Spacer()
-                if let dimensions = formattedDimensions {
-                    Text(dimensions)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if let next = nextEvent {
+                    .font(HerbFont.bodyEmph(size: 14))
+                    .foregroundStyle(HerbColor.ink)
                 HStack(spacing: 6) {
-                    Image(systemName: PlantingEventKind(rawValue: next.kindRaw)?.systemImage ?? "calendar")
-                        .font(.caption)
-                        .foregroundStyle(.tint)
-                    Text("\(PlantingEventKind(rawValue: next.kindRaw)?.displayName ?? next.kindRaw) — \(humanDate(next.plannedFor))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if openEvents.count > 1 {
-                        Text("+\(openEvents.count - 1)")
-                            .font(.caption2.monospaced())
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(.tint.opacity(0.15), in: .capsule)
-                            .foregroundStyle(.tint)
+                    if let dimensions = formattedDimensions {
+                        Text(dimensions)
+                            .font(HerbFont.bodyItalic(size: 11))
+                            .foregroundStyle(HerbColor.inkSoft)
+                        Text("·")
+                            .foregroundStyle(HerbColor.inkFaint)
+                    }
+                    if let next = nextEvent {
+                        Text("\(PlantingEventKind(rawValue: next.kindRaw)?.displayName ?? next.kindRaw) · \(humanDate(next.plannedFor))")
+                            .font(HerbFont.bodyItalic(size: 11))
+                            .foregroundStyle(HerbColor.inkSoft)
+                    } else {
+                        Text("no upcoming events")
+                            .font(HerbFont.bodyItalic(size: 11))
+                            .foregroundStyle(HerbColor.inkFaint)
                     }
                 }
-            } else {
-                Text("No upcoming events")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
             }
+            Spacer()
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 4)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(HerbColor.inkFaint)
+                .frame(height: 0.5)
+        }
     }
 
     private var nextEvent: LocalPlantingEvent? {

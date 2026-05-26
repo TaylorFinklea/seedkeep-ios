@@ -14,6 +14,7 @@ import SwiftUI
 struct SproutFAB: View {
     @Environment(AppEnvironment.self) private var appEnv
     @State private var working = false
+    @AppStorage("seedkeep.sparkleOnEveryPage") private var sparkleOnEveryPage: Bool = true
 
     /// Optional bottom-edge override. Useful when a page has a custom
     /// bottom-bar/composer that would overlap the FAB at the default offset.
@@ -24,6 +25,14 @@ struct SproutFAB: View {
     var trailingPadding: CGFloat = 20
 
     var body: some View {
+        if sparkleOnEveryPage {
+            fabButton
+        } else {
+            EmptyView()
+        }
+    }
+
+    private var fabButton: some View {
         Button {
             Task { await tap() }
         } label: {
