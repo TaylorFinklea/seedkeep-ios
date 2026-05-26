@@ -49,6 +49,7 @@ struct RootView: View {
                     .task(id: snapshotID(auth.state)) {
                         await appEnv.syncIfPossible()
                     }
+                    .overlay { SproutAssistantOverlay() }
             }
         }
         .sheet(item: Binding(

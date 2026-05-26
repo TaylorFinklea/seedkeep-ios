@@ -23,6 +23,13 @@ final class AIAssistantCoordinator {
     private(set) var streamingState: StreamingState = .idle
     private(set) var lastError: String?
 
+    /// Drives the global popup-sheet overlay. The bottom-right SproutFAB
+    /// flips this to true after creating/reusing a thread with the current
+    /// pageContext attached; the overlay (mounted once at the root) presents
+    /// a sheet with detents and drag-to-dismiss. The dedicated Sprout tab
+    /// remains for browsing past threads.
+    var isSheetPresented: Bool = false
+
     /// What the user is currently looking at. Pages publish via the
     /// PageContextPublisher view modifier (T9); the sparkle button reads
     /// this when launching a new thread.
@@ -171,6 +178,19 @@ final class AIAssistantCoordinator {
         let thread = try await createThread(title: title)
         currentThreadID = thread.id
         return thread.id
+    }
+
+    /// Open the popup-sheet overlay. Creates a fresh thread with the current
+    /// pageContext baked into the title (so the sheet is always a "new
+    /// conversation about this page"). The dedicated Sprout tab is still
+    /// where users browse and resume past threads.
+    func presentSheet() async throws {
+        _ = try await launchFromSparkle()
+        isSheetPresented = true
+    }
+
+    func dismissSheet() {
+        isSheetPresented = false
     }
 
     // ── Internals ──────────────────────────────────────────────────────────

@@ -1,9 +1,10 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Seven-tab root: Library / Garden / Journal / Random / Assistant /
-/// Settings / You. Assistant is the Phase 4 entry point — Sprout, the
-/// BYOK AI assistant. Journal (Phase 3) is the conversation substrate.
+/// Six-tab root: Library / Garden / Journal / Sprout / Settings / You.
+/// Sprout (the BYOK AI assistant) lives both here (as a tab for browsing
+/// past conversations) and as a bottom-right FAB on every page that opens
+/// a context-aware popup sheet. Random pick moved into Library's toolbar.
 struct MainTabView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @State private var selection: AppEnvironment.AppTab = .library
@@ -21,10 +22,6 @@ struct MainTabView: View {
             JournalView()
                 .tag(AppEnvironment.AppTab.journal)
                 .tabItem { Label("Journal", systemImage: "book") }
-
-            RandomPickView()
-                .tag(AppEnvironment.AppTab.random)
-                .tabItem { Label("Random", systemImage: "shuffle") }
 
             AssistantView()
                 .tag(AppEnvironment.AppTab.assistant)

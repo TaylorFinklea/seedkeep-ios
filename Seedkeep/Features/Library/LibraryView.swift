@@ -12,6 +12,7 @@ struct LibraryView: View {
     @State private var searchText: String = ""
     @State private var showingAdd = false
     @State private var showingScan = false
+    @State private var showingRandom = false
     @State private var scanPrefill: AddSeedView.Prefill?
     @AppStorage("library.groupByType") private var groupByType: Bool = false
 
@@ -48,6 +49,14 @@ struct LibraryView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        showingRandom = true
+                    } label: {
+                        Image(systemName: "shuffle")
+                    }
+                    .accessibilityLabel("Random pick")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
                         showingScan = true
                     } label: {
                         Image(systemName: "viewfinder")
@@ -65,6 +74,9 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $showingAdd) {
                 AddSeedView()
+            }
+            .sheet(isPresented: $showingRandom) {
+                RandomPickView()
             }
             .fullScreenCover(isPresented: $showingScan) {
                 ScanFlow { result in

@@ -60,8 +60,7 @@ struct SproutFAB: View {
             return
         }
         do {
-            _ = try await appEnv.assistant.launchFromSparkle()
-            appEnv.requestedTab = .assistant
+            try await appEnv.assistant.presentSheet()
         } catch {
             // Silent — user can still tap the Sprout tab manually.
         }
