@@ -193,31 +193,87 @@ private struct PepperIllustration: View {
     var body: some View {
         GeometryReader { geo in
             let s = min(geo.size.width, geo.size.height) / 90
-            ZStack {
+            ZStack(alignment: .topLeading) {
+                // Body — wide-shouldered bell pepper tapering to a slight point
                 Path { p in
-                    p.move(to: CGPoint(x: 45 * s, y: 78 * s))
-                    p.addQuadCurve(to: CGPoint(x: 40 * s, y: 20 * s), control: CGPoint(x: 30 * s, y: 50 * s))
-                }
-                .stroke(IllusColor.stem, lineWidth: 1.4 * s)
-                // Body — long curved pepper
-                Path { p in
-                    p.move(to: CGPoint(x: 45 * s, y: 25 * s))
-                    p.addQuadCurve(to: CGPoint(x: 55 * s, y: 75 * s), control: CGPoint(x: 70 * s, y: 50 * s))
-                    p.addQuadCurve(to: CGPoint(x: 40 * s, y: 75 * s), control: CGPoint(x: 47 * s, y: 80 * s))
-                    p.addQuadCurve(to: CGPoint(x: 35 * s, y: 25 * s), control: CGPoint(x: 22 * s, y: 50 * s))
+                    let leftX: CGFloat = 26 * s
+                    let rightX: CGFloat = 64 * s
+                    let topY: CGFloat = 28 * s
+                    let bottomY: CGFloat = 80 * s
+                    let centerX: CGFloat = 45 * s
+                    p.move(to: CGPoint(x: leftX, y: topY + 4 * s))
+                    // Left shoulder curve to wide left flank
+                    p.addQuadCurve(
+                        to: CGPoint(x: 22 * s, y: 56 * s),
+                        control: CGPoint(x: 20 * s, y: 38 * s))
+                    // Left flank curve to slightly-pointed bottom
+                    p.addQuadCurve(
+                        to: CGPoint(x: centerX, y: bottomY),
+                        control: CGPoint(x: 28 * s, y: 78 * s))
+                    // Bottom up the right flank
+                    p.addQuadCurve(
+                        to: CGPoint(x: 68 * s, y: 56 * s),
+                        control: CGPoint(x: 62 * s, y: 78 * s))
+                    // Right shoulder curve to top-right
+                    p.addQuadCurve(
+                        to: CGPoint(x: rightX, y: topY + 4 * s),
+                        control: CGPoint(x: 70 * s, y: 38 * s))
+                    // Top dip between the shoulders
+                    p.addQuadCurve(
+                        to: CGPoint(x: leftX, y: topY + 4 * s),
+                        control: CGPoint(x: centerX, y: topY + 12 * s))
                     p.closeSubpath()
                 }
-                .fill(LinearGradient(colors: [IllusColor.red, IllusColor.redDark], startPoint: .top, endPoint: .bottom))
-                // Stem cap
+                .fill(LinearGradient(
+                    colors: [IllusColor.redHi, IllusColor.red, IllusColor.redDark],
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
+
+                // Subtle lobing — a vertical highlight line down the front
                 Path { p in
-                    p.move(to: CGPoint(x: 35 * s, y: 25 * s))
-                    p.addQuadCurve(to: CGPoint(x: 45 * s, y: 20 * s), control: CGPoint(x: 40 * s, y: 18 * s))
-                    p.addQuadCurve(to: CGPoint(x: 55 * s, y: 25 * s), control: CGPoint(x: 50 * s, y: 18 * s))
+                    p.move(to: CGPoint(x: 45 * s, y: 30 * s))
+                    p.addQuadCurve(
+                        to: CGPoint(x: 45 * s, y: 76 * s),
+                        control: CGPoint(x: 48 * s, y: 54 * s))
                 }
-                .stroke(IllusColor.stem, lineWidth: 1.2 * s)
-                Ellipse().fill(IllusColor.redHi.opacity(0.55))
-                    .frame(width: 4 * s, height: 14 * s).offset(x: -4 * s, y: 0)
+                .stroke(IllusColor.redDark.opacity(0.5), lineWidth: 0.5 * s)
+
+                // Calyx — green papery cap at the top of the pepper
+                Path { p in
+                    p.move(to: CGPoint(x: 28 * s, y: 32 * s))
+                    p.addQuadCurve(
+                        to: CGPoint(x: 45 * s, y: 26 * s),
+                        control: CGPoint(x: 34 * s, y: 22 * s))
+                    p.addQuadCurve(
+                        to: CGPoint(x: 62 * s, y: 32 * s),
+                        control: CGPoint(x: 56 * s, y: 22 * s))
+                    p.addQuadCurve(
+                        to: CGPoint(x: 55 * s, y: 36 * s),
+                        control: CGPoint(x: 58 * s, y: 36 * s))
+                    p.addQuadCurve(
+                        to: CGPoint(x: 35 * s, y: 36 * s),
+                        control: CGPoint(x: 45 * s, y: 30 * s))
+                    p.addQuadCurve(
+                        to: CGPoint(x: 28 * s, y: 32 * s),
+                        control: CGPoint(x: 32 * s, y: 36 * s))
+                    p.closeSubpath()
+                }
+                .fill(IllusColor.leafDark)
+
+                // Stem — short straight green stub on top
+                Path { p in
+                    p.move(to: CGPoint(x: 45 * s, y: 26 * s))
+                    p.addLine(to: CGPoint(x: 45 * s, y: 14 * s))
+                }
+                .stroke(IllusColor.stem, lineWidth: 2 * s)
+
+                // Highlight — soft glint on the upper-left flank
+                Ellipse()
+                    .fill(IllusColor.redHi.opacity(0.55))
+                    .frame(width: 5 * s, height: 14 * s)
+                    .rotationEffect(.degrees(-10))
+                    .offset(x: 30 * s, y: 42 * s)
             }
+            .frame(width: 90 * s, height: 90 * s)
         }
     }
 }

@@ -102,27 +102,17 @@ struct TodayView: View {
     }
 
     private var scholarlyDate: String {
-        let cal = Calendar(identifier: .gregorian)
-        let comps = cal.dateComponents([.day, .month, .year], from: Date())
-        let day = HerbRomanNumeral.string(for: comps.day ?? 1, lowercase: false)
-        let year = HerbRomanNumeral.string(for: comps.year ?? 2026, lowercase: false)
-        let monthName: String = {
-            let f = DateFormatter()
-            f.dateFormat = "MMMM"
-            f.locale = Locale(identifier: "en_US_POSIX")
-            return f.string(from: Date())
-        }()
-        return "The \(day) of \(monthName), \(year)"
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, MMMM d"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f.string(from: Date())
     }
 
     private var astroSubtitle: String {
         let f = DateFormatter()
-        f.dateFormat = "EEEE"
+        f.dateFormat = "yyyy"
         f.locale = Locale(identifier: "en_US_POSIX")
-        let weekday = f.string(from: Date())
-        // Light astronomy note. We don't compute moon phase / zodiac
-        // exactly — this is decorative scholarly flavor, not data.
-        return "\(weekday) — light a little longer each day"
+        return f.string(from: Date())
     }
 
     private var folioNumber: Int {
@@ -166,7 +156,7 @@ struct TodayView: View {
     @ViewBuilder
     private var sowingsBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Rubric(text: "to be sown today", number: 1)
+            Rubric(text: "to be sown today")
                 .padding(.horizontal, 4)
 
             if dueEvents.isEmpty {
@@ -278,11 +268,11 @@ private struct SowingRow: View {
     private var daysLabel: String {
         if daysRemaining < 0 {
             let n = -daysRemaining
-            return "\(HerbRomanNumeral.string(for: n)) days past"
+            return n == 1 ? "1 day past" : "\(n) days past"
         } else if daysRemaining == 0 {
             return "today"
         } else {
-            return "\(HerbRomanNumeral.string(for: daysRemaining)) days remain"
+            return daysRemaining == 1 ? "1 day left" : "\(daysRemaining) days left"
         }
     }
 }

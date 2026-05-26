@@ -1,8 +1,12 @@
 import SwiftUI
 
 /// Sunrise/sunset arc for the Today screen. The sun glyph sits on the
-/// arc at the current daylight fraction. Below the arc are sunrise +
-/// sunset times. The total daylight duration sits centered above.
+/// arc at the current daylight fraction. Below the arc: sunrise + sunset
+/// times. Above (centered): total daylight duration.
+///
+/// The arc itself is a quadratic bezier, so the sun's y must be computed
+/// from the bezier formula — using a sine approximation would float the
+/// sun above the actual curve (a real visible bug in early builds).
 struct SunArc: View {
     let sunrise: Date
     let sunset: Date
@@ -28,96 +32,98 @@ struct SunArc: View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let arcInset: CGFloat = 20
-            let arcTopGap: CGFloat = 20
+            let arcInset: CGFloat = 24
+            let baselineY = h - 18         // where sunrise / sunset sit
+            let apexY: CGFloat = 24        // top of the arc (just below the daylight label)
+
+            // Quadratic bezier control point — chosen so the visible peak
+            // of the curve sits at `apexY`. For B(0.5) = 0.5·P0 + 0.5·P2 + 0.5·P1·... wait
+            // For a symmetric quad bezier with endpoints at y=baselineY, the
+            // visible peak at t=0.5 is (P0.y + P2.y + 2·P1.y) / 4. With
+            // P0.y == P2.y == baselineY, peak = (2·baselineY + 2·P1.y) / 4
+            // = (baselineY + P1.y) / 2. Solving for P1.y given desired peak:
+            // P1.y = 2·peak - baselineY.
+            let controlY = 2 * apexY - baselineY
+            let p0 = CGPoint(x: arcInset, y: baselineY)
+            let p1 = CGPoint(x: w / 2, y: controlY)
+            let p2 = CGPoint(x: w - arcInset, y: baselineY)
 
             ZStack(alignment: .topLeading) {
                 // Horizon
                 Path { p in
-                    p.move(to: CGPoint(x: 0, y: h - 12))
-                    p.addLine(to: CGPoint(x: w, y: h - 12))
+                    p.move(to: CGPoint(x: 0, y: baselineY))
+                    p.addLine(to: CGPoint(x: w, y: baselineY))
                 }
-                .stroke(
-                    HerbColor.inkFaint,
-                    style: StrokeStyle(lineWidth: 0.5, dash: [2, 3])
-                )
+                .stroke(HerbColor.inkFaint, style: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
 
                 // Daylight arc
                 Path { p in
-                    p.move(to: CGPoint(x: arcInset, y: h - 12))
-                    p.addQuadCurve(
-                        to: CGPoint(x: w - arcInset, y: h - 12),
-                        control: CGPoint(x: w / 2, y: arcTopGap - 15)
-                    )
+                    p.move(to: p0)
+                    p.addQuadCurve(to: p2, control: p1)
                 }
                 .stroke(HerbColor.sepia, lineWidth: 1)
 
-                // Hour ticks
-                ForEach(0..<12, id: \.self) { i in
-                    let t = Double(i) / 11
-                    let arcX = arcInset + t * (w - arcInset * 2)
-                    let arcY = (h - 12) - sin(t * .pi) * (h - arcTopGap)
-                    Circle()
-                        .fill(HerbColor.sepiaHi)
-                        .frame(width: 2.8, height: 2.8)
-                        .offset(x: arcX - 1.4, y: arcY - 1.4)
-                }
-
-                // Sun glyph at current position
-                let sunX = arcInset + progress * (w - arcInset * 2)
-                let sunY = (h - 12) - sin(progress * .pi) * (h - arcTopGap)
-                ZStack {
-                    Circle()
-                        .fill(HerbColor.ochre)
-                        .frame(width: 18, height: 18)
-                    Circle()
-                        .strokeBorder(HerbColor.sepia, lineWidth: 1)
-                        .frame(width: 18, height: 18)
-                    // Rays — draw via individual capsules positioned by
-                    // .offset so they sit around the local center of the
-                    // ZStack rather than at the GeometryReader origin.
-                    ForEach(0..<8, id: \.self) { i in
-                        let a = Double(i) / 8 * .pi * 2
-                        Capsule()
-                            .fill(HerbColor.ochre)
-                            .frame(width: 0.9, height: 4)
-                            .offset(x: CGFloat(cos(a)) * 14, y: CGFloat(sin(a)) * 14)
-                            .rotationEffect(.degrees(a * 180 / .pi - 90))
-                    }
-                }
-                .frame(width: 32, height: 32)
-                .position(x: sunX, y: sunY)
+                // Sun glyph — placed on the arc at the bezier coordinate
+                let sun = bezierPoint(t: progress, p0: p0, p1: p1, p2: p2)
+                sunGlyph
+                    .position(x: sun.x, y: sun.y)
             }
-            .overlay(alignment: .topLeading) {
-                Text(timeLabel(sunrise))
-                    .font(HerbFont.bodyItalic(size: 10))
-                    .foregroundStyle(HerbColor.inkSoft)
-                    .offset(x: arcInset, y: h - 26)
-                Text("SUNRISE")
-                    .font(HerbFont.smallCaps(size: 9))
-                    .tracking(1)
-                    .foregroundStyle(HerbColor.sepia)
-                    .offset(x: arcInset, y: h - 10)
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(timeLabel(sunrise))
+                        .font(HerbFont.bodyItalic(size: 10))
+                        .foregroundStyle(HerbColor.inkSoft)
+                    Text("SUNRISE")
+                        .font(HerbFont.smallCaps(size: 9))
+                        .tracking(1)
+                        .foregroundStyle(HerbColor.sepia)
+                }
+                .padding(.leading, arcInset - 16)
+                .padding(.bottom, 0)
             }
-            .overlay(alignment: .topTrailing) {
-                Text(timeLabel(sunset))
-                    .font(HerbFont.bodyItalic(size: 10))
-                    .foregroundStyle(HerbColor.inkSoft)
-                    .offset(x: -arcInset, y: h - 26)
-                Text("SUNSET")
-                    .font(HerbFont.smallCaps(size: 9))
-                    .tracking(1)
-                    .foregroundStyle(HerbColor.sepia)
-                    .offset(x: -arcInset, y: h - 10)
+            .overlay(alignment: .bottomTrailing) {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(timeLabel(sunset))
+                        .font(HerbFont.bodyItalic(size: 10))
+                        .foregroundStyle(HerbColor.inkSoft)
+                    Text("SUNSET")
+                        .font(HerbFont.smallCaps(size: 9))
+                        .tracking(1)
+                        .foregroundStyle(HerbColor.sepia)
+                }
+                .padding(.trailing, arcInset - 16)
+                .padding(.bottom, 0)
             }
             .overlay(alignment: .top) {
                 Text(totalDaylight)
                     .font(HerbFont.smallCaps(size: 9))
                     .tracking(1.5)
                     .foregroundStyle(HerbColor.inkSoft)
+                    .padding(.top, 2)
             }
         }
-        .frame(height: 90)
+        .frame(height: 110)
+    }
+
+    @ViewBuilder
+    private var sunGlyph: some View {
+        ZStack {
+            Circle()
+                .fill(HerbColor.ochre)
+                .frame(width: 14, height: 14)
+            Circle()
+                .strokeBorder(HerbColor.sepia, lineWidth: 1)
+                .frame(width: 14, height: 14)
+        }
+    }
+
+    /// Quadratic bezier point evaluation at parameter `t`.
+    private func bezierPoint(t: Double, p0: CGPoint, p1: CGPoint, p2: CGPoint) -> CGPoint {
+        let t = CGFloat(t)
+        let oneMinusT = 1 - t
+        let x = oneMinusT * oneMinusT * p0.x + 2 * oneMinusT * t * p1.x + t * t * p2.x
+        let y = oneMinusT * oneMinusT * p0.y + 2 * oneMinusT * t * p1.y + t * t * p2.y
+        return CGPoint(x: x, y: y)
     }
 
     private func timeLabel(_ date: Date) -> String {

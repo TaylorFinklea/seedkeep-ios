@@ -22,12 +22,12 @@ struct YouView: View {
                             LabeledContent("Email") { Text(user.email ?? "—").font(HerbFont.bodyItalic(size: 12)) }
                             LabeledContent("Name") { Text(user.name ?? "—").font(HerbFont.bodyItalic(size: 12)) }
                         } header: {
-                            Rubric(text: "steward", number: 1)
+                            Rubric(text: "steward")
                         }
                         Section {
                             LabeledContent("Name") { Text(household.name).font(HerbFont.bodyItalic(size: 12)) }
                         } header: {
-                            Rubric(text: "house", number: 2)
+                            Rubric(text: "house")
                         }
                     }
                     Section {

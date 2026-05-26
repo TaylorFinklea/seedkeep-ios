@@ -29,7 +29,7 @@ struct GardenView: View {
                             Text("Abbey grounds")
                                 .font(HerbFont.display(size: 38))
                                 .foregroundStyle(HerbColor.ink)
-                            Text("\(HerbRomanNumeral.string(for: beds.count)) plots in the household garden")
+                            Text("\(beds.count) plots in the household garden")
                                 .font(HerbFont.bodyItalic(size: 12))
                                 .foregroundStyle(HerbColor.inkSoft)
                         }

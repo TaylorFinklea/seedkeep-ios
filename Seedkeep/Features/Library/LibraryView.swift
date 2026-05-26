@@ -114,7 +114,7 @@ struct LibraryView: View {
                 .font(HerbFont.display(size: 42))
                 .foregroundStyle(HerbColor.ink)
                 .lineSpacing(0)
-            Text("\(HerbRomanNumeral.string(for: allSeeds.count)) specimens, of which \(HerbRomanNumeral.string(for: activeCount)) in the active garden")
+            Text("\(allSeeds.count) specimens, of which \(activeCount) in the active garden")
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
         }

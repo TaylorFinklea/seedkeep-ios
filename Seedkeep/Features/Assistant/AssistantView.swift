@@ -93,7 +93,7 @@ struct AssistantView: View {
                 Text("Sprout")
                     .font(HerbFont.display(size: 38))
                     .foregroundStyle(HerbColor.ink)
-                Text("The household scribe · \(HerbRomanNumeral.string(for: threads.count)) correspondences")
+                Text("The household scribe")
                     .font(HerbFont.bodyItalic(size: 12))
                     .foregroundStyle(HerbColor.inkSoft)
             }
@@ -122,7 +122,7 @@ struct AssistantView: View {
     @ViewBuilder
     private var starterPromptsList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Rubric(text: "to begin", number: 1)
+            Rubric(text: "to begin")
                 .padding(.bottom, 4)
 
             ForEach(Self.starterPrompts, id: \.self) { prompt in

@@ -44,7 +44,7 @@ struct SettingsView: View {
                             Label("Tags", systemImage: "tag")
                         }
                     } header: {
-                        Rubric(text: "inventory", number: 1)
+                        Rubric(text: "inventory")
                     }
 
                     Section {
@@ -59,7 +59,7 @@ struct SettingsView: View {
                             }
                         }
                     } header: {
-                        Rubric(text: "garden", number: 2)
+                        Rubric(text: "garden")
                     }
 
                     Section {
@@ -72,7 +72,7 @@ struct SettingsView: View {
                             Label("Sparkle on every page", systemImage: "wand.and.stars")
                         }
                     } header: {
-                        Rubric(text: "sprout · the scribe", number: 3)
+                        Rubric(text: "sprout · the scribe")
                     } footer: {
                         Text("When on, a sparkle button sits in the bottom-right of every primary page and opens Sprout with the current page's context attached.")
                             .font(HerbFont.bodyItalic(size: 11))
@@ -124,7 +124,7 @@ struct SettingsView: View {
                             }
                         }
                     } header: {
-                        Rubric(text: "backend", number: 4)
+                        Rubric(text: "backend")
                     }
 
                     if case .signedIn(_, let household) = auth.state {
@@ -136,7 +136,7 @@ struct SettingsView: View {
                                     .foregroundStyle(HerbColor.inkSoft)
                             }
                         } header: {
-                            Rubric(text: "household", number: 5)
+                            Rubric(text: "household")
                         }
                         Section {
                             if let code = inviteCode {
@@ -166,7 +166,7 @@ struct SettingsView: View {
                                     .foregroundStyle(.red)
                             }
                         } header: {
-                            Rubric(text: "invite", number: 6)
+                            Rubric(text: "invite")
                         }
                     }
 
@@ -187,7 +187,7 @@ struct SettingsView: View {
                             Label("Pending writes", systemImage: "tray.full")
                         }
                     } header: {
-                        Rubric(text: "sync", number: 7)
+                        Rubric(text: "sync")
                     }
 
                     Section {

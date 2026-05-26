@@ -134,7 +134,7 @@ struct JournalView: View {
                     Text("Daybook")
                         .font(HerbFont.display(size: 38))
                         .foregroundStyle(HerbColor.ink)
-                    Text("\(HerbRomanNumeral.string(for: entries.count)) entries · the household garden")
+                    Text("\(entries.count) entries · the household garden")
                         .font(HerbFont.bodyItalic(size: 12))
                         .foregroundStyle(HerbColor.inkSoft)
                 }
