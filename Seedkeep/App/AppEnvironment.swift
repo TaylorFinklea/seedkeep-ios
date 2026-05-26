@@ -31,7 +31,7 @@ public final class AppEnvironment {
     public var requestedTab: AppTab?
 
     public enum AppTab: Hashable {
-        case library, garden, journal, random, assistant, settings, you
+        case today, library, garden, journal, random, assistant, settings, you
     }
 
     public static func live() -> AppEnvironment {
