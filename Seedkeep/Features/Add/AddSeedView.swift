@@ -401,7 +401,13 @@ struct AddSeedView: View {
             if let inferredType = inferredCustomType() {
                 try? appEnv.sync.setLocalCustomType(seedID: local.id, type: inferredType)
             }
-            try? await appEnv.sync.flushPending()
+            // Dismiss immediately — the seed is in local SwiftData, the user
+            // sees it in Library right away, and the server push happens
+            // in the background. Previously this `await`-ed flushPending()
+            // which serially drains EVERY queued write, causing the
+            // confirm-seed screen to hang multi-seconds whenever older
+            // pending writes were still in the queue (logged 7945ms freeze).
+            Task { try? await appEnv.sync.flushPending() }
             dismiss()
         } catch {
             saveError = error.localizedDescription

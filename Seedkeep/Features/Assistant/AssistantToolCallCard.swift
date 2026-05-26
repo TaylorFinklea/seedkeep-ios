@@ -1,9 +1,12 @@
 import SwiftUI
 
 /// Inline tool-call card rendered within an assistant message bubble.
-/// Renders status (running/done/failed/cancelled/proposed); for proposed
-/// destructive ops, shows Confirm/Cancel buttons that surface the
-/// Was→Becomes diff. T8 polishes the visuals; this version is functional.
+/// Renders status (running/done/failed/cancelled/proposed). The proposed
+/// variant pops a confirm/cancel card with a Was→Becomes description.
+///
+/// Herbarium chrome: flat vellum surface, small-caps status pill, sepia
+/// accent stripe. No SF Symbol noise — single glyph + colored stripe is
+/// the visual language.
 struct AssistantToolCallCard: View {
     let toolCall: LocalAssistantToolCall
     let onConfirm: () -> Void
@@ -13,70 +16,110 @@ struct AssistantToolCallCard: View {
         if toolCall.status == "proposed" {
             ProposedChangeCard(toolCall: toolCall, onConfirm: onConfirm, onCancel: onCancel)
         } else {
-            HStack(spacing: 10) {
-                statusIcon
+            HStack(alignment: .center, spacing: 10) {
+                statusGlyph
+                    .frame(width: 14, height: 14)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(displayTitle)
-                        .font(.subheadline.weight(.medium))
+                    HStack(spacing: 8) {
+                        Text(displayTitle)
+                            .font(HerbFont.smallCaps(size: 10))
+                            .tracking(1.4)
+                            .foregroundStyle(HerbColor.ink)
+                            .textCase(.uppercase)
+                        statusPill
+                    }
                     if let subtitle {
                         Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(HerbFont.bodyItalic(size: 11))
+                            .foregroundStyle(HerbColor.inkSoft)
                             .lineLimit(2)
                     }
                 }
                 Spacer()
                 if toolCall.status == "running" {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.small).tint(HerbColor.sepia)
                 }
             }
-            .padding(10)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 8))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(HerbColor.vellumHi)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(stripeColor)
+                    .frame(width: 2.5)
+            }
             .overlay(
-                RoundedRectangle(cornerRadius: 8).stroke(borderColor, lineWidth: 1)
+                Rectangle().strokeBorder(HerbColor.inkFaint, lineWidth: 0.5)
             )
         }
     }
 
-    // MARK: - Style helpers
+    // MARK: - Style
 
-    private var statusIcon: some View {
-        Group {
-            switch toolCall.status {
-            case "running":   Image(systemName: "gear")
-            case "done":      Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            case "failed":    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-            case "cancelled": Image(systemName: "xmark.circle").foregroundStyle(.secondary)
-            default:          Image(systemName: "wrench.and.screwdriver")
-            }
+    @ViewBuilder
+    private var statusGlyph: some View {
+        switch toolCall.status {
+        case "running":
+            Text("⟳")
+                .font(HerbFont.smallCaps(size: 13))
+                .foregroundStyle(HerbColor.ochre)
+        case "done":
+            Text("✓")
+                .font(HerbFont.smallCaps(size: 13))
+                .foregroundStyle(HerbColor.verdictNow)
+        case "failed":
+            Text("✗")
+                .font(HerbFont.smallCaps(size: 13))
+                .foregroundStyle(HerbColor.rose)
+        case "cancelled":
+            Text("—")
+                .font(HerbFont.smallCaps(size: 13))
+                .foregroundStyle(HerbColor.inkFaint)
+        default:
+            Text("◇")
+                .font(HerbFont.smallCaps(size: 13))
+                .foregroundStyle(HerbColor.sepia)
         }
-        .font(.system(size: 16))
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        Text(statusLabel)
+            .font(HerbFont.smallCaps(size: 8))
+            .tracking(1.2)
+            .foregroundStyle(stripeColor)
+            .textCase(.uppercase)
+    }
+
+    private var statusLabel: String {
+        switch toolCall.status {
+        case "running":   return "running"
+        case "done":      return "completed"
+        case "failed":    return "failed"
+        case "cancelled": return "cancelled"
+        default:          return toolCall.status
+        }
+    }
+
+    private var stripeColor: Color {
+        switch toolCall.status {
+        case "running":   return HerbColor.ochre
+        case "done":      return HerbColor.verdictNow
+        case "failed":    return HerbColor.rose
+        case "cancelled": return HerbColor.inkFaint
+        default:          return HerbColor.sepia
+        }
     }
 
     private var displayTitle: String {
         // Humanize "create_planting_event" → "Create planting event"
-        let parts = toolCall.toolName.split(separator: "_").map(String.init)
-        guard let first = parts.first else { return toolCall.toolName }
-        let rest = parts.dropFirst().joined(separator: " ")
-        return rest.isEmpty ? first.capitalized : "\(first.capitalized) \(rest)"
+        toolCall.toolName.split(separator: "_").joined(separator: " ")
     }
 
     private var subtitle: String? {
         switch toolCall.status {
-        case "running": return "Sprout is running this tool…"
-        case "done":    return "Completed"
-        case "failed":  return errorSummary(from: toolCall.resultJSON)
-        case "cancelled": return "Cancelled"
-        default: return nil
-        }
-    }
-
-    private var borderColor: Color {
-        switch toolCall.status {
-        case "failed":    return .red.opacity(0.5)
-        case "done":      return .green.opacity(0.3)
-        case "cancelled": return .gray.opacity(0.3)
-        default:          return .gray.opacity(0.2)
+        case "failed":    return errorSummary(from: toolCall.resultJSON)
+        default:          return nil
         }
     }
 
@@ -90,25 +133,36 @@ struct AssistantToolCallCard: View {
     }
 }
 
-/// Confirm/Cancel card for a destructive op the LLM has proposed. Shows
-/// the action title; T8 will add a Was→Becomes diff renderer.
+/// Confirm/Cancel card for a destructive op the LLM has proposed.
+/// Ochre-bordered "Confirm change" header + bulleted description + two
+/// liquid-glass action buttons (Cancel outline + Confirm sepia primary).
 struct ProposedChangeCard: View {
     let toolCall: LocalAssistantToolCall
     let onConfirm: () -> Void
     let onCancel: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text(actionTitle)
-                    .font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("⚠")
+                    .font(.system(size: 14))
+                    .foregroundStyle(HerbColor.ochre)
+                Text("Confirm change · \(actionTitle)")
+                    .font(HerbFont.smallCaps(size: 10))
+                    .tracking(1.5)
+                    .foregroundStyle(HerbColor.ink)
+                    .textCase(.uppercase)
             }
             if let description = changeDescription {
                 Text(description)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(HerbFont.body(size: 13))
+                    .foregroundStyle(HerbColor.ink)
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(HerbColor.ochre)
+                            .frame(width: 2)
+                    }
             }
             HStack(spacing: 10) {
                 Button(role: .destructive) {
@@ -126,23 +180,21 @@ struct ProposedChangeCard: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(HerbColor.sage)
             }
         }
-        .padding(10)
-        .background(Color.orange.opacity(0.1), in: .rect(cornerRadius: 10))
+        .padding(12)
+        .background(HerbColor.ochre.opacity(0.08))
         .overlay(
-            RoundedRectangle(cornerRadius: 10).stroke(Color.orange.opacity(0.4), lineWidth: 1)
+            Rectangle().strokeBorder(HerbColor.ochre.opacity(0.7), lineWidth: 1)
         )
     }
 
     private var actionTitle: String {
-        let parts = toolCall.toolName.split(separator: "_").map(String.init)
-        let humanized = parts.joined(separator: " ").capitalized
-        return "Confirm: \(humanized)?"
+        toolCall.toolName.split(separator: "_").joined(separator: " ")
     }
 
     /// Renders the `description` field of the proposed_change JSON if present.
-    /// T8 will expand this with a Was→Becomes diff renderer.
     private var changeDescription: String? {
         guard let json = toolCall.proposedChangeJSON,
               let data = json.data(using: .utf8),
