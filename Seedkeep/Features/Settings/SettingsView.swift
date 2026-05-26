@@ -201,7 +201,8 @@ struct SettingsView: View {
                 }
                 .scrollContentBackground(.hidden)
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 

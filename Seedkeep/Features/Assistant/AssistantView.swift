@@ -57,8 +57,8 @@ struct AssistantView: View {
                 .scrollContentBackground(.hidden)
                 .listStyle(.plain)
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationTitle("Sprout")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: String.self) { id in
                 AssistantThreadView(threadID: id)
             }

@@ -38,7 +38,8 @@ struct YouView: View {
                 }
                 .scrollContentBackground(.hidden)
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 

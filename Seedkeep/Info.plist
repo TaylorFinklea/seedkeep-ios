@@ -45,14 +45,13 @@
 	<string>$(SEEDKEEP_API_SCHEME)</string>
 	<key>UIAppFonts</key>
 	<array>
-		<string>Fonts/Spectral-Light.ttf</string>
-		<string>Fonts/Spectral-LightItalic.ttf</string>
-		<string>Fonts/Spectral-Regular.ttf</string>
-		<string>Fonts/Spectral-Italic.ttf</string>
-		<string>Fonts/Spectral-Medium.ttf</string>
-		<string>Fonts/IMFellEnglishSC-Regular.ttf</string>
-		<string>Fonts/Caveat-Regular.ttf</string>
-		<string>Fonts/Caveat-Medium.ttf</string>
+		<string>Spectral-Light.ttf</string>
+		<string>Spectral-LightItalic.ttf</string>
+		<string>Spectral-Regular.ttf</string>
+		<string>Spectral-Italic.ttf</string>
+		<string>Spectral-Medium.ttf</string>
+		<string>IMFellEnglishSC-Regular.ttf</string>
+		<string>Caveat-Variable.ttf</string>
 	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>

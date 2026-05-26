@@ -671,31 +671,54 @@ private struct FlowerIllustration: View {
     var body: some View {
         GeometryReader { geo in
             let s = min(geo.size.width, geo.size.height) / 90
-            ZStack {
+            ZStack(alignment: .topLeading) {
+                // Stem — from the soil up to under the flower head
                 Path { p in
-                    p.move(to: CGPoint(x: 45 * s, y: 80 * s))
-                    p.addLine(to: CGPoint(x: 45 * s, y: 44 * s))
+                    p.move(to: CGPoint(x: 45 * s, y: 82 * s))
+                    p.addLine(to: CGPoint(x: 45 * s, y: 32 * s))
                 }
                 .stroke(IllusColor.stem, lineWidth: 1.2 * s)
-                ForEach(0..<6) { i in
-                    let a = Double(i) / 6 * .pi * 2
-                    let petalX = CGFloat(cos(a - .pi/2)) * 8 * s
-                    let petalY = CGFloat(sin(a - .pi/2)) * 8 * s + 30 * s
-                    Capsule()
-                        .fill(IllusColor.yellow)
-                        .frame(width: 10 * s, height: 18 * s)
-                        .rotationEffect(.degrees(a * 180 / .pi))
-                        .offset(x: petalX, y: petalY)
-                }
-                Circle().fill(IllusColor.orangeDark).frame(width: 10 * s, height: 10 * s).offset(x: 0, y: 30 * s)
-                // Leaves
+
+                // Leaves on the stem
                 Path { p in
-                    p.move(to: CGPoint(x: 45 * s, y: 62 * s))
+                    p.move(to: CGPoint(x: 45 * s, y: 60 * s))
                     p.addQuadCurve(to: CGPoint(x: 22 * s, y: 52 * s), control: CGPoint(x: 30 * s, y: 50 * s))
-                    p.addQuadCurve(to: CGPoint(x: 45 * s, y: 62 * s), control: CGPoint(x: 30 * s, y: 64 * s))
+                    p.addQuadCurve(to: CGPoint(x: 45 * s, y: 60 * s), control: CGPoint(x: 30 * s, y: 62 * s))
                 }
                 .fill(IllusColor.leafLight)
+                Path { p in
+                    p.move(to: CGPoint(x: 45 * s, y: 66 * s))
+                    p.addQuadCurve(to: CGPoint(x: 68 * s, y: 58 * s), control: CGPoint(x: 60 * s, y: 56 * s))
+                    p.addQuadCurve(to: CGPoint(x: 45 * s, y: 66 * s), control: CGPoint(x: 60 * s, y: 68 * s))
+                }
+                .fill(IllusColor.leafLight)
+
+                // Petals — rendered as Path ellipses around the head center
+                ForEach(0..<6, id: \.self) { i in
+                    let a = Double(i) / 6 * .pi * 2 - .pi / 2
+                    Path { p in
+                        let cx: CGFloat = 45 * s
+                        let cy: CGFloat = 22 * s
+                        let r: CGFloat = 9 * s
+                        let petalCenterX = cx + CGFloat(cos(a)) * r
+                        let petalCenterY = cy + CGFloat(sin(a)) * r
+                        p.addEllipse(in: CGRect(
+                            x: petalCenterX - 5 * s,
+                            y: petalCenterY - 5 * s,
+                            width: 10 * s,
+                            height: 10 * s
+                        ))
+                    }
+                    .fill(IllusColor.yellow)
+                }
+
+                // Flower center
+                Path { p in
+                    p.addEllipse(in: CGRect(x: 40 * s, y: 17 * s, width: 10 * s, height: 10 * s))
+                }
+                .fill(IllusColor.orangeDark)
             }
+            .frame(width: 90 * s, height: 90 * s)
         }
     }
 }

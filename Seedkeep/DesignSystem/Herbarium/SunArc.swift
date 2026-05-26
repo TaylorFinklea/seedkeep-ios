@@ -73,16 +73,20 @@ struct SunArc: View {
                     Circle()
                         .strokeBorder(HerbColor.sepia, lineWidth: 1)
                         .frame(width: 18, height: 18)
+                    // Rays — draw via individual capsules positioned by
+                    // .offset so they sit around the local center of the
+                    // ZStack rather than at the GeometryReader origin.
                     ForEach(0..<8, id: \.self) { i in
                         let a = Double(i) / 8 * .pi * 2
-                        Path { p in
-                            p.move(to: CGPoint(x: cos(a) * 12, y: sin(a) * 12))
-                            p.addLine(to: CGPoint(x: cos(a) * 16, y: sin(a) * 16))
-                        }
-                        .stroke(HerbColor.ochre, lineWidth: 0.9)
+                        Capsule()
+                            .fill(HerbColor.ochre)
+                            .frame(width: 0.9, height: 4)
+                            .offset(x: CGFloat(cos(a)) * 14, y: CGFloat(sin(a)) * 14)
+                            .rotationEffect(.degrees(a * 180 / .pi - 90))
                     }
                 }
-                .offset(x: sunX - 9, y: sunY - 9)
+                .frame(width: 32, height: 32)
+                .position(x: sunX, y: sunY)
             }
             .overlay(alignment: .topLeading) {
                 Text(timeLabel(sunrise))

@@ -82,8 +82,8 @@ struct JournalView: View {
                 .scrollContentBackground(.hidden)
                 .listStyle(.plain)
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationTitle("Journal")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .existing(let id):

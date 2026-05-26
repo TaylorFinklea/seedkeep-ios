@@ -56,7 +56,8 @@ struct LibraryView: View {
                 }
                 .overlay(alignment: .bottomTrailing) { SproutFAB() }
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search seeds")
             .publishesAssistantContext(pageType: "library")
             .toolbar {
@@ -127,11 +128,11 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var lifecycleStrip: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 0) {
             ForEach(SeedState.allCases, id: \.self) { state in
                 lifecycleButton(state)
+                    .frame(maxWidth: .infinity)
             }
-            Spacer()
         }
     }
 
@@ -145,12 +146,14 @@ struct LibraryView: View {
             VStack(spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(label(state))
-                        .font(HerbFont.smallCaps(size: 11))
-                        .tracking(1.4)
+                        .font(HerbFont.smallCaps(size: 10))
+                        .tracking(1.2)
                         .foregroundStyle(active ? HerbColor.ink : HerbColor.inkSoft)
                         .textCase(.uppercase)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     Text("\(count)")
-                        .font(HerbFont.bodyItalic(size: 11))
+                        .font(HerbFont.bodyItalic(size: 10))
                         .foregroundStyle(HerbColor.inkSoft)
                 }
                 Rectangle()
@@ -166,7 +169,7 @@ struct LibraryView: View {
         case .active:   return "Active"
         case .wishlist: return "Wished"
         case .saved:    return "Saved"
-        case .archived: return "Archived"
+        case .archived: return "Archive"
         }
     }
 }

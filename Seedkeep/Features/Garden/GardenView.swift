@@ -53,8 +53,8 @@ struct GardenView: View {
                     }
                 }
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationTitle("Garden")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .publishesAssistantContext(pageType: "garden")
             .navigationDestination(for: String.self) { bedID in
                 BedDetailView(bedID: bedID)

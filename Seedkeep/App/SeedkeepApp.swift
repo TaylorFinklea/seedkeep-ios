@@ -12,9 +12,10 @@ struct SeedkeepApp: App {
     }
 
     /// Apply the IM Fell English SC small-caps font to tab bar labels
-    /// while keeping the native liquid-glass tab bar chrome.
+    /// while keeping the native liquid-glass tab bar chrome. The
+    /// PostScript name has underscores (not what the filename suggests).
     private func configureTabBarAppearance() {
-        guard let smallCapsFont = UIFont(name: "IMFellEnglishSC", size: 10) else { return }
+        guard let smallCapsFont = UIFont(name: "IM_FELL_English_SC", size: 10) else { return }
         let labelAttrs: [NSAttributedString.Key: Any] = [
             .font: smallCapsFont,
             .kern: 1.2
@@ -29,6 +30,10 @@ struct SeedkeepApp: App {
                 .environment(environment)
                 .environment(environment.auth)
                 .modelContainer(environment.container)
+                // Force light mode while we validate the Herbarium palette
+                // on-device. Dark variants exist in HerbColor but are gated
+                // off until they've been verified screen-by-screen.
+                .preferredColorScheme(.light)
                 .task {
                     await environment.auth.restoreSession()
                 }

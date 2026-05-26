@@ -39,20 +39,23 @@ enum HerbFont {
 
     // MARK: - IM Fell English SC (small-caps)
 
-    /// Small-caps rubrics, folio markers, tab labels. Letter-spacing is
-    /// applied at the call-site via `.tracking()`.
+    /// Small-caps rubrics, folio markers, tab labels. The PostScript name
+    /// has UNDERSCORES — `IM_FELL_English_SC` — not what the filename
+    /// suggests. Letter-spacing is applied at the call-site via `.tracking()`.
     static func smallCaps(size: CGFloat = 10) -> Font {
-        .custom("IMFellEnglishSC", size: size)
+        .custom("IM_FELL_English_SC", size: size)
     }
 
-    // MARK: - Caveat (handwritten)
+    // MARK: - Caveat (handwritten, variable font)
 
+    /// Caveat ships as a single variable-weight TTF. The PostScript name
+    /// is `Caveat-Regular`; heavier weights come from `.weight()`.
     static func handwritten(size: CGFloat = 16) -> Font {
         .custom("Caveat-Regular", size: size)
     }
 
     static func handwrittenEmph(size: CGFloat = 16) -> Font {
-        .custom("Caveat-Medium", size: size)
+        .custom("Caveat-Regular", size: size).weight(.medium)
     }
 }
 
