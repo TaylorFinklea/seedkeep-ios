@@ -52,11 +52,28 @@ struct AddSeedView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if prefill != nil {
-                    Section { prefillBanner }
-                }
-                extractedGrowingInfoSection
+            ZStack {
+                VellumBackground()
+                Form {
+                    Section {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(prefill == nil ? "Lay a new packet" : "Confirm specimen")
+                                .font(HerbFont.smallCaps(size: 10))
+                                .tracking(2)
+                                .foregroundStyle(HerbColor.sepia)
+                                .textCase(.uppercase)
+                            Text(prefill == nil ? "Add seed" : "Specimen review")
+                                .font(HerbFont.display(size: 30))
+                                .foregroundStyle(HerbColor.ink)
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
+                        .listRowSeparator(.hidden)
+                    }
+                    if prefill != nil {
+                        Section { prefillBanner }
+                    }
+                    extractedGrowingInfoSection
                 Section("Lifecycle") {
                     Picker("State", selection: $state) {
                         Text("Active").tag(SeedState.active)
@@ -124,6 +141,8 @@ struct AddSeedView: View {
                             .foregroundStyle(.red)
                     }
                 }
+                }
+                .scrollContentBackground(.hidden)
             }
             .navigationTitle(prefill == nil ? "Add seed" : "Confirm seed")
             .navigationBarTitleDisplayMode(.inline)

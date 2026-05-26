@@ -7,6 +7,22 @@ struct SeedkeepApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var pendingInviteCode: String?
 
+    init() {
+        configureTabBarAppearance()
+    }
+
+    /// Apply the IM Fell English SC small-caps font to tab bar labels
+    /// while keeping the native liquid-glass tab bar chrome.
+    private func configureTabBarAppearance() {
+        guard let smallCapsFont = UIFont(name: "IMFellEnglishSC", size: 10) else { return }
+        let labelAttrs: [NSAttributedString.Key: Any] = [
+            .font: smallCapsFont,
+            .kern: 1.2
+        ]
+        UITabBarItem.appearance().setTitleTextAttributes(labelAttrs, for: .normal)
+        UITabBarItem.appearance().setTitleTextAttributes(labelAttrs, for: .selected)
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(pendingInviteCode: $pendingInviteCode)
