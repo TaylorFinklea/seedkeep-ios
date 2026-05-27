@@ -156,6 +156,13 @@ public final class SyncEngine {
                 try await dispatch(write)
                 context.delete(write)
                 try context.save()
+            } catch let err as SeedkeepError where write.operation == "delete" && err.code == "not_found" {
+                // A delete that the server says doesn't exist is a no-op
+                // success: the row is already gone (or never reached the
+                // server because its create failed). Either way our local
+                // intent — "this row should be deleted" — is satisfied.
+                context.delete(write)
+                try? context.save()
             } catch let err as SeedkeepError {
                 handleFailure(write, message: "\(err.code): \(err.message)", in: context)
             } catch {
