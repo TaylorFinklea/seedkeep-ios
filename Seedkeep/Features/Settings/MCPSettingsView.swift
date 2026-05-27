@@ -19,6 +19,8 @@ struct MCPSettingsView: View {
     @State private var creating = false
 
     @State private var freshSecret: SeedkeepClient.MCPTokenSecretDTO?
+    @State private var freshPairingCode: SeedkeepClient.WebPairingCodeDTO?
+    @State private var generatingPair = false
 
     var body: some View {
         ZStack {
@@ -49,15 +51,43 @@ struct MCPSettingsView: View {
                     } label: {
                         HStack(spacing: 6) {
                             Text("✦").foregroundStyle(HerbColor.sepia)
-                            Text("Issue a new token")
+                            Text("Issue a token (Claude Desktop)")
                                 .font(HerbFont.smallCaps(size: 11))
                                 .tracking(1.4)
                                 .foregroundStyle(HerbColor.sepia)
                                 .textCase(.uppercase)
                         }
                     }
+                } header: {
+                    Rubric(text: "claude desktop")
                 } footer: {
-                    Text("You can issue multiple tokens — one per device or client. Revoke any token by swiping it away.")
+                    Text("Claude Desktop uses a long-lived bearer token. Issue one here, paste it into your config, restart Claude.")
+                        .font(HerbFont.bodyItalic(size: 11))
+                        .foregroundStyle(HerbColor.inkSoft)
+                }
+
+                Section {
+                    Button {
+                        Task { await pairBrowser() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if generatingPair {
+                                ProgressView().controlSize(.small).tint(HerbColor.sepia)
+                            } else {
+                                Text("◇").foregroundStyle(HerbColor.sepia)
+                            }
+                            Text("Pair browser (Claude.ai / OAuth)")
+                                .font(HerbFont.smallCaps(size: 11))
+                                .tracking(1.4)
+                                .foregroundStyle(HerbColor.sepia)
+                                .textCase(.uppercase)
+                        }
+                    }
+                    .disabled(generatingPair)
+                } header: {
+                    Rubric(text: "claude.ai web")
+                } footer: {
+                    Text("Claude.ai uses OAuth. Tap to generate a short code, then add the MCP server in claude.ai with the URL below and type the code on the pairing page.")
                         .font(HerbFont.bodyItalic(size: 11))
                         .foregroundStyle(HerbColor.inkSoft)
                 }
@@ -81,6 +111,9 @@ struct MCPSettingsView: View {
         }
         .sheet(item: $freshSecret) { secret in
             FreshSecretSheet(secret: secret)
+        }
+        .sheet(item: $freshPairingCode) { code in
+            PairingCodeSheet(code: code)
         }
     }
 
@@ -210,6 +243,19 @@ struct MCPSettingsView: View {
         }
     }
 
+    private func pairBrowser() async {
+        generatingPair = true
+        defer { generatingPair = false }
+        do {
+            let code = try await appEnv.client.createWebPairingCode()
+            freshPairingCode = code
+        } catch let err as SeedkeepError {
+            errorMessage = "\(err.code): \(err.message)"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func relative(_ ms: Int64) -> String {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
@@ -221,6 +267,101 @@ struct MCPSettingsView: View {
 }
 
 extension SeedkeepClient.MCPTokenSecretDTO: Identifiable {}
+extension SeedkeepClient.WebPairingCodeDTO: Identifiable {
+    public var id: String { code }
+}
+
+/// One-time view of a freshly-minted browser pairing code. The user
+/// keeps this sheet open while connecting claude.ai's MCP UI; when the
+/// browser asks for the code they type it from here.
+private struct PairingCodeSheet: View {
+    let code: SeedkeepClient.WebPairingCodeDTO
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppEnvironment.self) private var appEnv
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                VellumBackground()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Browser pairing code")
+                                .font(HerbFont.display(size: 26))
+                                .foregroundStyle(HerbColor.ink)
+                            Text("Use this in claude.ai's MCP connect flow. Valid for 10 minutes, single-use.")
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("YOUR CODE")
+                                .herbRubricStyle(size: 9, tracking: 1.4)
+                            Text(formattedCode)
+                                .font(.system(size: 32, weight: .semibold, design: .monospaced))
+                                .tracking(8)
+                                .foregroundStyle(HerbColor.ink)
+                                .textSelection(.enabled)
+                                .padding(14)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .background(HerbColor.vellumHi)
+                                .overlay(Rectangle().strokeBorder(HerbColor.sepia, lineWidth: 1))
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("HOW TO USE")
+                                .herbRubricStyle(size: 9, tracking: 1.4)
+                            VStack(alignment: .leading, spacing: 6) {
+                                stepRow(num: 1, text: "In claude.ai, open Settings → Integrations → Add MCP server")
+                                stepRow(num: 2, text: "MCP server URL: ")
+                                Text("\(appEnv.preferences.effectiveServerURL.absoluteString)/mcp")
+                                    .font(.caption.monospaced())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(HerbColor.vellumHi)
+                                stepRow(num: 3, text: "When the browser asks you to pair, type the code above")
+                                stepRow(num: 4, text: "Approve the consent screen — Claude.ai gets read + write access via OAuth")
+                            }
+                        }
+
+                        Text("Authorization happens on \(appEnv.preferences.effectiveServerURL.absoluteString) — claude.ai never sees your iOS session or Apple credentials.")
+                            .font(HerbFont.bodyItalic(size: 12))
+                            .foregroundStyle(HerbColor.inkSoft)
+                            .padding(.top, 8)
+                    }
+                    .padding(20)
+                }
+            }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stepRow(num: Int, text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(num).")
+                .font(HerbFont.bodyEmph(size: 13))
+                .foregroundStyle(HerbColor.sepia)
+            Text(text)
+                .font(HerbFont.body(size: 13))
+                .foregroundStyle(HerbColor.ink)
+        }
+    }
+
+    /// Split the 8-char code in half for readability (XXXX-XXXX).
+    private var formattedCode: String {
+        let s = code.code
+        guard s.count >= 6 else { return s }
+        let half = s.count / 2
+        return s.prefix(half) + "-" + s.suffix(s.count - half)
+    }
+}
 
 /// One-time view of the raw token secret, with a copy button and the
 /// MCP config snippet ready to paste into Claude Desktop.

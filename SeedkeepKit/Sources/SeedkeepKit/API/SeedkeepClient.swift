@@ -772,6 +772,19 @@ public actor SeedkeepClient {
         _ = try await deleteJSON(path: "/api/mcp/tokens/\(id)") as Resp
     }
 
+    /// Phase 4 E (OAuth) · short-lived pairing code used to bridge an
+    /// iOS session to a browser session during the OAuth consent flow.
+    /// Code lives for 10 min and is single-use.
+    public struct WebPairingCodeDTO: Decodable, Sendable, Equatable {
+        public let code: String
+        public let expires_at: Int64
+    }
+
+    public func createWebPairingCode() async throws -> WebPairingCodeDTO {
+        struct Empty: Encodable, Sendable {}
+        return try await postJSON(path: "/api/web_pairing_codes", body: Empty())
+    }
+
     // MARK: - Journal (Phase 3)
 
     /// `GET /api/journal` — delta-sync paginated feed. Mirrors the same
