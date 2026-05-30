@@ -154,6 +154,18 @@ public final class SyncEngine {
 
             do {
                 try await dispatch(write)
+                // On a successful create, wake any dead-lettered children
+                // whose payloads reference this just-created entity id.
+                // Without this, a planting_event.create that dead-lettered
+                // because its seed_id hadn't synced yet stays dead even
+                // after the seed.create lands — the user has to manually
+                // retry every child.
+                if write.operation == "create" {
+                    wakeChildrenReferencing(
+                        entityType: write.entityType,
+                        entityID: write.entityID,
+                        in: context)
+                }
                 context.delete(write)
                 try context.save()
             } catch let err as SeedkeepError where write.operation == "delete" && err.code == "not_found" {
@@ -169,6 +181,36 @@ public final class SyncEngine {
                 handleFailure(write, message: error.localizedDescription, in: context)
             }
         }
+    }
+
+    /// Reset dead-lettered pending writes that reference an entity we
+    /// just successfully created. The payload JSON is searched for the
+    /// just-created id; matches get attemptCount=0 and nextAttemptAt=now
+    /// so the next sync round picks them up.
+    private func wakeChildrenReferencing(
+        entityType: String,
+        entityID: String,
+        in context: ModelContext
+    ) {
+        // Only seeds + beds + planting_events appear as parent
+        // references in other write payloads. Locations + tags are
+        // referenced by id-array fields on seeds, also covered.
+        guard ["seed", "bed", "planting_event", "location", "tag"].contains(entityType) else { return }
+        let descriptor = FetchDescriptor<LocalPendingWrite>()
+        guard let all = try? context.fetch(descriptor) else { return }
+        for child in all where child.isDeadLettered {
+            // Cheap textual check — the payload is JSON and the id is
+            // sufficiently distinctive (UUID embedded in a prefix). A
+            // false positive at worst causes one extra retry, which
+            // will succeed or re-dead-letter cleanly.
+            if child.payloadJSON.contains("\"\(entityID)\"") {
+                child.isDeadLettered = false
+                child.attemptCount = 0
+                child.lastError = nil
+                child.nextAttemptAt = Self.nowMs()
+            }
+        }
+        try? context.save()
     }
 
     private func handleFailure(_ write: LocalPendingWrite, message: String, in context: ModelContext) {
@@ -776,20 +818,38 @@ public final class SyncEngine {
 
     private func upsertPlantingEvents(_ items: [PlantingEventDTO]) throws {
         let context = ModelContext(container)
+        // Track ids whose pending UNUserNotification reminder should be
+        // cancelled — either because the server marked the event
+        // deleted, or because it's now completed. Without this, a
+        // cross-device delete or "mark done" leaves a stale notification
+        // queued on the local device.
+        var idsToCancelReminder: [String] = []
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id })
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
+                    idsToCancelReminder.append(id)
                     context.delete(existing)
                 } else {
+                    let wasCompleted = existing.completedAt != nil
                     dto.apply(to: existing)
+                    if !wasCompleted && existing.completedAt != nil {
+                        idsToCancelReminder.append(id)
+                    }
                 }
             } else if dto.deleted_at == nil {
                 context.insert(dto.makeLocal())
             }
         }
         try context.save()
+        if !idsToCancelReminder.isEmpty {
+            Task { @MainActor in
+                for id in idsToCancelReminder {
+                    NotificationsCenter.shared.cancelPlantingEventReminder(eventID: id)
+                }
+            }
+        }
     }
 
     private func upsertJournalEntries(_ items: [JournalEntryDTO]) throws {

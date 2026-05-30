@@ -211,32 +211,66 @@ final class AIAssistantCoordinator {
         // We persist the events into SwiftData as they arrive so the view's
         // @Query re-renders give the typewriter effect. The server already
         // wrote the row to Postgres; we mirror that here.
+        //
+        // Text deltas can fire hundreds of times per response — a save()
+        // per token is real CPU + battery churn. We coalesce: apply the
+        // delta in-memory on every event, but only commit to SwiftData
+        // when (a) at least `streamSaveDebounceMs` has elapsed since the
+        // last flush, (b) the event is a non-delta (tool_use_*, done,
+        // error), or (c) the stream ends. Non-text-delta events ALWAYS
+        // flush so the view sees tool cards immediately.
         let ctx = ModelContext(container)
         var activeAssistantMessageID: String?
+        var lastFlushAt = Date()
+        var dirty = false
+        let flushIntervalSeconds: TimeInterval = 0.15
+
+        func flushIfDirty(force: Bool = false) {
+            guard dirty else { return }
+            if !force && Date().timeIntervalSince(lastFlushAt) < flushIntervalSeconds { return }
+            do { try ctx.save() } catch {
+                // A failed save here is recoverable on the next event —
+                // the in-memory model state is still correct, the next
+                // flush will retry. Don't fail the stream over it.
+            }
+            dirty = false
+            lastFlushAt = Date()
+        }
+
         do {
             for try await event in stream {
                 switch event {
                 case .textDelta(let messageId, let delta):
                     activeAssistantMessageID = messageId
                     streamingState = .streaming(messageID: messageId)
-                    try appendTextDelta(to: messageId, threadID: threadID, delta: delta, in: ctx)
+                    try appendTextDeltaInMemory(to: messageId, threadID: threadID, delta: delta, in: ctx)
+                    dirty = true
+                    flushIfDirty()
 
                 case .toolUseStart(let toolCallId, let messageId, let toolName):
                     activeAssistantMessageID = messageId
                     streamingState = .streaming(messageID: messageId)
-                    try upsertToolCall(
+                    try upsertToolCallInMemory(
                         id: toolCallId, messageID: messageId, threadID: threadID,
                         toolName: toolName, argsJSON: "{}", status: "running",
                         in: ctx)
+                    dirty = true
+                    flushIfDirty(force: true)
 
                 case .toolUseDone(let toolCallId, let argsJson):
-                    try patchToolCallArgs(id: toolCallId, argsJSON: argsJson, in: ctx)
+                    try patchToolCallArgsInMemory(id: toolCallId, argsJSON: argsJson, in: ctx)
+                    dirty = true
+                    flushIfDirty(force: true)
 
                 case .toolResult(let toolCallId, let status, let resultJson):
-                    try patchToolCallResult(id: toolCallId, status: status, resultJSON: resultJson, in: ctx)
+                    try patchToolCallResultInMemory(id: toolCallId, status: status, resultJSON: resultJson, in: ctx)
+                    dirty = true
+                    flushIfDirty(force: true)
 
                 case .proposedChange(let toolCallId, let proposedChangeJson):
-                    try patchToolCallProposed(id: toolCallId, proposedChangeJSON: proposedChangeJson, in: ctx)
+                    try patchToolCallProposedInMemory(id: toolCallId, proposedChangeJSON: proposedChangeJson, in: ctx)
+                    dirty = true
+                    flushIfDirty(force: true)
                     streamingState = .awaitingConfirmation(toolCallID: toolCallId)
                     // Stream will close after this event; loop exits cleanly.
 
@@ -255,17 +289,27 @@ final class AIAssistantCoordinator {
                 streamingState = .idle
             }
         } catch {
+            // Persist whatever we accumulated before the error so the
+            // user can see the partial reply on next view appear.
+            flushIfDirty(force: true)
             streamingState = .error(error.localizedDescription)
             lastError = error.localizedDescription
             throw error
         }
+        // Final flush so the typewriter's last few tokens land.
+        flushIfDirty(force: true)
         _ = activeAssistantMessageID  // (kept for future use if we want to scroll-to)
         // After the stream ends, refresh from server so we pick up the
         // canonical message + tool call rows (and to update updatedAt etc.).
         try? await sync?.refreshAssistantThread(threadID)
     }
 
-    private func appendTextDelta(
+    // In-memory variants — mutate the SwiftData objects but DON'T save.
+    // The streaming loop calls `flushIfDirty` to batch saves so the
+    // view sees the typewriter effect without per-token transaction
+    // overhead. Each helper mirrors its original save-inline cousin.
+
+    private func appendTextDeltaInMemory(
         to messageID: String,
         threadID: String,
         delta: String,
@@ -275,7 +319,6 @@ final class AIAssistantCoordinator {
         if let existing = try ctx.fetch(descriptor).first {
             existing.contentJSON = appendDeltaToContentJSON(existing.contentJSON, delta: delta)
         } else {
-            // First delta for this message — create the placeholder row.
             let initial = serializeContent(blocks: [.text(delta)])
             let msg = LocalAssistantMessage(
                 id: messageID, threadID: threadID, role: "assistant",
@@ -283,10 +326,9 @@ final class AIAssistantCoordinator {
                 createdAt: Int64(Date().timeIntervalSince1970 * 1000))
             ctx.insert(msg)
         }
-        try ctx.save()
     }
 
-    private func upsertToolCall(
+    private func upsertToolCallInMemory(
         id: String, messageID: String, threadID: String,
         toolName: String, argsJSON: String, status: String,
         in ctx: ModelContext
@@ -304,35 +346,31 @@ final class AIAssistantCoordinator {
                 resultJSON: nil, proposedChangeJSON: nil, confirmedAt: nil,
                 createdAt: now, updatedAt: now))
         }
-        try ctx.save()
     }
 
-    private func patchToolCallArgs(id: String, argsJSON: String, in ctx: ModelContext) throws {
+    private func patchToolCallArgsInMemory(id: String, argsJSON: String, in ctx: ModelContext) throws {
         let descriptor = FetchDescriptor<LocalAssistantToolCall>(predicate: #Predicate { $0.id == id })
         if let existing = try ctx.fetch(descriptor).first {
             existing.argsJSON = argsJSON
             existing.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
-            try ctx.save()
         }
     }
 
-    private func patchToolCallResult(id: String, status: String, resultJSON: String?, in ctx: ModelContext) throws {
+    private func patchToolCallResultInMemory(id: String, status: String, resultJSON: String?, in ctx: ModelContext) throws {
         let descriptor = FetchDescriptor<LocalAssistantToolCall>(predicate: #Predicate { $0.id == id })
         if let existing = try ctx.fetch(descriptor).first {
             existing.status = status
             existing.resultJSON = resultJSON
             existing.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
-            try ctx.save()
         }
     }
 
-    private func patchToolCallProposed(id: String, proposedChangeJSON: String, in ctx: ModelContext) throws {
+    private func patchToolCallProposedInMemory(id: String, proposedChangeJSON: String, in ctx: ModelContext) throws {
         let descriptor = FetchDescriptor<LocalAssistantToolCall>(predicate: #Predicate { $0.id == id })
         if let existing = try ctx.fetch(descriptor).first {
             existing.status = "proposed"
             existing.proposedChangeJSON = proposedChangeJSON
             existing.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
-            try ctx.save()
         }
     }
 

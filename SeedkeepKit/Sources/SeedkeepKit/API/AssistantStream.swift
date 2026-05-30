@@ -114,6 +114,11 @@ final class AssistantSSEDelegate: NSObject, URLSessionDataDelegate, @unchecked S
     private let continuation: AsyncThrowingStream<AssistantStreamEvent, Error>.Continuation
     private var pending = Data()
     private var dataLines: [String] = []
+    /// When the server returns a non-2xx, we buffer the body so we can
+    /// surface its JSON error message instead of an opaque status code.
+    /// `errorStatus` doubles as the "currently buffering an error" flag.
+    private var errorStatus: Int?
+    private var errorBody = Data()
     fileprivate weak var task: URLSessionDataTask?
 
     init(continuation: AsyncThrowingStream<AssistantStreamEvent, Error>.Continuation) {
@@ -127,9 +132,11 @@ final class AssistantSSEDelegate: NSObject, URLSessionDataDelegate, @unchecked S
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            continuation.finish(throwing: AssistantSSEError.badStatus(code))
-            completionHandler(.cancel)
+            // Don't finish yet — let didReceive(data:) buffer the
+            // response body, then didCompleteWithError fires the error
+            // with the parsed message. `.allow` here lets the bytes flow.
+            errorStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+            completionHandler(.allow)
             return
         }
         completionHandler(.allow)
@@ -140,6 +147,13 @@ final class AssistantSSEDelegate: NSObject, URLSessionDataDelegate, @unchecked S
         dataTask: URLSessionDataTask,
         didReceive data: Data
     ) {
+        if errorStatus != nil {
+            errorBody.append(data)
+            // Cap at 8 KB — error bodies are tiny; anything larger is
+            // bot output we don't want to buffer.
+            if errorBody.count > 8 * 1024 { errorBody.removeSubrange(8 * 1024..<errorBody.count) }
+            return
+        }
         pending.append(data)
         // Split on \n; keep any trailing partial line in `pending`.
         while let newlineIndex = pending.firstIndex(of: 0x0A) {
@@ -183,6 +197,14 @@ final class AssistantSSEDelegate: NSObject, URLSessionDataDelegate, @unchecked S
             continuation.finish()
             return
         }
+        // If we buffered a non-2xx response, parse the server's JSON
+        // error envelope and surface its message — much friendlier than
+        // a bare status code in the UI.
+        if let status = errorStatus {
+            let payload = parseErrorBody(errorBody)
+            continuation.finish(throwing: AssistantSSEError.badStatus(status: status, code: payload?.code, message: payload?.message))
+            return
+        }
         if let error {
             continuation.finish(throwing: error)
         } else {
@@ -197,8 +219,38 @@ final class AssistantSSEDelegate: NSObject, URLSessionDataDelegate, @unchecked S
             continuation.finish()
         }
     }
+
+    /// Best-effort decode of the server's `{ ok: false, error: { code, message } }`
+    /// envelope. Returns nil if the body isn't recognizable JSON.
+    private func parseErrorBody(_ data: Data) -> (code: String?, message: String?)? {
+        guard !data.isEmpty,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let err = json["error"] as? [String: Any]
+        else { return nil }
+        return (err["code"] as? String, err["message"] as? String)
+    }
 }
 
 public enum AssistantSSEError: Error, Sendable, Equatable {
-    case badStatus(Int)
+    case badStatus(status: Int, code: String?, message: String?)
+}
+
+extension AssistantSSEError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .badStatus(let status, let code, let message):
+            // Prefer the server's user-facing message; fall back to
+            // code-only, then the bare status as a last resort.
+            if let message, !message.isEmpty {
+                if let code, !code.isEmpty {
+                    return "\(code): \(message)"
+                }
+                return message
+            }
+            if let code, !code.isEmpty {
+                return "\(code) (HTTP \(status))"
+            }
+            return "Sprout request failed (HTTP \(status))"
+        }
+    }
 }
