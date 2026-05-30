@@ -8,6 +8,17 @@
 
 ## Last Session Summary
 
+**Date**: 2026-05-30 — Bug-sweep batch (iOS): 4 fixes around streaming + sync correctness
+
+- Cross-repo bug sweep alongside server work; this commit covers the iOS half.
+- **Commit (1, on `main`, NOT pushed yet)**: `7d6933d` sprout+sync: stream debounce, SSE error msg, notif cancel + wake children
+- **H2 streaming saves debounce** (`Seedkeep/Core/Assistant/AIAssistantCoordinator.swift`): consumeStream was calling `ctx.save()` per text_delta event — for a 500-token response that's 500 SwiftData transactions, real CPU + battery + scroll jank. Now mutates in-memory on every event and commits via a 150ms debounce. Tool-call events (toolUseStart/Done, toolResult, proposedChange) force-flush so cards land immediately. Final flush at stream end (both success and error paths). In-memory helper variants renamed `…InMemory`.
+- **M6 SSE error body propagation** (`SeedkeepKit/Sources/SeedkeepKit/API/AssistantStream.swift`): non-2xx responses no longer finish with bare `badStatus(Int)`. Delegate buffers up to 8 KB of the response body, then in `didCompleteWithError` parses the server's `{ ok:false, error:{ code, message } }` envelope and finishes with `badStatus(status:, code:, message:)`. New LocalizedError conformance surfaces the user-actionable message (e.g. "no_assistant_key: Set your Anthropic API key in Settings" instead of "bad status: 412"). **Breaking-shape change**: `AssistantSSEError.badStatus` case now has named labels — any caller that pattern-matches needs updating (none exist in app code today).
+- **M8 cancel stale notifications** (`Seedkeep/Core/Sync/SyncEngine.swift` upsertPlantingEvents): server-driven deletes and "mark completed" transitions now cancel the local UNUserNotification reminder. Previously only local-device deletes called cancelPlantingEventReminder; cross-device deletes left phantom reminders queued.
+- **M9 wake dead-lettered children** (`Seedkeep/Core/Sync/SyncEngine.swift` flushPending): after a successful create dispatch, new helper `wakeChildrenReferencing(entityType:entityID:)` scans the pending-write queue for dead-lettered rows whose payload JSON textually contains the just-created id and resets their `attemptCount=0` + `nextAttemptAt=now`. Fixes the case where a `planting_event.create` dead-letters because its seed_id hadn't synced — the child stays dead even after the parent eventually succeeds. Textual contains-check is a cheap heuristic; a false positive at worst causes one extra retry.
+- Verified: `xcodebuild build` clean for `generic/platform=iOS`; `xcodebuild test` 15/15 pass on `Seedkeep iPhone` simulator.
+- **Build 32 already on TestFlight from the prior session's pre-bug-sweep ship** — these four iOS fixes haven't been cut to a build yet. Open: cut a new TestFlight build (build 33) after server changes deploy so the SSE error-body parsing + the dead-letter wake have something to verify against.
+
 **Date**: 2026-05-26 — V2 Herbarium redesign shipped to TestFlight (build 24, 0.4.0)
 
 Full visual redesign across every screen. Goal: shift from neutral
