@@ -233,6 +233,9 @@ struct MCPSettingsView: View {
             for token in targets {
                 do {
                     try await appEnv.client.revokeMCPToken(token.id)
+                } catch let err as SeedkeepError where err.code == "not_found" {
+                    // Already revoked elsewhere (other device, expired) —
+                    // the user's intent is satisfied. Don't error-flash.
                 } catch let err as SeedkeepError {
                     errorMessage = "\(err.code): \(err.message)"
                 } catch {

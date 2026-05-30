@@ -1,9 +1,13 @@
 import Foundation
 import Security
 
-/// Minimal Keychain-backed token store. Persists across reinstalls only
-/// when the user has Keychain iCloud sync on; we don't set the access
-/// group so it stays bound to this app.
+/// Minimal Keychain-backed token store. Items are device-local —
+/// `kSecAttrSynchronizable` is not set, so the token does not sync
+/// to iCloud Keychain. Items survive app reinstall on iOS by default
+/// (no `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` set), which
+/// matches the "stay signed in across reinstalls on the same device"
+/// expectation for Sign in with Apple. No `kSecAttrAccessGroup`, so
+/// the item stays bound to this app's bundle id.
 public struct KeychainTokenStore: Sendable {
     public let service: String
     public let account: String
