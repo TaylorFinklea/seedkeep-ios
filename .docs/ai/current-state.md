@@ -8,6 +8,18 @@
 
 ## Last Session Summary
 
+**Date**: 2026-06-02 — Fixed assistant-threads URL encoding bug (Sync now → 404)
+
+- User reported `not_found: Route not found` on Sync now after installing build 33. Server-side static analysis ruled out any missing routes — every endpoint the sync engine touches responded 401 (= registered) on prod.
+- Diagnosed via temporary server-side 404 logging. Captured URL: `/api/assistant/threads%3Fsince=0` — the `?` was percent-encoded into the path.
+- **Root cause**: `assistantThreads()` and `deleteAssistantKey()` pre-baked their query string into the URL via `URLComponents(string:).url!.absoluteString`, then passed the result as `path:` to `getJSON`/`deleteJSON`. Inside those helpers `baseURL.appendingPathComponent(path)` percent-encodes the `?` as `%3F`, so the server treats `?since=0` as part of the path → notFound. Every other delta-sync endpoint avoids this by passing `path:` and `query:` separately.
+- **Fix** (commit `19fa668`):
+  - `assistantThreads()` uses the standard `getJSON(path:, query:)` pattern.
+  - `deleteJSON` gains an optional `query: [URLQueryItem] = []` parameter symmetric with `getJSON`.
+  - `deleteAssistantKey()` uses the new `deleteJSON(path:, query:)` instead of pre-baking.
+- Build 34 (`b03353b`) uploaded to TestFlight. Same marketing version (0.4.0); build-only bump per the version-policy memory.
+- Open: device-verify build 34 — Sync now should complete cleanly, including the `assistantThreads` pull.
+
 **Date**: 2026-05-30 — Bug-sweep batch (iOS): 4 fixes around streaming + sync correctness
 
 - Cross-repo bug sweep alongside server work; this commit covers the iOS half.
