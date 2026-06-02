@@ -173,7 +173,16 @@ extension PlantingEventDTO {
             yFeet: y_feet,
             createdAt: created_at,
             updatedAt: updated_at,
-            deletedAt: deleted_at
+            deletedAt: deleted_at,
+            // Phase 5 — plant-pet identity from the server. Streak
+            // columns are iOS-local and stay at their defaults on
+            // first insert.
+            petSeed: pet_seed,
+            petRarity: pet_rarity,
+            petCreatureKind: pet_creature_kind,
+            petName: pet_name,
+            petPersonalityJSON: pet_personality,
+            petSpawnedAt: pet_spawned_at
         )
     }
 
@@ -191,6 +200,18 @@ extension PlantingEventDTO {
         local.createdAt = created_at
         local.updatedAt = updated_at
         local.deletedAt = deleted_at
+        // Phase 5 — refresh the six pet identity columns from the
+        // server payload. The streak columns
+        // (`petWiltedStreakDays`, `petLastMoodTickAt`) are deliberately
+        // **not** touched here: they're iOS-local state that must
+        // survive a sync round so departure progress isn't lost across
+        // foregrounds / pulls (spec test invariant).
+        local.petSeed = pet_seed
+        local.petRarity = pet_rarity
+        local.petCreatureKind = pet_creature_kind
+        local.petName = pet_name
+        local.petPersonalityJSON = pet_personality
+        local.petSpawnedAt = pet_spawned_at
     }
 }
 

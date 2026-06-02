@@ -137,6 +137,12 @@ public struct BedDTO: Codable, Sendable, Equatable {
 /// `kind` is one of "sowing", "transplant", "harvest", "note".
 /// `planned_for` is a YYYY-MM-DD string (date-only, no timezone).
 /// `completed_at` is ms-epoch when the user marks the event done.
+///
+/// Phase 5: every planting also carries a "plant pet" identity stamped
+/// server-side at create time. The six `pet_*` fields are nullable so
+/// legacy rows (pre-0018 migration) decode cleanly; the iOS UI gates
+/// pet rendering on `pet_seed != nil`. `pet_personality` ships as a raw
+/// JSON string — use `decodedPetPersonality()` for a structured view.
 public struct PlantingEventDTO: Codable, Sendable, Equatable {
     public let id: String
     public let household_id: String
@@ -154,6 +160,147 @@ public struct PlantingEventDTO: Codable, Sendable, Equatable {
     public let created_at: Int64
     public let updated_at: Int64
     public let deleted_at: Int64?
+
+    // Phase 5 — plant pet identity (server-of-record). All optional so
+    // legacy rows and not-yet-migrated environments round-trip cleanly.
+    /// sha256 of the planting_event_id; 64-char lowercase hex. Used as
+    /// the deterministic seed for rarity + creature_kind.
+    public let pet_seed: String?
+    /// Raw rarity tier — one of `common`, `uncommon`, `rare`,
+    /// `legendary`, `mythical`. Mirrors the server CHECK constraint.
+    public let pet_rarity: String?
+    /// Bestiary identifier (e.g. `garden_worm`, `spirit_fox`). Open set
+    /// from the iOS side; the server enforces the catalog.
+    public let pet_creature_kind: String?
+    /// Denormalized cache of `pet_personality.name` for query speed.
+    public let pet_name: String?
+    /// Raw JSON string (TEXT on the server) holding the Sprout-authored
+    /// personality blob. Decode via `decodedPetPersonality()`. Nullable
+    /// for legacy rows and during the brief INSERT→UPDATE window before
+    /// the personality call returns.
+    public let pet_personality: String?
+    /// Epoch milliseconds. Acts as the pet's "birth time" — single clock
+    /// for mood + age stars (per design decision #1).
+    public let pet_spawned_at: Int64?
+
+    /// Decodes `pet_personality` JSON, returning `nil` when the field is
+    /// absent or the payload is malformed. The struct shape matches the
+    /// Sprout/spec-locked schema; unknown fields are tolerated.
+    public func decodedPetPersonality() -> PetPersonality? {
+        guard let json = pet_personality, !json.isEmpty else { return nil }
+        return try? JSONDecoder().decode(PetPersonality.self, from: Data(json.utf8))
+    }
+}
+
+/// Plant-pet rarity tier. Matches the `pet_rarity` CHECK constraint on
+/// `planting_events`. Sort order reflects rarity from common (low) to
+/// mythical (high); use `rawValue` for wire encoding only.
+public enum PetRarity: String, Codable, Sendable, CaseIterable, Hashable {
+    case common
+    case uncommon
+    case rare
+    case legendary
+    case mythical
+}
+
+/// Sprout-authored personality vignette for a plant pet. Stored on the
+/// server as `planting_events.pet_personality` TEXT (JSON-encoded) and
+/// surfaced by `PlantingEventDTO.decodedPetPersonality()`.
+///
+/// The `name` field inside this struct is authoritative; the parent
+/// DTO's `pet_name` column is a denormalized cache (`pet_name == name`
+/// by server invariant). `version` lets us evolve the shape later.
+///
+/// `fallback`, `fallbackAttempts`, and `lastAttemptAt` are surfaced
+/// from the server-internal retry bookkeeping. They are not used by the
+/// UI in v1 — clients should check `fallback` to know whether the
+/// vignette will eventually be upgraded by a server retry job.
+public struct PetPersonality: Codable, Sendable, Equatable, Hashable {
+    public let name: String
+    public let vignette: String
+    public let voiceHint: String
+    public let traits: [String]
+    public let tone: String
+    public let version: Int
+    public let fallback: Bool
+    public let fallbackAttempts: Int
+    public let lastAttemptAt: Int64
+
+    public init(
+        name: String,
+        vignette: String,
+        voiceHint: String,
+        traits: [String] = [],
+        tone: String = "",
+        version: Int = 1,
+        fallback: Bool = false,
+        fallbackAttempts: Int = 0,
+        lastAttemptAt: Int64 = 0
+    ) {
+        self.name = name
+        self.vignette = vignette
+        self.voiceHint = voiceHint
+        self.traits = traits
+        self.tone = tone
+        self.version = version
+        self.fallback = fallback
+        self.fallbackAttempts = fallbackAttempts
+        self.lastAttemptAt = lastAttemptAt
+    }
+
+    // Wire shape is snake_case to match the rest of `PlantingEventDTO`.
+    // Defensive defaults make missing-key payloads (e.g. early fallback
+    // rows, future shape evolutions) decode cleanly.
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case vignette
+        case voiceHint = "voice_hint"
+        case traits
+        case tone
+        case version
+        case fallback
+        case fallbackAttempts = "fallback_attempts"
+        case lastAttemptAt = "last_attempt_at"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        self.vignette = try c.decodeIfPresent(String.self, forKey: .vignette) ?? ""
+        self.voiceHint = try c.decodeIfPresent(String.self, forKey: .voiceHint) ?? ""
+        self.traits = try c.decodeIfPresent([String].self, forKey: .traits) ?? []
+        self.tone = try c.decodeIfPresent(String.self, forKey: .tone) ?? ""
+        self.version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        self.fallback = try c.decodeIfPresent(Bool.self, forKey: .fallback) ?? false
+        self.fallbackAttempts = try c.decodeIfPresent(Int.self, forKey: .fallbackAttempts) ?? 0
+        self.lastAttemptAt = try c.decodeIfPresent(Int64.self, forKey: .lastAttemptAt) ?? 0
+    }
+}
+
+/// Mood label derived client-side by `MoodEngine` from a pet's composite
+/// score. Five-bucket mapping locked in the Phase 5 spec — used by Today
+/// roll-call sorting, Menagerie row tints, PetCard, and the assistant's
+/// `query_pet` tool. Raw values match the JSON-friendly camelCase the UI
+/// expects; the assistant tool serializes these directly. The case order
+/// reflects ascending mood (worst → best) and is relied on for sorts.
+public enum PetMoodLabel: String, Codable, Sendable, CaseIterable, Hashable {
+    case departingImminent
+    case wilted
+    case quiet
+    case content
+    case thriving
+}
+
+/// Durable lifecycle phase derived by `PetStateEngine` from mood label,
+/// streak counters, `completed_at`, and `pet_departures` row existence.
+/// Distinct from `PetMoodLabel` per the spec's two-enum split — views and
+/// notifications branch on phase; visual tint follows mood.
+public enum PetLifecyclePhase: String, Codable, Sendable, CaseIterable, Hashable {
+    case alive
+    case wilted
+    case departing
+    case departed
+    case graduated
 }
 
 public enum PlantingEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
