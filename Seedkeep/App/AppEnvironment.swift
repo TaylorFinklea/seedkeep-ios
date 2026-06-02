@@ -84,9 +84,17 @@ public final class AppEnvironment {
 
     /// Triggers a sync if the user is signed in. Safe to call repeatedly —
     /// `SyncEngine` debounces concurrent calls with `isSyncing`.
+    ///
+    /// After a successful sync, runs `PetStateEngine.tickAll` on every
+    /// alive pet in the household — this is the single canonical place
+    /// where mood snapshots are materialized and lifecycle transitions
+    /// are detected. The transitions are dropped on the floor in this
+    /// commit; notification scheduling + the depart RPC wire to them
+    /// in Phase 5.1.1 commits 3 + 4.
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
             await sync.syncAll(householdID: household.id)
+            _ = PetStateEngine.tickAll(householdID: household.id, container: container)
         }
     }
 

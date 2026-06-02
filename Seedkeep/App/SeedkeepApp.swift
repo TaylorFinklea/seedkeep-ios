@@ -55,6 +55,7 @@ struct SeedkeepApp: App {
 struct RootView: View {
     @Environment(AuthController.self) private var auth
     @Environment(AppEnvironment.self) private var appEnv
+    @Environment(\.scenePhase) private var scenePhase
     @Binding var pendingInviteCode: String?
 
     var body: some View {
@@ -69,6 +70,15 @@ struct RootView: View {
                 MainTabView()
                     .task(id: snapshotID(auth.state)) {
                         await appEnv.syncIfPossible()
+                    }
+                    .onChange(of: scenePhase) { _, newPhase in
+                        // Foregrounding re-runs the full sync + tick
+                        // cycle. `PetStateEngine.tickAll` fires inside
+                        // `syncIfPossible` so the day's mood snapshot
+                        // + streak counters are materialized whenever
+                        // the user opens the app.
+                        guard newPhase == .active else { return }
+                        Task { await appEnv.syncIfPossible() }
                     }
                     .overlay { SproutAssistantOverlay() }
             }
