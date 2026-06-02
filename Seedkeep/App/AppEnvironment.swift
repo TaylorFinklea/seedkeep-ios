@@ -157,6 +157,7 @@ public final class AppEnvironment {
             LocalAssistantMessage.self,
             LocalAssistantToolCall.self,
             LocalAssistantKeyStatus.self,
+            LocalPetMoodSnapshot.self,
         ])
         let config = ModelConfiguration("seedkeep", schema: schema)
         do {

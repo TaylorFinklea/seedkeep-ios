@@ -9,16 +9,7 @@ struct GardenSpiderIllustration: View {
             ZStack {
                 // Web hint — radial lines from center
                 ForEach(0..<8) { i in
-                    Path { p in
-                        let a = Double(i) / 8 * .pi * 2
-                        let r: Double = 90
-                        p.move(to: CGPoint(x: 100 * s, y: 100 * s))
-                        p.addLine(to: CGPoint(
-                            x: (100 + cos(a) * r) * s,
-                            y: (100 + sin(a) * r) * s
-                        ))
-                    }
-                    .stroke(CompanionInk.pale.opacity(0.3), lineWidth: 0.5 * s)
+                    GardenSpiderRadial(index: i, scale: s)
                 }
                 // Web concentric arcs
                 ForEach(1..<4) { ring in
@@ -28,17 +19,7 @@ struct GardenSpiderIllustration: View {
                 }
                 // Legs — eight, all radiating
                 ForEach(0..<8) { i in
-                    let signX: CGFloat = (i % 2 == 0 ? -1 : 1)
-                    let row = i / 2
-                    let baseY = CGFloat(80 + row * 12) * s
-                    Path { p in
-                        p.move(to: CGPoint(x: 100 * s, y: baseY))
-                        p.addQuadCurve(
-                            to: CGPoint(x: (100 + signX * 64) * s, y: baseY + CGFloat(row) * 6 * s - 10 * s),
-                            control: CGPoint(x: (100 + signX * 36) * s, y: baseY - 16 * s)
-                        )
-                    }
-                    .stroke(CompanionInk.outline, lineWidth: 1.4 * s)
+                    GardenSpiderLeg(index: i, scale: s)
                 }
                 // Abdomen
                 Ellipse()
@@ -63,15 +44,70 @@ struct GardenSpiderIllustration: View {
                     .offset(y: -22 * s)
                 // Eyes (cluster)
                 ForEach(0..<4) { i in
-                    Circle()
-                        .fill(CompanionInk.cream)
-                        .frame(width: 3 * s, height: 3 * s)
-                        .offset(
-                            x: CGFloat(-6 + (i % 2) * 12) * s,
-                            y: CGFloat(-26 + (i / 2) * 4) * s
-                        )
+                    GardenSpiderEye(index: i, scale: s)
                 }
             }
         }
+    }
+}
+
+/// Single radial line in the web background.
+private struct GardenSpiderRadial: View {
+    let index: Int
+    let scale: CGFloat
+
+    var body: some View {
+        let s = scale
+        let a = Double(index) / 8 * .pi * 2
+        let r: Double = 90
+        let endX = (100 + cos(a) * r) * Double(s)
+        let endY = (100 + sin(a) * r) * Double(s)
+        return Path { p in
+            p.move(to: CGPoint(x: 100 * s, y: 100 * s))
+            p.addLine(to: CGPoint(x: endX, y: endY))
+        }
+        .stroke(CompanionInk.pale.opacity(0.3), lineWidth: 0.5 * s)
+    }
+}
+
+/// Single radiating leg. Extracted into its own view so the
+/// type-checker doesn't time out on the parent body.
+private struct GardenSpiderLeg: View {
+    let index: Int
+    let scale: CGFloat
+
+    var body: some View {
+        let s = scale
+        let signX: CGFloat = (index % 2 == 0 ? -1 : 1)
+        let row = index / 2
+        let baseY = CGFloat(80 + row * 12) * s
+        let endX = (100 + signX * 64) * s
+        let endY = baseY + CGFloat(row) * 6 * s - 10 * s
+        let ctlX = (100 + signX * 36) * s
+        let ctlY = baseY - 16 * s
+        return Path { p in
+            p.move(to: CGPoint(x: 100 * s, y: baseY))
+            p.addQuadCurve(
+                to: CGPoint(x: endX, y: endY),
+                control: CGPoint(x: ctlX, y: ctlY)
+            )
+        }
+        .stroke(CompanionInk.outline, lineWidth: 1.4 * s)
+    }
+}
+
+/// Single eye in the head cluster. Extracted to keep parent body type-checkable.
+private struct GardenSpiderEye: View {
+    let index: Int
+    let scale: CGFloat
+
+    var body: some View {
+        let s = scale
+        let dx = CGFloat(-6 + (index % 2) * 12) * s
+        let dy = CGFloat(-26 + (index / 2) * 4) * s
+        return Circle()
+            .fill(CompanionInk.cream)
+            .frame(width: 3 * s, height: 3 * s)
+            .offset(x: dx, y: dy)
     }
 }

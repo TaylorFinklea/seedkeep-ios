@@ -139,12 +139,44 @@ public extension LocalPlantingEvent {
         return try? JSONDecoder().decode(PetPersonality.self, from: Data(json.utf8))
     }
 
-    /// Current mood label. Phase 5.1.0 stub — always returns
-    /// `.thriving`; the real `MoodEngine` lands in Phase 5.1.0 commit 7
-    /// and writes per-day snapshots to `LocalPetMoodSnapshot`. The
-    /// computed-property surface is locked here so consumers (PetCard,
-    /// Today, Menagerie) can be written against the real shape now.
-    var petMoodLabel: PetMoodLabel { .thriving }
+    /// Current mood label. Reads the most recent
+    /// `LocalPetMoodSnapshot` written by `PetStateEngine.tick`
+    /// (snapshot lookup avoids re-running the SwiftData fetches +
+    /// scoring on every view recompute). Falls back to live
+    /// `PetMoodResolver` + `MoodEngine` evaluation if no snapshot
+    /// exists yet, and finally to `.thriving` for unattached models
+    /// (no `modelContext`) or query failures.
+    @MainActor
+    var petMoodLabel: PetMoodLabel {
+        if let snapshot = latestMoodSnapshot(),
+           let label = PetMoodLabel(rawValue: snapshot.moodLabel) {
+            return label
+        }
+        if let context = modelContext {
+            let inputs = PetMoodResolver.resolveInputs(
+                event: self,
+                now: Date(),
+                context: context
+            )
+            return MoodEngine.compute(inputs).label
+        }
+        return .thriving
+    }
+
+    /// Most-recent `LocalPetMoodSnapshot` for this planting, looked up
+    /// via the model's attached context. Returns nil for detached
+    /// models or when no snapshot has been written yet.
+    @MainActor
+    private func latestMoodSnapshot() -> LocalPetMoodSnapshot? {
+        guard let context = modelContext else { return nil }
+        let eventID = id
+        var descriptor = FetchDescriptor<LocalPetMoodSnapshot>(
+            predicate: #Predicate { snap in snap.plantingEventID == eventID },
+            sortBy: [SortDescriptor(\.dayYMD, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor))?.first
+    }
 
     /// Current lifecycle phase. Phase 5.1.0 stub — always returns
     /// `.alive`. The real derivation (mood + streak + completedAt +

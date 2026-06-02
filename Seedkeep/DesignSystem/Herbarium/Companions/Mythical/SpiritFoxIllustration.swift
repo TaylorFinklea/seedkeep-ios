@@ -9,22 +9,7 @@ struct SpiritFoxIllustration: View {
             ZStack {
                 // Nine gold tails (mythical flourish) — radiating
                 ForEach(0..<9) { i in
-                    Path { p in
-                        let a = Double(i) / 8 * (.pi * 0.95) - .pi / 2 - .pi / 4
-                        let rOut: Double = 88
-                        p.move(to: CGPoint(x: 150 * s, y: 110 * s))
-                        p.addQuadCurve(
-                            to: CGPoint(
-                                x: (150 + cos(a) * rOut) * Double(s),
-                                y: (110 + sin(a) * rOut) * Double(s)
-                            ),
-                            control: CGPoint(
-                                x: (160 + cos(a) * (rOut * 0.4)) * Double(s),
-                                y: (110 + sin(a) * (rOut * 0.4)) * Double(s)
-                            )
-                        )
-                    }
-                    .stroke(HerbColor.goldInk, style: StrokeStyle(lineWidth: 2 * s, lineCap: .round))
+                    SpiritFoxTail(index: i, scale: s)
                 }
                 // Body — pale ghostly
                 Ellipse()
@@ -99,5 +84,32 @@ struct SpiritFoxIllustration: View {
                     .offset(x: -82 * s, y: -2 * s)
             }
         }
+    }
+}
+
+/// Single radiating tail stroke. Extracted into its own view so the
+/// type-checker doesn't time out on the parent body (compiler hits
+/// `unable to type-check this expression in reasonable time` when the
+/// ForEach payload is inlined with the rest of the ZStack).
+private struct SpiritFoxTail: View {
+    let index: Int
+    let scale: CGFloat
+
+    var body: some View {
+        let s = scale
+        let a = Double(index) / 8 * (.pi * 0.95) - .pi / 2 - .pi / 4
+        let rOut: Double = 88
+        let endX = (150 + cos(a) * rOut) * Double(s)
+        let endY = (110 + sin(a) * rOut) * Double(s)
+        let ctlX = (160 + cos(a) * (rOut * 0.4)) * Double(s)
+        let ctlY = (110 + sin(a) * (rOut * 0.4)) * Double(s)
+        return Path { p in
+            p.move(to: CGPoint(x: 150 * s, y: 110 * s))
+            p.addQuadCurve(
+                to: CGPoint(x: endX, y: endY),
+                control: CGPoint(x: ctlX, y: ctlY)
+            )
+        }
+        .stroke(HerbColor.goldInk, style: StrokeStyle(lineWidth: 2 * s, lineCap: .round))
     }
 }
