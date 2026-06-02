@@ -256,18 +256,129 @@ public enum PetStateEngine {
     }
 
     /// Cheap presence check for a co-located `LocalPetDeparture` row.
-    /// The model lands in commit 3 — until then this always returns
-    /// false. The lookup uses a string-keyed dynamic Swift type to
-    /// avoid the compile-time dependency; once `LocalPetDeparture`
-    /// lands the check converts to a typed fetch.
-    ///
-    /// (Commit 3 will replace this body with a `FetchDescriptor<LocalPetDeparture>`.)
+    /// Once a departure exists, the pet is terminal — `tick` must return
+    /// early without writing snapshots or advancing streak counters
+    /// (spec line 713). The lookup matches on `plantingEventID` since
+    /// the `LocalPetDeparture` model uses that as its unique key.
     private static func hasDeparture(eventID: String, context: ModelContext) -> Bool {
-        // Forward-compat stub. `LocalPetDeparture` does not yet exist;
-        // departed-state is therefore impossible to reach via SwiftData
-        // until commit 3 introduces both the model and the RPC that
-        // writes it.
-        return false
+        let descriptor = FetchDescriptor<LocalPetDeparture>(
+            predicate: #Predicate { row in
+                row.plantingEventID == eventID && row.deletedAt == nil
+            }
+        )
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
+
+    // MARK: - Side effects
+
+    /// Run the side-effect step for a batch of transitions emitted by
+    /// `tick`/`tickAll`. Today this covers the `.departingToDeparted`
+    /// case only: POST to `/api/pets/:id/depart` (idempotent server-side
+    /// so a duplicate from a sibling device or a re-tick is safe),
+    /// upsert the returned `LocalPetDeparture`, and apply the bumped
+    /// parent `LocalPlantingEvent` from the inline response so the
+    /// `updated_at` advance is visible immediately.
+    ///
+    /// Notification scheduling (`.aliveToWilted`, `.departingToDeparted`)
+    /// and the cancel-on-recovery branch are stubbed — Phase 5.1.4 wires
+    /// the real `NotificationsCenter` helpers. The stubs document the
+    /// hook points so the wiring doesn't drift.
+    ///
+    /// Failures from the depart RPC are swallowed: a transient network
+    /// blip should leave the streak counters at 5 so the next foreground
+    /// `tickAll` re-detects the boundary and retries the call. The
+    /// server-side idempotency guarantee means a retry is cheap.
+    public static func performSideEffects(
+        for transitions: [Transition],
+        client: SeedkeepClient,
+        container: ModelContainer
+    ) async {
+        for transition in transitions {
+            switch transition {
+            case .departingToDeparted(let eventID):
+                await runDepartureRPC(
+                    eventID: eventID,
+                    client: client,
+                    container: container
+                )
+                // Phase 5.1.4: schedule
+                //   `seedkeep.notif.pet.departed.<eventID>` (5s, gated).
+
+            case .aliveToWilted:
+                // Phase 5.1.4: schedule
+                //   `seedkeep.notif.pet.wilted.<eventID>` (10s, gated).
+                break
+
+            case .recoveredToAlive:
+                // Phase 5.1.4: cancel the pending wilted notification
+                //   if one was scheduled.
+                break
+
+            case .wiltedToDeparting:
+                // Visual change only per spec line 679 — no side effect.
+                break
+            }
+        }
+    }
+
+    /// Calls `/api/pets/:id/depart` and upserts the response into
+    /// SwiftData. Idempotent on the server: a duplicate call from a
+    /// sibling device or a re-tick after a transient failure is a no-op
+    /// that returns the same row.
+    private static func runDepartureRPC(
+        eventID: String,
+        client: SeedkeepClient,
+        container: ModelContainer
+    ) async {
+        do {
+            let (event, departure) = try await client.requestPetDeparture(
+                plantingEventID: eventID
+            )
+            let context = ModelContext(container)
+            // Upsert the parent planting first so the bumped `updated_at`
+            // is visible to the next sync round (this matches what the
+            // delta-sync pull would write anyway — landing it inline
+            // saves a UI flicker).
+            let parentDescriptor = FetchDescriptor<LocalPlantingEvent>(
+                predicate: #Predicate { $0.id == eventID }
+            )
+            if let parent = try? context.fetch(parentDescriptor).first {
+                event.apply(to: parent)
+            }
+            // Upsert the departure row.
+            let depDescriptor = FetchDescriptor<LocalPetDeparture>(
+                predicate: #Predicate { $0.plantingEventID == eventID }
+            )
+            let goodbyeJSON = departure.goodbye_note
+            let fallback = departure.decodedGoodbyeNote()?.fallback ?? false
+            if let existing = try? context.fetch(depDescriptor).first {
+                existing.goodbyeNoteJSON = goodbyeJSON
+                existing.reason = departure.reason
+                existing.fallback = fallback
+                existing.createdAt = departure.created_at
+                existing.updatedAt = departure.updated_at
+                existing.departedAt = departure.departed_at
+                existing.deletedAt = departure.deleted_at
+            } else {
+                context.insert(LocalPetDeparture(
+                    plantingEventID: departure.planting_event_id,
+                    goodbyeNoteJSON: goodbyeJSON,
+                    reason: departure.reason,
+                    fallback: fallback,
+                    createdAt: departure.created_at,
+                    updatedAt: departure.updated_at,
+                    departedAt: departure.departed_at,
+                    deletedAt: departure.deleted_at
+                ))
+            }
+            try? context.save()
+        } catch {
+            // Swallowed deliberately — the streak counter is still at 5,
+            // so the next `tickAll` (foreground or sync completion) will
+            // re-detect the same boundary and retry. The server route is
+            // idempotent so the retry costs nothing if a partial write
+            // happened on the prior attempt.
+        }
     }
 
     // MARK: - Time helpers

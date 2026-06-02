@@ -178,11 +178,40 @@ public extension LocalPlantingEvent {
         return (try? context.fetch(descriptor))?.first
     }
 
-    /// Current lifecycle phase. Phase 5.1.0 stub — always returns
-    /// `.alive`. The real derivation (mood + streak + completedAt +
-    /// LocalPetDeparture row existence) lives in `PetStateEngine`
-    /// (Phase 5.1.1). Like `petMoodLabel`, the property exists now so
-    /// downstream callers don't have to ship in lockstep with the
-    /// engine that fills it in.
-    var petLifecyclePhase: PetLifecyclePhase { .alive }
+    /// Current lifecycle phase. Combines the four lifecycle signals the
+    /// spec calls out (line 662–668): server-stamped terminal flags
+    /// (`completedAt`, presence of a `LocalPetDeparture` row), the
+    /// streak counter, and the most recent mood snapshot. Order matters
+    /// — `departed` and `graduated` are terminal, so they win against
+    /// any current mood reading.
+    @MainActor
+    var petLifecyclePhase: PetLifecyclePhase {
+        if completedAt != nil { return .graduated }
+        if hasDeparted { return .departed }
+        let mood = petMoodLabel
+        switch mood {
+        case .thriving, .content, .quiet:
+            return .alive
+        case .wilted:
+            return .wilted
+        case .departingImminent:
+            return .departing
+        }
+    }
+
+    /// Has a `LocalPetDeparture` row been written for this planting?
+    /// True iff the row exists with `deletedAt == nil`. Detached
+    /// (context-less) models can't run the fetch and return false —
+    /// this is the same conservative default `latestMoodSnapshot` uses.
+    @MainActor
+    private var hasDeparted: Bool {
+        guard let context = modelContext else { return false }
+        let eventID = id
+        let descriptor = FetchDescriptor<LocalPetDeparture>(
+            predicate: #Predicate { row in
+                row.plantingEventID == eventID && row.deletedAt == nil
+            }
+        )
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
 }

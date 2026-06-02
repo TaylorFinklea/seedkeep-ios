@@ -666,6 +666,30 @@ public actor SeedkeepClient {
         try await deleteJSON(path: "/api/planting-events/\(id)")
     }
 
+    // MARK: - Plant pets (Phase 5.1.1)
+
+    /// `POST /api/pets/:planting_event_id/depart` — request the server to
+    /// stamp this pet's departure. Idempotent on the server side: a second
+    /// call returns the same row, byte-identical, with no new Sprout call.
+    /// Concurrent calls from sibling devices are serialised by the route's
+    /// row-level lock, so racing this with another foreground tick is safe.
+    ///
+    /// `reason` defaults to `nil`, which the server treats as
+    /// `wilted_too_long` (the dominant trigger — iOS hits this after the
+    /// 5-day streak). The other reason values (`inactivity`,
+    /// `user_dismissed`) are reserved but unused in v1.
+    public func requestPetDeparture(
+        plantingEventID: String,
+        reason: String? = nil
+    ) async throws -> (event: PlantingEventDTO, departure: PetDepartureDTO) {
+        struct Body: Encodable { let reason: String? }
+        let res: WireResponses.PetDepartureOne = try await postJSON(
+            path: "/api/pets/\(plantingEventID)/depart",
+            body: Body(reason: reason)
+        )
+        return (event: res.planting_event, departure: res.departure)
+    }
+
     // MARK: - Recommendations
 
     /// Sets (or updates) the geographic location for the current household.

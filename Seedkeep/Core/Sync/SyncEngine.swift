@@ -830,6 +830,12 @@ public final class SyncEngine {
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
                     idsToCancelReminder.append(id)
+                    // Phase 5.1.1 — soft-delete server-side fans out to
+                    // a local hard-delete of the planting + cascade to
+                    // its plant-pet children (departure row + mood
+                    // snapshots). The server-side migration sets
+                    // ON DELETE CASCADE so the cascade mirrors exactly.
+                    cleanupPlantingEventChildren(eventID: id, context: context)
                     context.delete(existing)
                 } else {
                     let wasCompleted = existing.completedAt != nil
@@ -850,6 +856,31 @@ public final class SyncEngine {
                 }
             }
         }
+    }
+
+    /// Hard-deletes the per-pet children of a planting whose parent is
+    /// being tombstoned locally (because the server soft-deleted it).
+    /// Mirrors the spec's `ON DELETE CASCADE` shape: `LocalPetDeparture`
+    /// + every `LocalPetMoodSnapshot` for the event go away. Pet-scoped
+    /// pending notifications (`seedkeep.notif.pet.*.<event_id>`) get
+    /// cancelled too — Phase 5.1.4 wires the real helpers; for now we
+    /// stub the call site so the cleanup contract is documented.
+    private func cleanupPlantingEventChildren(eventID: String, context: ModelContext) {
+        let depDescriptor = FetchDescriptor<LocalPetDeparture>(
+            predicate: #Predicate { $0.plantingEventID == eventID }
+        )
+        for row in (try? context.fetch(depDescriptor)) ?? [] {
+            context.delete(row)
+        }
+        let snapDescriptor = FetchDescriptor<LocalPetMoodSnapshot>(
+            predicate: #Predicate { $0.plantingEventID == eventID }
+        )
+        for snap in (try? context.fetch(snapDescriptor)) ?? [] {
+            context.delete(snap)
+        }
+        // Pet notification cancellation hook — Phase 5.1.4 wires
+        // `NotificationsCenter.cancelPetNotifications(eventID:)`. No-op
+        // today so the cleanup site is in place when those helpers land.
     }
 
     private func upsertJournalEntries(_ items: [JournalEntryDTO]) throws {

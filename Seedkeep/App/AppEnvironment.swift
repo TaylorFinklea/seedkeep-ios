@@ -88,13 +88,23 @@ public final class AppEnvironment {
     /// After a successful sync, runs `PetStateEngine.tickAll` on every
     /// alive pet in the household — this is the single canonical place
     /// where mood snapshots are materialized and lifecycle transitions
-    /// are detected. The transitions are dropped on the floor in this
-    /// commit; notification scheduling + the depart RPC wire to them
-    /// in Phase 5.1.1 commits 3 + 4.
+    /// are detected. Any `.departingToDeparted` transitions trigger a
+    /// `requestPetDeparture` RPC via `performSideEffects`; the server
+    /// is idempotent so re-tick after a transient failure is safe.
+    /// Notification scheduling for the other transitions lands in
+    /// Phase 5.1.4 (the side-effect helper has the hook points stubbed).
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
             await sync.syncAll(householdID: household.id)
-            _ = PetStateEngine.tickAll(householdID: household.id, container: container)
+            let transitions = PetStateEngine.tickAll(
+                householdID: household.id,
+                container: container
+            )
+            await PetStateEngine.performSideEffects(
+                for: transitions,
+                client: client,
+                container: container
+            )
         }
     }
 
@@ -166,6 +176,7 @@ public final class AppEnvironment {
             LocalAssistantToolCall.self,
             LocalAssistantKeyStatus.self,
             LocalPetMoodSnapshot.self,
+            LocalPetDeparture.self,
         ])
         let config = ModelConfiguration("seedkeep", schema: schema)
         do {

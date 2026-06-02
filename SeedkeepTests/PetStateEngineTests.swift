@@ -27,6 +27,7 @@ struct PetStateEngineTests {
         let schema = Schema([
             LocalPlantingEvent.self,
             LocalPetMoodSnapshot.self,
+            LocalPetDeparture.self,
             LocalJournalEntry.self,
             LocalJournalChecklistItem.self,
             LocalJournalEntryPhoto.self,
@@ -533,6 +534,114 @@ struct PetStateEngineTests {
         #expect(t == nil)
     }
 
+    // MARK: - performSideEffects: departing → departed fires the depart RPC
+
+    @Test("performSideEffects(departingToDeparted:) POSTs /depart and upserts LocalPetDeparture")
+    func departingToDepartedFiresRPC() async throws {
+        let container = Self.makeContainer()
+        let context = ModelContext(container)
+        // Seed the parent planting so the upsert path can find it and
+        // apply the bumped `updated_at`.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let event = Self.insertEvent(
+            id: "pe_rpc",
+            daysAgo: 60,
+            now: now,
+            context: context
+        )
+
+        // Canned server response. Mirrors the `WireResponses.PetDepartureOne`
+        // envelope shape — `planting_event` + `departure`, snake_case
+        // throughout, wrapped in the standard `{ ok: true, data: ... }`
+        // envelope `SeedkeepClient.perform` expects.
+        let bumpedUpdatedAt = event.updatedAt + 1
+        let departedAt = Self.msFor(now)
+        let goodbyeJSON = #"{"note_text":"It was a fine ride.","signoff":"— Pip","fallback":false,"fallback_attempts":0,"last_attempt_at":1800000000000}"#
+        // Encode the goodbye_note as a JSON-string field (the server
+        // stores it as TEXT, so it round-trips as an escaped string).
+        let escapedGoodbye = goodbyeJSON
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let responseJSON = """
+        {
+          "ok": true,
+          "data": {
+            "planting_event": {
+              "id": "pe_rpc",
+              "household_id": "\(Self.householdID)",
+              "bed_id": null,
+              "seed_id": null,
+              "catalog_seed_id": null,
+              "kind": "sowing",
+              "planned_for": "2026-01-01",
+              "completed_at": null,
+              "notes": null,
+              "x_feet": null,
+              "y_feet": null,
+              "created_at": \(event.createdAt),
+              "updated_at": \(bumpedUpdatedAt),
+              "deleted_at": null,
+              "pet_seed": "seed_pe_rpc",
+              "pet_rarity": "common",
+              "pet_creature_kind": "garden_worm",
+              "pet_name": "Pip",
+              "pet_personality": null,
+              "pet_spawned_at": \(event.petSpawnedAt ?? 0)
+            },
+            "departure": {
+              "planting_event_id": "pe_rpc",
+              "household_id": "\(Self.householdID)",
+              "goodbye_note": "\(escapedGoodbye)",
+              "reason": "wilted_too_long",
+              "departed_at": \(departedAt),
+              "created_at": \(departedAt),
+              "updated_at": \(departedAt),
+              "deleted_at": null
+            }
+          }
+        }
+        """
+
+        // Spin up a mocked URLSession that intercepts the depart POST and
+        // returns the canned envelope. Mirrors how `SeedkeepClient` says
+        // tests should stub the network (file-top doc comment).
+        let session = MockURLProtocol.makeSession(
+            responseBody: Data(responseJSON.utf8),
+            statusCode: 200
+        )
+        let client = SeedkeepClient(
+            configuration: .init(
+                baseURL: URL(string: "https://test.local")!,
+                session: session
+            )
+        )
+
+        await PetStateEngine.performSideEffects(
+            for: [.departingToDeparted(eventID: "pe_rpc")],
+            client: client,
+            container: container
+        )
+
+        // Assert the depart row landed.
+        let depDescriptor = FetchDescriptor<LocalPetDeparture>(
+            predicate: #Predicate { $0.plantingEventID == "pe_rpc" }
+        )
+        let rows = (try? context.fetch(depDescriptor)) ?? []
+        #expect(rows.count == 1)
+        let dep = try #require(rows.first)
+        #expect(dep.reason == "wilted_too_long")
+        #expect(dep.fallback == false)
+        #expect(dep.departedAt == departedAt)
+        #expect(dep.goodbyeNote?.noteText == "It was a fine ride.")
+        #expect(dep.goodbyeNote?.signoff == "— Pip")
+
+        // Assert the URL hit matches the documented route.
+        let captured = MockURLProtocol.lastRequest()
+        let path = try #require(captured?.url?.path)
+        #expect(path == "/api/pets/pe_rpc/depart")
+        #expect(captured?.httpMethod == "POST")
+    }
+
     // MARK: - Helpers
 
     /// Match `PetStateEngine.dayYMDString(for:)` — local calendar
@@ -546,4 +655,57 @@ struct PetStateEngineTests {
                       comps.month ?? 1,
                       comps.day ?? 1)
     }
+}
+
+// MARK: - URLProtocol-based network stub
+//
+// `SeedkeepClient.perform` reads through whatever `URLSession` its
+// `Configuration` carries. Injecting a custom session backed by this
+// `URLProtocol` lets the test deliver canned responses without spinning
+// up a real server, and captures the issued request for assertions.
+final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var responseBody: Data = Data()
+    nonisolated(unsafe) static var statusCode: Int = 200
+    nonisolated(unsafe) static var captured: URLRequest?
+    static let lock = NSLock()
+
+    static func makeSession(responseBody: Data, statusCode: Int) -> URLSession {
+        lock.lock()
+        defer { lock.unlock() }
+        MockURLProtocol.responseBody = responseBody
+        MockURLProtocol.statusCode = statusCode
+        MockURLProtocol.captured = nil
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: config)
+    }
+
+    static func lastRequest() -> URLRequest? {
+        lock.lock()
+        defer { lock.unlock() }
+        return captured
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.captured = request
+        let body = Self.responseBody
+        let status = Self.statusCode
+        Self.lock.unlock()
+        let url = request.url ?? URL(string: "https://test.local")!
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

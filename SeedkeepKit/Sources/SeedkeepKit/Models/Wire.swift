@@ -303,6 +303,92 @@ public enum PetLifecyclePhase: String, Codable, Sendable, CaseIterable, Hashable
     case graduated
 }
 
+/// Wire-format DTO for the `pet_departures` sidecar row. Returned inline
+/// by `POST /api/pets/:planting_event_id/depart` (alongside the parent
+/// `PlantingEventDTO`) and by the per-household departures delta-sync
+/// feed (lands later in Phase 5.1.x).
+///
+/// **Field naming**: snake_case throughout, matching `PlantingEventDTO`
+/// — *not* the camelCase used by the journal feed. Sync upserts must
+/// branch on `deleted_at`, not `deletedAt`.
+///
+/// `goodbye_note` is a raw JSON string (TEXT on the server) holding the
+/// `{ note_text, signoff, fallback, fallback_attempts, last_attempt_at }`
+/// payload. Decode via `decodedGoodbyeNote()` for a typed view; the wire
+/// shape stays a string so the server can re-encode without round-tripping
+/// the struct shape on every retry.
+public struct PetDepartureDTO: Codable, Sendable, Equatable {
+    public let planting_event_id: String
+    public let household_id: String
+    /// JSON-encoded `PetGoodbyeNote`. Null while the server is mid-flight
+    /// on the Sprout call (rare; the route inserts the fallback before
+    /// returning so this should always be present in v1).
+    public let goodbye_note: String?
+    /// One of `inactivity`, `wilted_too_long`, `user_dismissed`. v1 ships
+    /// only `wilted_too_long`; the others are reserved.
+    public let reason: String
+    /// Epoch milliseconds — immutable after insert.
+    public let departed_at: Int64
+    public let created_at: Int64
+    public let updated_at: Int64
+    public let deleted_at: Int64?
+
+    /// Decoded view over `goodbye_note`. Returns nil when the field is
+    /// absent / empty or the payload doesn't match the expected shape.
+    public func decodedGoodbyeNote() -> PetGoodbyeNote? {
+        guard let json = goodbye_note, !json.isEmpty else { return nil }
+        return try? JSONDecoder().decode(PetGoodbyeNote.self, from: Data(json.utf8))
+    }
+}
+
+/// Sprout-authored departure note. Mirrors the server-side
+/// `PetDepartureNoteSchema` validated payload plus the fallback-tracking
+/// bookkeeping appended at storage time. UI surfaces `noteText` and
+/// `signoff`; the `fallback*` keys are informational so the client can
+/// know whether a future server retry will upgrade the note.
+public struct PetGoodbyeNote: Codable, Sendable, Equatable, Hashable {
+    public let noteText: String
+    public let signoff: String
+    public let fallback: Bool
+    public let fallbackAttempts: Int
+    public let lastAttemptAt: Int64
+
+    public init(
+        noteText: String,
+        signoff: String,
+        fallback: Bool = false,
+        fallbackAttempts: Int = 0,
+        lastAttemptAt: Int64 = 0
+    ) {
+        self.noteText = noteText
+        self.signoff = signoff
+        self.fallback = fallback
+        self.fallbackAttempts = fallbackAttempts
+        self.lastAttemptAt = lastAttemptAt
+    }
+
+    // Wire is snake_case to match the goodbye_note JSON the server writes
+    // to `pet_departures.goodbye_note`. Defensive defaults so a payload
+    // missing the fallback-bookkeeping keys (e.g. a future shape evolution)
+    // still decodes.
+    private enum CodingKeys: String, CodingKey {
+        case noteText = "note_text"
+        case signoff
+        case fallback
+        case fallbackAttempts = "fallback_attempts"
+        case lastAttemptAt = "last_attempt_at"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.noteText = try c.decodeIfPresent(String.self, forKey: .noteText) ?? ""
+        self.signoff = try c.decodeIfPresent(String.self, forKey: .signoff) ?? ""
+        self.fallback = try c.decodeIfPresent(Bool.self, forKey: .fallback) ?? false
+        self.fallbackAttempts = try c.decodeIfPresent(Int.self, forKey: .fallbackAttempts) ?? 0
+        self.lastAttemptAt = try c.decodeIfPresent(Int64.self, forKey: .lastAttemptAt) ?? 0
+    }
+}
+
 public enum PlantingEventKind: String, Codable, Sendable, CaseIterable, Identifiable {
     case sowing
     case transplant
@@ -364,6 +450,14 @@ public enum WireResponses {
 
     public struct PlantingEventOne: Codable, Sendable, Equatable {
         public let planting_event: PlantingEventDTO
+    }
+
+    /// Response from `POST /api/pets/:planting_event_id/depart` — the
+    /// updated parent planting (its `updated_at` bumped by the route) plus
+    /// the freshly-inserted (or idempotently returned) departure row.
+    public struct PetDepartureOne: Codable, Sendable, Equatable {
+        public let planting_event: PlantingEventDTO
+        public let departure: PetDepartureDTO
     }
 
     public struct TagOne: Codable, Sendable, Equatable {
