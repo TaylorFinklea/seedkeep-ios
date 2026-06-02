@@ -40,6 +40,42 @@ enum HerbColor {
 
     static let tape       = dyn(light: 0xD8C58E, dark: 0x5A4830)
 
+    // MARK: - Plant-pet rarity ink (Phase 5)
+    // Each rarity tier carries a distinct ink treatment for `RarityBadge`
+    // and the per-creature frame. Light values lean sepia/sage; dark
+    // variants brighten so they read on the cocoa-leather background.
+
+    /// Thin sepia ink line — `common` tier frame & badge text.
+    static let rarityCommon    = dyn(light: 0x8A6A3F, dark: 0xC9985E)
+    /// Doubled sepia line + small ◆ ornaments — `uncommon` tier.
+    static let rarityUncommon  = dyn(light: 0x6E8050, dark: 0xA8BD8C)
+    /// Sepia + rose hairline outer frame — `rare` tier.
+    static let rarityRare      = dyn(light: 0xB05246, dark: 0xD67868)
+    /// Sage-on-sepia double frame + ◆◇◆ cap — `legendary` tier.
+    static let rarityLegendary = dyn(light: 0x56624A, dark: 0xB4C19F)
+    /// Reserved for the mythical badge text (frame uses `goldInk`).
+    static let rarityMythical  = dyn(light: 0x8A6F22, dark: 0xE6C766)
+
+    /// Antique-gilt accent for mythical-tier frames + flourishes. The only
+    /// new "non-sepia" accent in the Herbarium palette. Light=warm gold,
+    /// dark=warmer pale-gold so it still reads as gilt on cocoa leather.
+    static let goldInk         = dyn(light: 0xB8870A, dark: 0xE6C766)
+
+    // MARK: - Plant-pet mood tint (Phase 5)
+    // Tokens map 1:1 with `PetMoodLabel` cases. Used by PetCard's mood
+    // ink-drop, the Menagerie row tint, and the PetDetailView mood strip.
+
+    /// `thriving` — bright sage. Matches the existing `sage` family.
+    static let moodThriving         = dyn(light: 0x6E8050, dark: 0xA8BD8C)
+    /// `content` — default ink. Maps to the standard sepia.
+    static let moodContent          = dyn(light: 0x6E4A22, dark: 0xC9985E)
+    /// `quiet` — soft ink. Pulls from `inkSoft` lineage.
+    static let moodQuiet            = dyn(light: 0x6F6051, dark: 0xA89A86)
+    /// `wilted` — rose. Matches existing `rose` token.
+    static let moodWilted           = dyn(light: 0xB05246, dark: 0xD67868)
+    /// `departingImminent` — deep rose. Darker than `moodWilted`.
+    static let moodDepartingImminent = dyn(light: 0x8E2A1F, dark: 0xC54E3D)
+
     // MARK: - Verdict palette
 
     static let verdictNow   = dyn(light: 0x6E8050, dark: 0x9CAB87)
