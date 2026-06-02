@@ -690,6 +690,20 @@ public actor SeedkeepClient {
         return (event: res.planting_event, departure: res.departure)
     }
 
+    /// `GET /api/pets/departures` — delta-sync feed for cross-device
+    /// fan-out of departure rows. Mirrors the standard
+    /// `{ items, cursor, has_more }` envelope used by every other pull
+    /// endpoint. Tombstoned rows ride the same channel via `deleted_at`.
+    public func petDepartures(
+        since: Int64 = 0,
+        limit: Int? = nil
+    ) async throws -> DeltaPage<PetDepartureDTO> {
+        try await getJSON(
+            path: "/api/pets/departures",
+            query: deltaQuery(since: since, limit: limit)
+        )
+    }
+
     // MARK: - Recommendations
 
     /// Sets (or updates) the geographic location for the current household.

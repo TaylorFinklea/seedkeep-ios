@@ -20,6 +20,11 @@ import SeedkeepKit
 /// surface.
 @MainActor
 public final class SyncEngine {
+    /// Cursor kind for the `GET /api/pets/departures` delta feed.
+    /// Declared as a constant to prevent typo drift between the pull
+    /// loop and any future cursor-reset / diagnostic surface.
+    private static let petDeparturesKind = "pet_departures"
+
     private let client: SeedkeepClient
     private let container: ModelContainer
     public private(set) var isSyncing: Bool = false
@@ -42,6 +47,7 @@ public final class SyncEngine {
             try await pullSeeds(householdID: householdID)
             try await pullBeds(householdID: householdID)
             try await pullPlantingEvents(householdID: householdID)
+            try await pullPetDepartures(householdID: householdID)
             try await pullJournalEntries(householdID: householdID)
             try await pullAssistantThreads(householdID: householdID)
             try await flushPending()
@@ -109,6 +115,31 @@ public final class SyncEngine {
             try upsertPlantingEvents(page.items)
             since = page.cursor
             try saveCursor(householdID: householdID, kind: "planting_events", cursor: since)
+            if !page.has_more { break }
+        } while true
+    }
+
+    /// Phase 5.1.2 — cross-device fan-out of `pet_departures` rows. Ordered
+    /// **after** `pullPlantingEvents` so the parent planting (and its
+    /// `pet_*` identity columns) is already present when a departure row
+    /// for that planting arrives. The route returns tombstones on the
+    /// same channel; `upsertPetDepartures` hard-deletes locally on a
+    /// `deleted_at != nil` payload.
+    private func pullPetDepartures(householdID: String) async throws {
+        let cursor = currentCursor(
+            householdID: householdID,
+            kind: Self.petDeparturesKind
+        )
+        var since = cursor
+        repeat {
+            let page = try await client.petDepartures(since: since)
+            try upsertPetDepartures(page.items)
+            since = page.cursor
+            try saveCursor(
+                householdID: householdID,
+                kind: Self.petDeparturesKind,
+                cursor: since
+            )
             if !page.has_more { break }
         } while true
     }
@@ -856,6 +887,31 @@ public final class SyncEngine {
                 }
             }
         }
+    }
+
+    /// Phase 5.1.2 — pull-side upsert for the `pet_departures` delta feed.
+    /// Mirrors `upsertJournalEntries`: tombstone (`deleted_at != nil`)
+    /// hard-deletes the local row, populated rows insert-or-apply onto
+    /// `LocalPetDeparture` keyed by `plantingEventID` (1:1 with the
+    /// parent planting).
+    private func upsertPetDepartures(_ items: [PetDepartureDTO]) throws {
+        let context = ModelContext(container)
+        for dto in items {
+            let eventID = dto.planting_event_id
+            let descriptor = FetchDescriptor<LocalPetDeparture>(
+                predicate: #Predicate { $0.plantingEventID == eventID }
+            )
+            if let existing = try context.fetch(descriptor).first {
+                if dto.deleted_at != nil {
+                    context.delete(existing)
+                } else {
+                    dto.apply(to: existing)
+                }
+            } else if dto.deleted_at == nil {
+                context.insert(dto.makeLocal())
+            }
+        }
+        try context.save()
     }
 
     /// Hard-deletes the per-pet children of a planting whose parent is

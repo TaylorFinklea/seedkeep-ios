@@ -348,3 +348,30 @@ extension AssistantToolCallDTO {
         local.updatedAt = updatedAt
     }
 }
+
+// MARK: - PetDeparture (Phase 5.1.2)
+
+extension PetDepartureDTO {
+    func makeLocal() -> LocalPetDeparture {
+        LocalPetDeparture(
+            plantingEventID: planting_event_id,
+            goodbyeNoteJSON: goodbye_note,
+            reason: reason,
+            fallback: decodedGoodbyeNote()?.fallback ?? false,
+            createdAt: created_at,
+            updatedAt: updated_at,
+            departedAt: departed_at,
+            deletedAt: deleted_at
+        )
+    }
+
+    func apply(to local: LocalPetDeparture) {
+        local.goodbyeNoteJSON = goodbye_note
+        local.reason = reason
+        local.fallback = decodedGoodbyeNote()?.fallback ?? false
+        local.createdAt = created_at
+        local.updatedAt = updated_at
+        local.departedAt = departed_at
+        local.deletedAt = deleted_at
+    }
+}
