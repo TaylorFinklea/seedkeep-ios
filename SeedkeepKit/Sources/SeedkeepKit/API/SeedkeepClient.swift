@@ -1030,9 +1030,7 @@ public actor SeedkeepClient {
     /// List assistant threads (delta-sync friendly). `since=0` excludes
     /// soft-deletes; any non-zero `since` includes them so clients purge.
     public func assistantThreads(since: Int64 = 0, limit: Int? = nil) async throws -> AssistantThreadFeedDTO {
-        var components = URLComponents(string: "/api/assistant/threads")!
-        components.queryItems = deltaQuery(since: since, limit: limit)
-        return try await getJSON(path: components.url!.absoluteString)
+        try await getJSON(path: "/api/assistant/threads", query: deltaQuery(since: since, limit: limit))
     }
 
     public struct CreateAssistantThreadInput: Encodable, Sendable {
@@ -1096,9 +1094,10 @@ public actor SeedkeepClient {
 
     public func deleteAssistantKey(provider: String = "anthropic") async throws {
         struct DeleteResp: Decodable { let provider: String; let configured: Bool }
-        var components = URLComponents(string: "/api/households/me/assistant_key")!
-        components.queryItems = [.init(name: "provider", value: provider)]
-        _ = try await deleteJSON(path: components.url!.absoluteString) as DeleteResp
+        _ = try await deleteJSON(
+            path: "/api/households/me/assistant_key",
+            query: [URLQueryItem(name: "provider", value: provider)]
+        ) as DeleteResp
     }
 
     public func assistantKeyStatus() async throws -> AssistantKeyStatusDTO {
@@ -1172,8 +1171,15 @@ public actor SeedkeepClient {
         return try await perform(req)
     }
 
-    private func deleteJSON<T: Decodable & Sendable>(path: String) async throws -> T {
-        let url = configuration.baseURL.appendingPathComponent(path)
+    private func deleteJSON<T: Decodable & Sendable>(
+        path: String,
+        query: [URLQueryItem] = []
+    ) async throws -> T {
+        var components = URLComponents(url: configuration.baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
+        if !query.isEmpty { components?.queryItems = query }
+        guard let url = components?.url else {
+            throw SeedkeepError(code: "bad_url", message: "Could not construct URL for \(path)")
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
         if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
