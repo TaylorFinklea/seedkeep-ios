@@ -76,6 +76,8 @@ struct BedDetailView: View {
                     eventSection(title: "Upcoming", events: upcomingEvents, defaultEmptyHidden: false)
                     eventSection(title: "Done", events: doneEvents, defaultEmptyHidden: true)
 
+                    companionsSection
+
                     EntityScopedJournalSection(parent: .bed(bed.id))
 
                     Section {
@@ -204,6 +206,20 @@ struct BedDetailView: View {
 
     private func placedCount(for bed: LocalBed) -> Int {
         allEvents.filter { $0.xFeet != nil && $0.yFeet != nil }.count
+    }
+
+    @ViewBuilder
+    private var companionsSection: some View {
+        let pets = allEvents
+            .filter { $0.petCreatureKind != nil && $0.petSeed != nil && $0.completedAt == nil }
+            .sorted(by: sortKey)
+        if !pets.isEmpty {
+            Section("Companions") {
+                ForEach(pets) { pet in
+                    PetCard(pet: pet, variant: .inline)
+                }
+            }
+        }
     }
 
     @ViewBuilder
