@@ -17,6 +17,13 @@ struct TodayView: View {
     @Query private var recentJournal: [LocalJournalEntry]
     /// Active seeds for pulling the seed name on a planting event.
     @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var seeds: [LocalSeed]
+    /// Live pets for the Garden roll-call strip. Phase filtering (alive /
+    /// wilted / departing) happens in `livePets` since lifecycle phase is
+    /// iOS-derived from cached mood snapshots, not stored.
+    @Query private var liveCandidates: [LocalPlantingEvent]
+    /// Departure rows are excluded from the strip — departed pets live
+    /// in Menagerie, not in Today.
+    @Query private var departures: [LocalPetDeparture]
 
     init() {
         let f = DateFormatter()
@@ -39,40 +46,106 @@ struct TodayView: View {
             },
             sort: \.occurredOn,
             order: .reverse)
+        _liveCandidates = Query(
+            filter: #Predicate<LocalPlantingEvent> { event in
+                event.deletedAt == nil && event.completedAt == nil
+            })
     }
 
     var body: some View {
-        ZStack {
-            VellumBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    FolioStrip(section: "Diurnalis", folio: folioNumber)
+        NavigationStack {
+            ZStack {
+                VellumBackground()
+                ScrollView { scrollContent }
+                    .overlay(alignment: .bottomTrailing) { SproutFAB() }
+            }
+            .navigationDestination(for: PetDetailDestination.self) { dest in
+                PetDetailView(plantingEventID: dest.plantingEventID)
+            }
+        }
+    }
 
-                    headingBlock
-                        .padding(.horizontal, 26)
-                        .padding(.top, 4)
+    @ViewBuilder
+    private var scrollContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FolioStrip(section: "Diurnalis", folio: folioNumber)
 
-                    ScholarRule(verticalMargin: 12)
-                        .padding(.horizontal, 22)
+            headingBlock
+                .padding(.horizontal, 26)
+                .padding(.top, 4)
 
-                    sunArcBlock
-                        .padding(.horizontal, 26)
-                        .padding(.bottom, 4)
+            ScholarRule(verticalMargin: 12)
+                .padding(.horizontal, 22)
 
-                    sowingsBlock
-                        .padding(.horizontal, 22)
-                        .padding(.top, 16)
+            sunArcBlock
+                .padding(.horizontal, 26)
+                .padding(.bottom, 4)
 
-                    if let marginEntry {
-                        marginNoteBlock(entry: marginEntry)
-                            .padding(.horizontal, 26)
-                            .padding(.top, 16)
+            gardenRollCallBlock
+                .padding(.horizontal, 22)
+                .padding(.top, 16)
+
+            sowingsBlock
+                .padding(.horizontal, 22)
+                .padding(.top, 16)
+
+            if let marginEntry {
+                marginNoteBlock(entry: marginEntry)
+                    .padding(.horizontal, 26)
+                    .padding(.top, 16)
+            }
+
+            Color.clear.frame(height: 80)
+        }
+    }
+
+    // MARK: - Garden roll-call (Phase 5.1.3)
+
+    /// Live pets (alive/wilted/departing) excluding ones with a departure
+    /// row. Sorted by mood-label ascending so wilted/departing surface
+    /// first; stable tiebreak by createdAt ascending.
+    @MainActor
+    private var livePets: [LocalPlantingEvent] {
+        let depIDs = Set(departures.filter { $0.deletedAt == nil }.map { $0.plantingEventID })
+        return liveCandidates
+            .filter { $0.petSeed != nil && !depIDs.contains($0.id) }
+            .sorted { lhs, rhs in
+                let lr = moodRank(lhs.petMoodLabel)
+                let rr = moodRank(rhs.petMoodLabel)
+                if lr != rr { return lr < rr }
+                return lhs.createdAt < rhs.createdAt
+            }
+    }
+
+    private func moodRank(_ label: PetMoodLabel) -> Int {
+        switch label {
+        case .departingImminent: return 0
+        case .wilted:            return 1
+        case .quiet:             return 2
+        case .content:           return 3
+        case .thriving:          return 4
+        }
+    }
+
+    @ViewBuilder
+    private var gardenRollCallBlock: some View {
+        let pets = livePets
+        if !pets.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Rubric(text: "garden roll-call")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(pets) { pet in
+                            NavigationLink(value: PetDetailDestination(plantingEventID: pet.id)) {
+                                PetCard(pet: pet, variant: .rollCall)
+                                    .frame(width: 64)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-
-                    Color.clear.frame(height: 80)
+                    .padding(.vertical, 4)
                 }
             }
-            .overlay(alignment: .bottomTrailing) { SproutFAB() }
         }
     }
 
