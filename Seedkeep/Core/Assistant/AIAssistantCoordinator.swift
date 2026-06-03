@@ -134,13 +134,48 @@ final class AIAssistantCoordinator {
         let ctx = contextOverride ?? pageContext
         let payload = ctx.map { AssistantPageContextPayload(pageType: $0.pageType, entityId: $0.entityID, label: $0.label) }
 
+        let clientPetState = buildClientPetState()
+
         let stream = await client.streamAssistantResponse(
             threadId: threadID,
             text: text,
             pageContext: payload,
-            attachment: attachment
+            attachment: attachment,
+            clientPetState: clientPetState
         )
         try await consumeStream(stream, threadID: threadID)
+    }
+
+    /// Phase 5.1.5 — build the iOS-derived pet-state map for the next
+    /// assistant turn. Includes every alive (non-completed, non-deleted,
+    /// petSeed != nil) planting event in the active household. The server
+    /// uses this opportunistically via `query_pet`; sending it on every
+    /// turn is cheap and avoids client-side heuristics about whether a
+    /// turn "is likely about pets".
+    @MainActor
+    private func buildClientPetState() -> [String: SeedkeepClient.AssistantClientPetStateEntry]? {
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalPlantingEvent>(
+            predicate: #Predicate<LocalPlantingEvent> { event in
+                event.deletedAt == nil && event.completedAt == nil
+            }
+        )
+        guard let fetched = try? context.fetch(descriptor), !fetched.isEmpty else { return nil }
+        let candidates = fetched.filter { $0.petSeed != nil }
+        guard !candidates.isEmpty else { return nil }
+        var map: [String: SeedkeepClient.AssistantClientPetStateEntry] = [:]
+        for event in candidates {
+            let stars = petAgeStars(for: event)
+            map[event.id] = .init(mood: event.petMoodLabel.rawValue, age_stars: stars)
+        }
+        return map
+    }
+
+    private func petAgeStars(for pet: LocalPlantingEvent) -> Int {
+        guard let spawned = pet.petSpawnedAt else { return 0 }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let days = (nowMs - spawned) / (1000 * 60 * 60 * 24)
+        return min(5, max(0, Int(days / 14)))
     }
 
     /// Confirm a proposed destructive tool call. Opens a fresh SSE stream

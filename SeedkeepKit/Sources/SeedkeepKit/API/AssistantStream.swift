@@ -16,7 +16,8 @@ extension SeedkeepClient {
         threadId: String,
         text: String,
         pageContext: AssistantPageContextPayload? = nil,
-        attachment: AssistantImageAttachment? = nil
+        attachment: AssistantImageAttachment? = nil,
+        clientPetState: [String: AssistantClientPetStateEntry]? = nil
     ) async -> AsyncThrowingStream<AssistantStreamEvent, Error> {
         return openSSE(
             path: "/api/assistant/threads/\(threadId)/stream",
@@ -24,7 +25,8 @@ extension SeedkeepClient {
             body: StreamRequestBody(
                 text: text,
                 pageContext: pageContext,
-                attachment: attachment
+                attachment: attachment,
+                clientPetState: clientPetState
             )
         )
     }
@@ -38,6 +40,19 @@ extension SeedkeepClient {
         public init(media_type: String, data: String) {
             self.media_type = media_type
             self.data = data
+        }
+    }
+
+    /// Phase 5.1.5 — per-turn iOS-derived pet state. Keyed by
+    /// planting_event_id. The server's `query_pet` tool uses this to fill
+    /// `mood` + `age_stars` in its response. Sparse: any planting not in
+    /// the map shows up with null mood/age_stars on the server side.
+    public struct AssistantClientPetStateEntry: Encodable, Sendable {
+        public let mood: String   // "thriving" | "content" | "quiet" | "wilted" | "departingImminent"
+        public let age_stars: Int
+        public init(mood: String, age_stars: Int) {
+            self.mood = mood
+            self.age_stars = age_stars
         }
     }
 
@@ -59,10 +74,12 @@ extension SeedkeepClient {
         let text: String
         let pageContext: AssistantPageContextPayload?
         let attachment: AssistantImageAttachment?
+        let clientPetState: [String: AssistantClientPetStateEntry]?
         enum CodingKeys: String, CodingKey {
             case text
             case pageContext = "page_context"
             case attachment
+            case clientPetState = "client_pet_state"
         }
     }
 
