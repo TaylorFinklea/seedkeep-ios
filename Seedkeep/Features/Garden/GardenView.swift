@@ -36,6 +36,24 @@ struct GardenView: View {
                         .padding(.horizontal, 26)
                         ScholarRule(verticalMargin: 12)
                             .padding(.horizontal, 22)
+                        NavigationLink(value: MenagerieDestination()) {
+                            HStack {
+                                Image(systemName: "pawprint")
+                                    .foregroundStyle(HerbColor.inkSoft)
+                                Text("Menagerie")
+                                    .font(HerbFont.smallCaps(size: 11))
+                                    .tracking(1.6)
+                                    .textCase(.uppercase)
+                                    .foregroundStyle(HerbColor.ink)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(HerbColor.inkFaint)
+                            }
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
                         if beds.isEmpty {
                             emptyState
                         } else {
@@ -58,6 +76,12 @@ struct GardenView: View {
             .publishesAssistantContext(pageType: "garden")
             .navigationDestination(for: String.self) { bedID in
                 BedDetailView(bedID: bedID)
+            }
+            .navigationDestination(for: MenagerieDestination.self) { _ in
+                MenagerieView()
+            }
+            .navigationDestination(for: PetDetailDestination.self) { dest in
+                PetDetailView(plantingEventID: dest.plantingEventID)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -207,4 +231,16 @@ func humanDate(_ ymd: String) -> String {
     formatter.dateStyle = .medium
     formatter.timeStyle = .none
     return formatter.string(from: date)
+}
+
+// MARK: - Navigation destinations (Phase 5.1.2)
+
+/// Marker value used to push `MenagerieView` onto the Garden navigation
+/// stack. Hashable so SwiftUI's typed navigation accepts it.
+struct MenagerieDestination: Hashable {}
+
+/// Push value for `PetDetailView`. Hashable because SwiftUI's typed
+/// navigation depends on `==`/`hash` for state restoration + back-stack.
+struct PetDetailDestination: Hashable {
+    let plantingEventID: String
 }
