@@ -165,17 +165,11 @@ final class AIAssistantCoordinator {
         guard !candidates.isEmpty else { return nil }
         var map: [String: SeedkeepClient.AssistantClientPetStateEntry] = [:]
         for event in candidates {
-            let stars = petAgeStars(for: event)
+            let phase = event.petLifecyclePhase
+            let stars = PetAgeStars.compute(spawnedAt: event.petSpawnedAt, phase: phase)
             map[event.id] = .init(mood: event.petMoodLabel.rawValue, age_stars: stars)
         }
         return map
-    }
-
-    private func petAgeStars(for pet: LocalPlantingEvent) -> Int {
-        guard let spawned = pet.petSpawnedAt else { return 0 }
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let days = (nowMs - spawned) / (1000 * 60 * 60 * 24)
-        return min(5, max(0, Int(days / 14)))
     }
 
     /// Confirm a proposed destructive tool call. Opens a fresh SSE stream

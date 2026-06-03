@@ -184,7 +184,7 @@ struct PetDetailView: View {
     @ViewBuilder
     private func ageBlock(pet: LocalPlantingEvent, phase: PetLifecyclePhase) -> some View {
         if phase == .alive || phase == .wilted || phase == .departing {
-            let stars = ageStars(for: pet)
+            let stars = PetAgeStars.compute(spawnedAt: pet.petSpawnedAt, phase: phase)
             HStack(spacing: 4) {
                 ForEach(0..<5, id: \.self) { i in
                     Circle()
@@ -208,13 +208,6 @@ struct PetDetailView: View {
             }
             .padding(.horizontal, 22)
         }
-    }
-
-    private func ageStars(for pet: LocalPlantingEvent) -> Int {
-        guard let spawned = pet.petSpawnedAt else { return 0 }
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let days = (nowMs - spawned) / (1000 * 60 * 60 * 24)
-        return min(5, max(0, Int(days / 14)))
     }
 
     // MARK: - Goodbye note
