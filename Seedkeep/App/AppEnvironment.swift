@@ -105,7 +105,43 @@ public final class AppEnvironment {
                 client: client,
                 container: container
             )
+            // Phase 5.1.4: re-bake the weekly roundup body with the
+            // current household snapshot. iOS preserves the next-fire
+            // date when re-scheduling with the same identifier + same
+            // DateComponents shape, so this is cheap to call every sync.
+            await rescheduleWeeklyPetRoundup()
         }
+    }
+
+    /// Phase 5.1.4 — recompute the Sunday-8am pet roundup body from the
+    /// current household snapshot. Gated server-side by the Settings
+    /// toggle; this function is safe to call regardless.
+    private func rescheduleWeeklyPetRoundup() async {
+        let context = ModelContext(container)
+        // 3-condition predicates trip the SwiftData macro type-checker;
+        // gate the two cheap server-side flags here + filter petSeed in code.
+        let descriptor = FetchDescriptor<LocalPlantingEvent>(
+            predicate: #Predicate<LocalPlantingEvent> { event in
+                event.deletedAt == nil && event.completedAt == nil
+            }
+        )
+        guard let fetched = try? context.fetch(descriptor) else { return }
+        let candidates = fetched.filter { $0.petSeed != nil }
+        var thriving = 0
+        var wilting = 0
+        await MainActor.run {
+            for event in candidates {
+                switch event.petLifecyclePhase {
+                case .alive: thriving += 1
+                case .wilted, .departing: wilting += 1
+                case .departed, .graduated: break
+                }
+            }
+        }
+        await NotificationsCenter.shared.schedulePetWeeklyRoundup(
+            thrivingCount: thriving,
+            wiltingCount: wilting
+        )
     }
 
     /// Validates that `url` answers `/api/health` then mutates the live

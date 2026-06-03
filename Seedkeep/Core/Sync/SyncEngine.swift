@@ -761,8 +761,10 @@ public final class SyncEngine {
         ))
         try context.save()
         // Phase 4 C — drop any pending reminder for this event.
+        // Phase 5.1.4 — also drop any pet notifications for this event.
         Task { @MainActor in
             NotificationsCenter.shared.cancelPlantingEventReminder(eventID: id)
+            NotificationsCenter.shared.cancelAllPetNotifications(eventID: id)
         }
     }
 
@@ -884,6 +886,11 @@ public final class SyncEngine {
             Task { @MainActor in
                 for id in idsToCancelReminder {
                     NotificationsCenter.shared.cancelPlantingEventReminder(eventID: id)
+                    // Phase 5.1.4 — cascade pet notification cleanup
+                    // alongside the existing event-reminder cleanup so
+                    // tombstoned plantings don't leave ghost wilted /
+                    // departed pings queued.
+                    NotificationsCenter.shared.cancelAllPetNotifications(eventID: id)
                 }
             }
         }

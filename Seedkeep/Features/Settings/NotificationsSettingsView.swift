@@ -9,6 +9,10 @@ struct NotificationsSettingsView: View {
 
     @AppStorage("seedkeep.notif.frost") private var frostEnabled: Bool = false
     @AppStorage("seedkeep.notif.events") private var eventsEnabled: Bool = false
+    // Phase 5.1.4 — plant pets. All default-off per spec line 1250.
+    @AppStorage("seedkeep.notif.pet.wilted") private var petWiltedEnabled: Bool = false
+    @AppStorage("seedkeep.notif.pet.departed") private var petDepartedEnabled: Bool = false
+    @AppStorage("seedkeep.notif.pet.roundup") private var petRoundupEnabled: Bool = false
 
     @State private var authStatus: UNAuthorizationStatus = .notDetermined
     @State private var hasFrostScheduled: Bool = false
@@ -55,6 +59,44 @@ struct NotificationsSettingsView: View {
                     Text("All notifications are scheduled on-device. Seedkeep doesn't send anything through Apple's push servers.")
                         .font(HerbFont.bodyItalic(size: 11))
                         .foregroundStyle(HerbColor.inkSoft)
+                }
+
+                Section {
+                    Toggle(isOn: $petWiltedEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Wilting warnings", systemImage: "leaf")
+                            Text("When a pet's mood drops to wilted")
+                                .font(HerbFont.bodyItalic(size: 11))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    .onChange(of: petWiltedEnabled) { _, newValue in
+                        Task { await applyPetWilted(enabled: newValue) }
+                    }
+                    Toggle(isOn: $petDepartedEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Departure farewells", systemImage: "envelope.open")
+                            Text("When a pet leaves with a goodbye note")
+                                .font(HerbFont.bodyItalic(size: 11))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    .onChange(of: petDepartedEnabled) { _, newValue in
+                        Task { await applyPetDeparted(enabled: newValue) }
+                    }
+                    Toggle(isOn: $petRoundupEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Sunday roundup", systemImage: "calendar.badge.clock")
+                            Text("Weekly summary of every companion's mood")
+                                .font(HerbFont.bodyItalic(size: 11))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    .onChange(of: petRoundupEnabled) { _, newValue in
+                        Task { await applyPetRoundup(enabled: newValue) }
+                    }
+                } header: {
+                    Rubric(text: "plant pets")
                 }
 
                 if frostEnabled {
@@ -148,6 +190,46 @@ struct NotificationsSettingsView: View {
         // completes or deletes — no bulk-purge here.
         if enabled {
             _ = await NotificationsCenter.shared.requestAuthorization()
+        }
+        authStatus = await NotificationsCenter.shared.authorizationStatus()
+    }
+
+    private func applyPetWilted(enabled: Bool) async {
+        if enabled {
+            _ = await NotificationsCenter.shared.requestAuthorization()
+        } else {
+            // Sweep any pending wilted notifications.
+            let center = UNUserNotificationCenter.current()
+            let pending = await center.pendingNotificationRequests()
+            let ids = pending.map(\.identifier)
+                .filter { $0.hasPrefix(NotificationsCenter.IdPrefix.petWilted) }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+        }
+        authStatus = await NotificationsCenter.shared.authorizationStatus()
+    }
+
+    private func applyPetDeparted(enabled: Bool) async {
+        if enabled {
+            _ = await NotificationsCenter.shared.requestAuthorization()
+        } else {
+            let center = UNUserNotificationCenter.current()
+            let pending = await center.pendingNotificationRequests()
+            let ids = pending.map(\.identifier)
+                .filter { $0.hasPrefix(NotificationsCenter.IdPrefix.petDeparted) }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+        }
+        authStatus = await NotificationsCenter.shared.authorizationStatus()
+    }
+
+    private func applyPetRoundup(enabled: Bool) async {
+        if enabled {
+            // Best-effort initial schedule with zero counts until the
+            // next sync re-bakes the body.
+            await NotificationsCenter.shared.schedulePetWeeklyRoundup(
+                thrivingCount: 0, wiltingCount: 0
+            )
+        } else {
+            NotificationsCenter.shared.clearPetWeeklyRoundup()
         }
         authStatus = await NotificationsCenter.shared.authorizationStatus()
     }

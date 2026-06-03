@@ -301,24 +301,64 @@ public enum PetStateEngine {
                     client: client,
                     container: container
                 )
-                // Phase 5.1.4: schedule
-                //   `seedkeep.notif.pet.departed.<eventID>` (5s, gated).
+                // Schedule the farewell notification using the goodbye-note's
+                // first line. The RPC just upserted the row, so it should
+                // be readable from the same container.
+                if let firstLine = goodbyeFirstLine(for: eventID, container: container) {
+                    await NotificationsCenter.shared.schedulePetDeparted(
+                        eventID: eventID,
+                        goodbyeFirstLine: firstLine
+                    )
+                }
+                // Wilted-warning, if any, is now redundant — cancel it.
+                NotificationsCenter.shared.cancelPetWiltedWarning(eventID: eventID)
 
-            case .aliveToWilted:
-                // Phase 5.1.4: schedule
-                //   `seedkeep.notif.pet.wilted.<eventID>` (10s, gated).
-                break
+            case .aliveToWilted(let eventID):
+                if let petName = petName(for: eventID, container: container) {
+                    await NotificationsCenter.shared.schedulePetWiltedWarning(
+                        eventID: eventID,
+                        petName: petName
+                    )
+                }
 
-            case .recoveredToAlive:
-                // Phase 5.1.4: cancel the pending wilted notification
-                //   if one was scheduled.
-                break
+            case .recoveredToAlive(let eventID):
+                NotificationsCenter.shared.cancelPetWiltedWarning(eventID: eventID)
 
             case .wiltedToDeparting:
                 // Visual change only per spec line 679 — no side effect.
                 break
             }
         }
+    }
+
+    /// Pet name lookup for notification bodies. Reads from the container
+    /// since the transition value only carries the eventID.
+    private static func petName(for eventID: String, container: ModelContainer) -> String? {
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalPlantingEvent>(
+            predicate: #Predicate { $0.id == eventID }
+        )
+        return (try? context.fetch(descriptor))?.first?.petName
+    }
+
+    /// First line of the goodbye note for a just-departed pet. Returns
+    /// nil if the departure row hasn't landed yet (shouldn't happen since
+    /// we call this after `runDepartureRPC`, but defensive).
+    private static func goodbyeFirstLine(for eventID: String, container: ModelContainer) -> String? {
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalPetDeparture>(
+            predicate: #Predicate { $0.plantingEventID == eventID && $0.deletedAt == nil }
+        )
+        guard let row = (try? context.fetch(descriptor))?.first,
+              let json = row.goodbyeNoteJSON,
+              let data = json.data(using: .utf8),
+              let note = try? JSONDecoder().decode(PetGoodbyeNote.self, from: data)
+        else { return nil }
+        let text = note.noteText
+        if let newlineIdx = text.firstIndex(of: "\n") {
+            return String(text[..<newlineIdx])
+        }
+        return String(text.prefix(120))
     }
 
     /// Calls `/api/pets/:id/depart` and upserts the response into
