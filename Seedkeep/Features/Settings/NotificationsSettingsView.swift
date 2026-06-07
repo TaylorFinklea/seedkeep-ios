@@ -61,42 +61,44 @@ struct NotificationsSettingsView: View {
                         .foregroundStyle(HerbColor.inkSoft)
                 }
 
-                Section {
-                    Toggle(isOn: $petWiltedEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Wilting warnings", systemImage: "leaf")
-                            Text("When a pet's mood drops to wilted")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                if FeatureFlags.plantPetsEnabled {
+                    Section {
+                        Toggle(isOn: $petWiltedEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label("Wilting warnings", systemImage: "leaf")
+                                Text("When a pet's mood drops to wilted")
+                                    .font(HerbFont.bodyItalic(size: 11))
+                                    .foregroundStyle(HerbColor.inkSoft)
+                            }
                         }
-                    }
-                    .onChange(of: petWiltedEnabled) { _, newValue in
-                        Task { await applyPetWilted(enabled: newValue) }
-                    }
-                    Toggle(isOn: $petDepartedEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Departure farewells", systemImage: "envelope.open")
-                            Text("When a pet leaves with a goodbye note")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                        .onChange(of: petWiltedEnabled) { _, newValue in
+                            Task { await applyPetWilted(enabled: newValue) }
                         }
-                    }
-                    .onChange(of: petDepartedEnabled) { _, newValue in
-                        Task { await applyPetDeparted(enabled: newValue) }
-                    }
-                    Toggle(isOn: $petRoundupEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Sunday roundup", systemImage: "calendar.badge.clock")
-                            Text("Weekly summary of every companion's mood")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                        Toggle(isOn: $petDepartedEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label("Departure farewells", systemImage: "envelope.open")
+                                Text("When a pet leaves with a goodbye note")
+                                    .font(HerbFont.bodyItalic(size: 11))
+                                    .foregroundStyle(HerbColor.inkSoft)
+                            }
                         }
+                        .onChange(of: petDepartedEnabled) { _, newValue in
+                            Task { await applyPetDeparted(enabled: newValue) }
+                        }
+                        Toggle(isOn: $petRoundupEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label("Sunday roundup", systemImage: "calendar.badge.clock")
+                                Text("Weekly summary of every companion's mood")
+                                    .font(HerbFont.bodyItalic(size: 11))
+                                    .foregroundStyle(HerbColor.inkSoft)
+                            }
+                        }
+                        .onChange(of: petRoundupEnabled) { _, newValue in
+                            Task { await applyPetRoundup(enabled: newValue) }
+                        }
+                    } header: {
+                        Rubric(text: "plant pets")
                     }
-                    .onChange(of: petRoundupEnabled) { _, newValue in
-                        Task { await applyPetRoundup(enabled: newValue) }
-                    }
-                } header: {
-                    Rubric(text: "plant pets")
                 }
 
                 if frostEnabled {

@@ -36,24 +36,26 @@ struct GardenView: View {
                         .padding(.horizontal, 26)
                         ScholarRule(verticalMargin: 12)
                             .padding(.horizontal, 22)
-                        NavigationLink(value: MenagerieDestination()) {
-                            HStack {
-                                Image(systemName: "pawprint")
-                                    .foregroundStyle(HerbColor.inkSoft)
-                                Text("Menagerie")
-                                    .font(HerbFont.smallCaps(size: 11))
-                                    .tracking(1.6)
-                                    .textCase(.uppercase)
-                                    .foregroundStyle(HerbColor.ink)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(HerbColor.inkFaint)
+                        if FeatureFlags.plantPetsEnabled {
+                            NavigationLink(value: MenagerieDestination()) {
+                                HStack {
+                                    Image(systemName: "pawprint")
+                                        .foregroundStyle(HerbColor.inkSoft)
+                                    Text("Menagerie")
+                                        .font(HerbFont.smallCaps(size: 11))
+                                        .tracking(1.6)
+                                        .textCase(.uppercase)
+                                        .foregroundStyle(HerbColor.ink)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(HerbColor.inkFaint)
+                                }
+                                .padding(.horizontal, 22)
+                                .padding(.vertical, 10)
                             }
-                            .padding(.horizontal, 22)
-                            .padding(.vertical, 10)
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                         if beds.isEmpty {
                             emptyState
                         } else {

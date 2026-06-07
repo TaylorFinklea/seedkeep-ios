@@ -130,7 +130,7 @@ struct TodayView: View {
     @ViewBuilder
     private var gardenRollCallBlock: some View {
         let pets = livePets
-        if !pets.isEmpty {
+        if FeatureFlags.plantPetsEnabled, !pets.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Rubric(text: "garden roll-call")
                 ScrollView(.horizontal, showsIndicators: false) {

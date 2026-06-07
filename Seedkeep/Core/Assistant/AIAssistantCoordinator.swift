@@ -154,6 +154,7 @@ final class AIAssistantCoordinator {
     /// turn "is likely about pets".
     @MainActor
     private func buildClientPetState() -> [String: SeedkeepClient.AssistantClientPetStateEntry]? {
+        guard FeatureFlags.plantPetsEnabled else { return nil }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<LocalPlantingEvent>(
             predicate: #Predicate<LocalPlantingEvent> { event in
