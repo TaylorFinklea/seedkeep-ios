@@ -58,12 +58,12 @@ struct ServerSettingsView: View {
                 Section {
                     Text(errorText)
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(HerbColor.rose)
                 }
             } else if savedSuccessfully {
                 Section {
                     Label("Server reachable. Saved.", systemImage: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(HerbColor.sage)
                         .font(.footnote)
                 }
             }

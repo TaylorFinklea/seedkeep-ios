@@ -56,15 +56,15 @@ struct PendingWritesView: View {
                         .font(.caption2.weight(.medium))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(.red.opacity(0.18), in: .capsule)
-                        .foregroundStyle(.red)
+                        .background(HerbColor.rose.opacity(0.18), in: .capsule)
+                        .foregroundStyle(HerbColor.rose)
                 } else if row.attemptCount > 0 {
                     Text("retry × \(row.attemptCount)")
                         .font(.caption2.weight(.medium))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(.orange.opacity(0.18), in: .capsule)
-                        .foregroundStyle(.orange)
+                        .background(HerbColor.ochre.opacity(0.18), in: .capsule)
+                        .foregroundStyle(HerbColor.ochre)
                 }
             }
             Text(row.entityID)
@@ -75,7 +75,7 @@ struct PendingWritesView: View {
             if let err = row.lastError {
                 Text(err)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(HerbColor.rose)
                     .lineLimit(2)
             }
             HStack(spacing: 8) {

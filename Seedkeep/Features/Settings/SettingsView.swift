@@ -165,7 +165,7 @@ struct SettingsView: View {
                                 } label: {
                                     HStack {
                                         Text("Create invite link")
-                                        if isCreatingInvite { ProgressView().controlSize(.small) }
+                                        if isCreatingInvite { ProgressView().controlSize(.small).herbProgressStyle() }
                                     }
                                 }
                                 .disabled(isCreatingInvite)
@@ -173,7 +173,7 @@ struct SettingsView: View {
                             if let inviteError {
                                 Text(inviteError)
                                     .font(.footnote)
-                                    .foregroundStyle(.red)
+                                    .foregroundStyle(HerbColor.rose)
                             }
                         } header: {
                             Rubric(text: "invite")
@@ -189,7 +189,7 @@ struct SettingsView: View {
                         if let err = appEnv.sync.lastError {
                             Text(err)
                                 .font(.footnote)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(HerbColor.rose)
                         }
                         NavigationLink {
                             PendingWritesView()
@@ -201,7 +201,7 @@ struct SettingsView: View {
                     }
 
                     Section {
-                        Text("SEEDKEEP · BUILD XXIII · ANNO MMXXVI")
+                        Text("SEEDKEEP · BUILD \(buildRoman) · ANNO MMXXVI")
                             .font(HerbFont.smallCaps(size: 8))
                             .tracking(1.5)
                             .foregroundStyle(HerbColor.inkFaint)
@@ -214,6 +214,18 @@ struct SettingsView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    // MARK: - Build stamp
+
+    /// Reads `CFBundleVersion` (the build number set by `release.sh`) and
+    /// converts it to Roman numerals for the footer stamp. Falls back to the
+    /// raw Arabic number if the build value isn't an integer, and to "?" if
+    /// the Info.plist entry is missing entirely — never crashes.
+    private var buildRoman: String {
+        let raw = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        guard let n = Int(raw), n > 0 else { return raw.isEmpty ? "?" : raw }
+        return HerbRomanNumeral.string(for: n, lowercase: false)
     }
 
     // MARK: - Hero block

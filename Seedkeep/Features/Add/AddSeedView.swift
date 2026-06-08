@@ -74,31 +74,37 @@ struct AddSeedView: View {
                         Section { prefillBanner }
                     }
                     extractedGrowingInfoSection
-                Section("Lifecycle") {
+                Section {
                     Picker("State", selection: $state) {
                         Text("Active").tag(SeedState.active)
                         Text("Wishlist").tag(SeedState.wishlist)
                         Text("Saved").tag(SeedState.saved)
                         Text("Archive").tag(SeedState.archived)
                     }
+                } header: {
+                    Rubric(text: "lifecycle")
                 }
 
-                Section("Identity") {
+                Section {
                     TextField("Name (e.g. Cherokee Purple)", text: $name)
                         .textInputAutocapitalization(.words)
                     TextField("Variety (optional)", text: $variety)
                         .textInputAutocapitalization(.words)
                     TextField("Company (e.g. Baker Creek)", text: $company)
                         .textInputAutocapitalization(.words)
+                } header: {
+                    Rubric(text: "identity")
                 }
 
                 if state != .wishlist {
-                    Section("Quantity") {
+                    Section {
                         Stepper("\(packetCount) packet\(packetCount == 1 ? "" : "s")", value: $packetCount, in: 0...100)
+                    } header: {
+                        Rubric(text: "quantity")
                     }
                 }
 
-                Section("Storage") {
+                Section {
                     Picker("Location", selection: $locationID) {
                         Text("None").tag(String?.none)
                         ForEach(locations) { loc in
@@ -117,9 +123,11 @@ struct AddSeedView: View {
                             }
                         }
                     }
+                } header: {
+                    Rubric(text: "storage")
                 }
 
-                Section("Provenance") {
+                Section {
                     Picker("Source", selection: $source) {
                         Text("Store-bought").tag(SeedSource.store)
                         Text("Self-saved").tag(SeedSource.saved)
@@ -127,18 +135,22 @@ struct AddSeedView: View {
                         Text("Swap").tag(SeedSource.swap)
                     }
                     YearField(year: $yearPacked)
+                } header: {
+                    Rubric(text: "provenance")
                 }
 
-                Section("Notes") {
+                Section {
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(3...6)
+                } header: {
+                    Rubric(text: "notes")
                 }
 
                 if let saveError {
                     Section {
                         Text(saveError)
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(HerbColor.rose)
                     }
                 }
                 }
@@ -311,7 +323,7 @@ struct AddSeedView: View {
                     .font(.footnote)
             } icon: {
                 Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(HerbColor.sage)
             }
         case .extraction(let result, _):
             VStack(alignment: .leading, spacing: 4) {
@@ -320,7 +332,7 @@ struct AddSeedView: View {
                         .font(.footnote.weight(.medium))
                 } icon: {
                     Image(systemName: "sparkles")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(HerbColor.sepia)
                 }
                 Text("Reviewer score: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)")
                     .font(.caption)
@@ -333,7 +345,7 @@ struct AddSeedView: View {
                         .font(.footnote.weight(.medium))
                 } icon: {
                     Image(systemName: "iphone.gen3")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(HerbColor.sepia)
                 }
                 Text("Self-confidence: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)")
                     .font(.caption)

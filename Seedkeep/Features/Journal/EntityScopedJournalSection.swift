@@ -100,7 +100,7 @@ struct EntityScopedJournalSection: View {
         guard let date = parser.date(from: ymd) else { return ymd }
         let f = DateFormatter()
         f.dateFormat = "MMM d"
-        f.locale = .current
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(secondsFromGMT: 0)
         return f.string(from: date)
     }

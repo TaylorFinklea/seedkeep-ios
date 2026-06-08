@@ -51,6 +51,7 @@ struct RandomPickView: View {
         switch state {
         case .idle, .loading:
             ProgressView()
+                .herbProgressStyle()
         case .picked(let seed):
             SeedCard(seed: seed)
         case .empty:
@@ -62,7 +63,7 @@ struct RandomPickView: View {
         case .error(let message):
             VStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(HerbColor.ochre)
                 Text(message)
                     .font(.footnote)
                     .multilineTextAlignment(.center)

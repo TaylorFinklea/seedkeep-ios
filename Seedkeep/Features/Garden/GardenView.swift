@@ -29,7 +29,7 @@ struct GardenView: View {
                             Text("Abbey grounds")
                                 .font(HerbFont.display(size: 38))
                                 .foregroundStyle(HerbColor.ink)
-                            Text("\(beds.count) plots in the household garden")
+                            Text("\(beds.count) \(beds.count == 1 ? "plot" : "plots") in the household garden")
                                 .font(HerbFont.bodyItalic(size: 12))
                                 .foregroundStyle(HerbColor.inkSoft)
                         }
@@ -230,6 +230,7 @@ func humanDate(_ ymd: String) -> String {
     parser.timeZone = TimeZone(secondsFromGMT: 0)
     guard let date = parser.date(from: ymd) else { return ymd }
     let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateStyle = .medium
     formatter.timeStyle = .none
     return formatter.string(from: date)

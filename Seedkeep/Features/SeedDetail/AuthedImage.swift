@@ -29,7 +29,7 @@ struct AuthedImage: View {
                 Image(systemName: "photo.badge.exclamationmark")
                     .foregroundStyle(.secondary)
             } else {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(.small).herbProgressStyle()
             }
         }
         .task(id: photoID) {

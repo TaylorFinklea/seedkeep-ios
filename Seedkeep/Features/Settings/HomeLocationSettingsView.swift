@@ -44,6 +44,7 @@ struct HomeLocationSettingsView: View {
                     HStack {
                         ProgressView()
                             .controlSize(.small)
+                            .herbProgressStyle()
                         Text("Looking up…")
                             .foregroundStyle(.secondary)
                     }
@@ -63,7 +64,7 @@ struct HomeLocationSettingsView: View {
                 Section {
                     Text(message)
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(HerbColor.rose)
                 }
             }
         }
@@ -131,6 +132,7 @@ struct HomeLocationSettingsView: View {
         guard let date = Calendar.current.date(from: comps) else { return mmdd }
         let f = DateFormatter()
         f.dateFormat = "MMM d"
+        f.locale = Locale(identifier: "en_US_POSIX")
         return f.string(from: date)
     }
 }

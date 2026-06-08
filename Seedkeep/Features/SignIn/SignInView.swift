@@ -37,8 +37,8 @@ struct SignInView: View {
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.rose)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             }
@@ -116,7 +116,7 @@ struct SignInView: View {
             // We accept either a top-level `token` or a nested `session.token`.
             let token = extractToken(from: data)
             guard let token else {
-                errorMessage = "Sign-in succeeded but no Bearer token in response."
+                errorMessage = "Sign-in didn't complete. Try again."
                 return
             }
             await auth.adoptBearerToken(token)

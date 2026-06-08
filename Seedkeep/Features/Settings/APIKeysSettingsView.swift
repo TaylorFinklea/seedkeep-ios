@@ -40,7 +40,7 @@ struct APIKeysSettingsView: View {
                 if let preferred = appEnv.apiKeys.preferredProvider() {
                     LabeledContent("Active") {
                         Text(preferred.displayName)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(HerbColor.sage)
                     }
                 } else {
                     LabeledContent("Active") {
@@ -78,7 +78,7 @@ struct APIKeysSettingsView: View {
             if let warning = warning.wrappedValue {
                 Text(warning)
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(HerbColor.ochre)
             }
 
             HStack {

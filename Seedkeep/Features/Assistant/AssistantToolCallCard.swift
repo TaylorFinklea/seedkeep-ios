@@ -165,7 +165,7 @@ struct ProposedChangeCard: View {
                     }
             }
             HStack(spacing: 10) {
-                Button(role: .destructive) {
+                Button(role: .cancel) {
                     onCancel()
                 } label: {
                     Text("Cancel")
@@ -173,7 +173,7 @@ struct ProposedChangeCard: View {
                 }
                 .buttonStyle(.bordered)
 
-                Button {
+                Button(role: confirmRole) {
                     onConfirm()
                 } label: {
                     Text("Confirm")
@@ -192,6 +192,12 @@ struct ProposedChangeCard: View {
 
     private var actionTitle: String {
         toolCall.toolName.split(separator: "_").joined(separator: " ")
+    }
+
+    /// `.destructive` only for delete_* tools; otherwise neutral.
+    /// Keeps Cancel as the safe `role: .cancel` next to it (see body).
+    private var confirmRole: ButtonRole? {
+        toolCall.toolName.hasPrefix("delete_") ? .destructive : nil
     }
 
     /// Renders the `description` field of the proposed_change JSON if present.

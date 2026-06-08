@@ -18,7 +18,7 @@ struct AssistantKeySettingsView: View {
             if appEnv.assistant.keyConfigured && !showingReplaceField {
                 Section {
                     Label("Anthropic key configured", systemImage: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(HerbColor.sage)
                     Button("Replace key") {
                         showingReplaceField = true
                     }
@@ -55,10 +55,10 @@ struct AssistantKeySettingsView: View {
             }
 
             if let infoMessage {
-                Section { Text(infoMessage).font(.footnote).foregroundStyle(.green) }
+                Section { Text(infoMessage).font(.footnote).foregroundStyle(HerbColor.sage) }
             }
             if let errorMessage {
-                Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) }
+                Section { Text(errorMessage).font(.footnote).foregroundStyle(HerbColor.rose) }
             }
         }
         .navigationTitle("AI Assistant")

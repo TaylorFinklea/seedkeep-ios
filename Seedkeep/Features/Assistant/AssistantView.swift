@@ -50,7 +50,7 @@ struct AssistantView: View {
                         .onDelete(perform: deleteThreads)
                     }
                     if let errorMessage {
-                        Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) }
+                        Section { Text(errorMessage).font(.footnote).foregroundStyle(HerbColor.rose) }
                             .listRowBackground(Color.clear)
                     }
                 }

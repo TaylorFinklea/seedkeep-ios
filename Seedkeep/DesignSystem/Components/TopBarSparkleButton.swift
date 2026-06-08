@@ -17,6 +17,7 @@ struct TopBarSparkleButton: View {
             Image(systemName: "sparkles")
                 .symbolRenderingMode(.hierarchical)
         }
+        .tint(HerbColor.sepia)
         .disabled(working)
         .accessibilityLabel("Ask Sprout")
     }

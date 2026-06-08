@@ -259,13 +259,13 @@ struct SeedDetailView: View {
                 }
                 .disabled(uploadingPhoto)
                 if uploadingPhoto {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.small).herbProgressStyle()
                 }
             }
             if let uploadError {
                 Text(uploadError)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(HerbColor.rose)
             }
         }
         .onChange(of: pickedPhoto) { _, item in

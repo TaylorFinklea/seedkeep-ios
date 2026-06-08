@@ -480,7 +480,7 @@ private struct FrontPromptOverlay: View {
                 if let barcode {
                     VStack(spacing: 4) {
                         HStack(spacing: 6) {
-                            Text("✓")
+                            Image(systemName: "checkmark")
                                 .font(.system(size: 14))
                                 .foregroundStyle(HerbColor.verdictNow)
                             Text("BARCODE READ")
@@ -604,7 +604,7 @@ private struct ErrorOverlay: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Text("⚠")
+            Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 32))
                 .foregroundStyle(HerbColor.ochre)
             Text("COULD NOT READ")

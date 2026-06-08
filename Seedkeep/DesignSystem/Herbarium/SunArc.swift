@@ -129,6 +129,7 @@ struct SunArc: View {
     private func timeLabel(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "h:mm"
+        f.locale = Locale(identifier: "en_US_POSIX")
         return f.string(from: date)
     }
 }

@@ -59,6 +59,7 @@ struct TodayView: View {
                 ScrollView { scrollContent }
                     .overlay(alignment: .bottomTrailing) { SproutFAB() }
             }
+            .navigationTitle("")
             .navigationDestination(for: PetDetailDestination.self) { dest in
                 PetDetailView(plantingEventID: dest.plantingEventID)
             }
@@ -257,20 +258,11 @@ struct TodayView: View {
 
     @ViewBuilder
     private func marginNoteBlock(entry: LocalJournalEntry) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                Circle()
-                    .strokeBorder(HerbColor.sepia, lineWidth: 1)
-                    .frame(width: 24, height: 24)
-                Text("♃")
-                    .font(HerbFont.smallCaps(size: 11))
-                    .foregroundStyle(HerbColor.sepia)
-            }
-            Text(entry.body.isEmpty ? "—" : entry.body)
-                .font(HerbFont.handwritten(size: 17))
-                .foregroundStyle(HerbColor.sepia)
-                .lineSpacing(2)
-        }
+        Text(entry.body.isEmpty ? "—" : entry.body)
+            .font(HerbFont.handwritten(size: 17))
+            .foregroundStyle(HerbColor.sepia)
+            .lineSpacing(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var marginEntry: LocalJournalEntry? {

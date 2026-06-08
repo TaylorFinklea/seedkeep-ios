@@ -112,10 +112,10 @@ struct BedLayoutCanvas: View {
         if p.spacingFeet > 0 {
             let diameter = max(8, p.spacingFeet * scale)
             Circle()
-                .stroke(p.isSowing ? Color.accentColor.opacity(0.5) : Color.gray.opacity(0.4),
+                .stroke(p.isSowing ? HerbColor.sepia.opacity(0.5) : Color.gray.opacity(0.4),
                         style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
                 .background(
-                    Circle().fill(p.isSowing ? Color.accentColor.opacity(0.12) : Color.gray.opacity(0.10))
+                    Circle().fill(p.isSowing ? HerbColor.sepia.opacity(0.12) : Color.gray.opacity(0.10))
                 )
                 .frame(width: diameter, height: diameter)
                 .position(x: cx, y: cy)
@@ -124,7 +124,7 @@ struct BedLayoutCanvas: View {
 
         // Dot itself — draggable when onMove is wired up.
         Circle()
-            .fill(p.isSowing ? Color.accentColor : Color.gray)
+            .fill(p.isSowing ? HerbColor.sepia : Color.gray)
             .frame(width: draggable ? 18 : 12, height: draggable ? 18 : 12)
             .shadow(color: .black.opacity(0.18), radius: draggable ? 2 : 0)
             .position(x: cx, y: cy)

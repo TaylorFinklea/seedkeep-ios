@@ -46,7 +46,7 @@ struct InviteAcceptView: View {
             confirmingView
         case .accepting:
             VStack(spacing: 12) {
-                ProgressView().controlSize(.large)
+                ProgressView().controlSize(.large).herbProgressStyle()
                 Text("Joining household…").foregroundStyle(.secondary)
             }
         case .success(let household):
@@ -93,7 +93,7 @@ struct InviteAcceptView: View {
             Image(systemName: "checkmark.seal.fill")
                 .resizable()
                 .frame(width: 56, height: 56)
-                .foregroundStyle(.green)
+                .foregroundStyle(HerbColor.sage)
             Text("Joined \(household.name)")
                 .font(.title2.weight(.semibold))
             Text("Pulling shared inventory…")
@@ -110,7 +110,7 @@ struct InviteAcceptView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .resizable()
                 .frame(width: 56, height: 56)
-                .foregroundStyle(.orange)
+                .foregroundStyle(HerbColor.ochre)
             Text("Couldn't join")
                 .font(.title2.weight(.semibold))
             Text(message)

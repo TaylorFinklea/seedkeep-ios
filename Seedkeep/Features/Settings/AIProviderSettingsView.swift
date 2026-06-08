@@ -51,7 +51,7 @@ struct AIProviderSettingsView: View {
                             Label("Refresh from server", systemImage: "arrow.clockwise")
                             if refreshing {
                                 Spacer()
-                                ProgressView().controlSize(.small)
+                                ProgressView().controlSize(.small).herbProgressStyle()
                             }
                         }
                     }
@@ -70,7 +70,7 @@ struct AIProviderSettingsView: View {
                                 .font(.footnote)
                         } icon: {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(HerbColor.ochre)
                         }
                     }
                 }

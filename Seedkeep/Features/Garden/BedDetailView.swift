@@ -92,7 +92,7 @@ struct BedDetailView: View {
                     }
                     .scrollContentBackground(.hidden)
                 }
-                .navigationTitle(bed.name)
+                .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -234,11 +234,11 @@ struct BedDetailView: View {
                             if event.completedAt == nil {
                                 Button("Done") {
                                     markCompleted(event)
-                                }.tint(.green)
+                                }.tint(HerbColor.sage)
                             } else {
                                 Button("Undo") {
                                     markIncomplete(event)
-                                }.tint(.blue)
+                                }.tint(HerbColor.sepia)
                             }
                             Button(role: .destructive) {
                                 deleteEvent(event)

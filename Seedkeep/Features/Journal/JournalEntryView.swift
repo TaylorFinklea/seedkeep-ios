@@ -119,7 +119,7 @@ struct JournalEntryView: View {
 
             if let errorMessage {
                 Section {
-                    Text(errorMessage).foregroundStyle(.red)
+                    Text(errorMessage).foregroundStyle(HerbColor.rose)
                 }
             }
         }
@@ -216,7 +216,7 @@ struct JournalEntryView: View {
                 Task { await toggle(item) }
             } label: {
                 Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(item.completed ? Color.green : Color.secondary)
+                    .foregroundStyle(item.completed ? HerbColor.sage : Color.secondary)
             }
             .buttonStyle(.plain)
             Text(item.text)
@@ -369,6 +369,7 @@ private struct JournalPhotoThumbnail: View {
                     .scaledToFill()
             } else {
                 ProgressView()
+                    .herbProgressStyle()
             }
         }
         .task {

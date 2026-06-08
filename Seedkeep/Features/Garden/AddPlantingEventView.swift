@@ -75,16 +75,16 @@ struct AddPlantingEventView: View {
             // append a caption row.  Information only — Save remains enabled
             // (a power-user planning a late succession shouldn't be blocked).
             DatePicker("Planned for", selection: $plannedFor, displayedComponents: .date)
-                .tint(outOfWindowMessage != nil ? .orange : .accentColor)
-                .foregroundStyle(outOfWindowMessage != nil ? .orange : .primary)
+                .tint(outOfWindowMessage != nil ? HerbColor.ochre : HerbColor.sepia)
+                .foregroundStyle(outOfWindowMessage != nil ? HerbColor.ochre : Color.primary)
             if let msg = outOfWindowMessage {
                 Label {
                     Text(msg)
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(HerbColor.ochre)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(HerbColor.ochre)
                         .font(.caption)
                 }
             }
@@ -267,7 +267,7 @@ struct AddPlantingEventView: View {
             Section {
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(HerbColor.rose)
             }
         }
     }

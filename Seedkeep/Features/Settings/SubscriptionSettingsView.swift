@@ -15,7 +15,7 @@ struct SubscriptionSettingsView: View {
             Section {
                 LabeledContent("Server tier") {
                     Text(appEnv.preferences.cachedTier ?? "(unknown)")
-                        .foregroundStyle(appEnv.preferences.cachedTier == "hosted" ? .green : .secondary)
+                        .foregroundStyle(appEnv.preferences.cachedTier == "hosted" ? HerbColor.sage : Color.secondary)
                 }
                 if !appEnv.subscriptions.purchasedProductIDs.isEmpty {
                     LabeledContent("Purchased") {
@@ -72,7 +72,7 @@ struct SubscriptionSettingsView: View {
             if appEnv.subscriptions.isPurchasing || appEnv.subscriptions.isVerifying {
                 Section {
                     HStack {
-                        ProgressView().controlSize(.small)
+                        ProgressView().controlSize(.small).herbProgressStyle()
                         Text(appEnv.subscriptions.isPurchasing ? "Processing purchase…" : "Verifying with server…")
                             .font(.footnote)
                     }
@@ -83,7 +83,7 @@ struct SubscriptionSettingsView: View {
                 Section {
                     Text(err)
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(HerbColor.rose)
                 }
             }
         }

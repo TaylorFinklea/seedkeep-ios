@@ -111,6 +111,7 @@ struct AssistantThreadView: View {
                         .foregroundStyle(HerbColor.sepia)
                 }
                 .disabled(isStreaming)
+                .accessibilityLabel("Attach image")
                 TextField("Ask Sprout…", text: $composerText, axis: .vertical)
                     .font(HerbFont.handwritten(size: 17))
                     .lineLimit(1...5)
@@ -128,6 +129,7 @@ struct AssistantThreadView: View {
                         .foregroundStyle(canSend ? HerbColor.sepia : HerbColor.inkFaint)
                 }
                 .disabled(!canSend)
+                .accessibilityLabel("Send message")
             }
         }
         .padding(.horizontal)
@@ -161,6 +163,7 @@ struct AssistantThreadView: View {
                     .padding(.horizontal, 4)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Remove attachment")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)

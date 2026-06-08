@@ -5,6 +5,7 @@ import SeedkeepKit
 /// sign out. Locations, tags, and household-invite flow live in Settings.
 struct YouView: View {
     @Environment(AuthController.self) private var auth
+    @State private var showSignOutConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -31,12 +32,26 @@ struct YouView: View {
                         }
                     }
                     Section {
-                        Button("Sign out", role: .destructive) {
-                            Task { await auth.signOut() }
+                        Button(role: .destructive) {
+                            showSignOutConfirm = true
+                        } label: {
+                            Text("Sign out")
                         }
                     }
                 }
                 .scrollContentBackground(.hidden)
+                .confirmationDialog(
+                    "Sign out of Seedkeep?",
+                    isPresented: $showSignOutConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Sign Out", role: .destructive) {
+                        Task { await auth.signOut() }
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("You'll need to sign in again to sync your library.")
+                }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)

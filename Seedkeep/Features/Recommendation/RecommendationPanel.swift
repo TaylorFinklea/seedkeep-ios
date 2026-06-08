@@ -68,11 +68,16 @@ struct RecommendationPanel: View {
                 .textCase(.uppercase)
             Spacer()
             if rec.source == "ai" {
-                Text("✦ AI")
-                    .font(HerbFont.smallCaps(size: 9))
-                    .tracking(1.2)
-                    .foregroundStyle(HerbColor.sepia)
-                    .textCase(.uppercase)
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 9))
+                        .foregroundStyle(HerbColor.sepia)
+                    Text("AI")
+                        .font(HerbFont.smallCaps(size: 9))
+                        .tracking(1.2)
+                        .foregroundStyle(HerbColor.sepia)
+                        .textCase(.uppercase)
+                }
             }
         }
     }
@@ -169,7 +174,7 @@ struct RecommendationPanel: View {
     private var weatherNoteRow: some View {
         if let note = refined?.weatherNote {
             HStack(alignment: .top, spacing: 8) {
-                Text("☁")
+                Image(systemName: "cloud.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(HerbColor.sepia)
                 Text(note)
@@ -213,7 +218,7 @@ struct RecommendationPanel: View {
         guard let date = f.date(from: yyyymmdd) else { return nil }
         let out = DateFormatter()
         out.dateFormat = "MMM d"
-        out.locale = .current
+        out.locale = Locale(identifier: "en_US_POSIX")
         out.timeZone = TimeZone(identifier: "UTC")
         return out.string(from: date)
     }
@@ -229,7 +234,7 @@ struct RecommendationPanel: View {
     /// is true. Callers pick which variant to display.
     static var needsLocation: some View {
         HStack(alignment: .top, spacing: 10) {
-            Text("⊘")
+            Image(systemName: "nosign")
                 .font(.system(size: 14))
                 .foregroundStyle(HerbColor.ochre)
             VStack(alignment: .leading, spacing: 4) {

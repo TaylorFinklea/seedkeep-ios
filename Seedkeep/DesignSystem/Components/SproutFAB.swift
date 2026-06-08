@@ -38,9 +38,9 @@ struct SproutFAB: View {
         } label: {
             ZStack {
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(HerbColor.sepia)
                     .frame(width: 56, height: 56)
-                    .shadow(color: Color.accentColor.opacity(0.35), radius: 12, y: 4)
+                    .shadow(color: HerbColor.sepia.opacity(0.35), radius: 12, y: 4)
                 if working {
                     ProgressView()
                         .progressViewStyle(.circular)

@@ -55,7 +55,7 @@ struct AddBedView: View {
                     Section {
                         Text(error)
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(HerbColor.rose)
                     }
                 }
             }

@@ -114,7 +114,7 @@ struct LibraryView: View {
                 .font(HerbFont.display(size: 42))
                 .foregroundStyle(HerbColor.ink)
                 .lineSpacing(0)
-            Text("\(allSeeds.count) specimens, of which \(activeCount) in the active garden")
+            Text("\(allSeeds.count) \(allSeeds.count == 1 ? "specimen" : "specimens"), of which \(activeCount) in the active garden")
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
         }
@@ -313,6 +313,8 @@ private struct SpecimenCard: View {
     let seed: LocalSeed
     let romanNumber: Int
 
+    @Environment(AppEnvironment.self) private var appEnv
+
     var body: some View {
         ZStack(alignment: .top) {
             HerbColor.vellumHi
@@ -353,9 +355,14 @@ private struct SpecimenCard: View {
                     .padding(.top, 6)
 
                 HStack(spacing: 4) {
-                    Circle()
-                        .fill(verdictColor)
-                        .frame(width: 7, height: 7)
+                    // Verdict dot — only shown when a cached recommendation
+                    // exists for this seed. Mirrors `SeedRow.verdictDotColor`.
+                    let _ = appEnv.recommendations.updateEpoch
+                    if let dotColor = verdictDotColor {
+                        Circle()
+                            .fill(dotColor)
+                            .frame(width: 7, height: 7)
+                    }
                     Text(provenance)
                         .font(HerbFont.bodyItalic(size: 10))
                         .foregroundStyle(HerbColor.inkSoft)
@@ -395,10 +402,14 @@ private struct SpecimenCard: View {
         }
     }
 
-    private var verdictColor: Color {
-        // Without the recommendation engine pulling here, use a static
-        // sage indicator. The recommendation store updates these on the
-        // detail screen.
-        HerbColor.verdictNow
+    /// Color for the verdict dot beside the provenance line. Returns nil when
+    /// the seed has no catalog link, no cached recommendation, or the verdict
+    /// is unknown/absent — in that case no dot is shown. Mirrors the wiring
+    /// in `SeedRow.verdictDotColor`.
+    private var verdictDotColor: Color? {
+        guard let catalogID = seed.catalogID,
+              let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
+        else { return nil }
+        return VerdictPalette.foregroundColor(for: verdict)
     }
 }
