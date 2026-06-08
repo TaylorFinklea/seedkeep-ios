@@ -100,6 +100,7 @@ struct JournalView: View {
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .publishesAssistantContext(pageType: "journal")
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .existing(let id):
@@ -174,6 +175,28 @@ struct JournalView: View {
             Spacer()
         }
         .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(entryRowAccessibilityLabel(entry))
+    }
+
+    /// Synthesized VoiceOver label combining the date roundel + body summary
+    /// so screen readers announce one item per row instead of fragments.
+    private func entryRowAccessibilityLabel(_ entry: LocalJournalEntry) -> String {
+        let dateString = accessibleDateString(ymd: entry.occurredOn)
+        let bodySummary = entry.body.isEmpty ? "no entry yet" : entry.body
+        return "\(dateString), \(bodySummary)"
+    }
+
+    private func accessibleDateString(ymd: String) -> String {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(secondsFromGMT: 0)
+        guard let date = parser.date(from: ymd) else { return ymd }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 
     @ViewBuilder

@@ -33,9 +33,9 @@ struct GardenView: View {
                                 .font(HerbFont.bodyItalic(size: 12))
                                 .foregroundStyle(HerbColor.inkSoft)
                         }
-                        .padding(.horizontal, 26)
+                        .padding(.horizontal, HerbSpace.titleGutter)
                         ScholarRule(verticalMargin: 12)
-                            .padding(.horizontal, 22)
+                            .padding(.horizontal, HerbSpace.gutter)
                         if FeatureFlags.plantPetsEnabled {
                             NavigationLink(value: MenagerieDestination()) {
                                 HStack {
@@ -51,7 +51,7 @@ struct GardenView: View {
                                         .font(.caption)
                                         .foregroundStyle(HerbColor.inkFaint)
                                 }
-                                .padding(.horizontal, 22)
+                                .padding(.horizontal, HerbSpace.gutter)
                                 .padding(.vertical, 10)
                             }
                             .buttonStyle(.plain)
@@ -67,8 +67,8 @@ struct GardenView: View {
                                     .buttonStyle(.plain)
                                 }
                             }
-                            .padding(.horizontal, 22)
-                            .padding(.bottom, 96)
+                            .padding(.horizontal, HerbSpace.gutter)
+                            .padding(.bottom, HerbSpace.fabClearance)
                         }
                     }
                 }

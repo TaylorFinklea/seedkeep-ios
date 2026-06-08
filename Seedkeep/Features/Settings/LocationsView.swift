@@ -98,7 +98,7 @@ struct LocationsView: View {
             )
             Task { try? await appEnv.sync.flushPending() }
         } catch {
-            // Errors surface in SyncEngine.lastError.
+            appEnv.surfaceError(error)
         }
     }
 

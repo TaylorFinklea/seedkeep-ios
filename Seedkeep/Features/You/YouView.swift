@@ -55,6 +55,7 @@ struct YouView: View {
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .publishesAssistantContext(pageType: "you")
         }
     }
 
@@ -71,6 +72,15 @@ struct YouView: View {
                 .foregroundStyle(HerbColor.inkSoft)
             ScholarRule(verticalMargin: 8)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(headingAccessibilityLabel)
+    }
+
+    private var headingAccessibilityLabel: String {
+        if case .signedIn(_, let household) = auth.state {
+            return "House of \(household.name). \(subtitle)"
+        }
+        return "House. \(subtitle)"
     }
 
     private var subtitle: String {

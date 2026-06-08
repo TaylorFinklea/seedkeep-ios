@@ -29,7 +29,7 @@ struct SproutAssistantSheetView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { appEnv.assistant.dismissSheet() }
                 }
             }

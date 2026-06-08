@@ -33,6 +33,17 @@ public final class AppEnvironment {
     /// selection. nil means leave whatever's current.
     public var requestedTab: AppTab?
 
+    /// User-facing error banner string. Set via `surfaceError` from call
+    /// sites that previously swallowed `try?`, or mirrored from
+    /// `sync.lastError` after a sync completes. `nil` hides the banner.
+    public var bannerError: String?
+
+    /// Debounce state — the last string we surfaced + when. Repeated
+    /// identical errors within 5 seconds are dropped so retry loops in
+    /// `SyncEngine` don't strobe the banner.
+    @ObservationIgnored private var lastBannerString: String?
+    @ObservationIgnored private var lastBannerTime: Date?
+
     public enum AppTab: Hashable {
         case today, library, garden, journal, random, assistant, settings, you
     }
@@ -119,6 +130,33 @@ public final class AppEnvironment {
         Task { await weatherWarnings.start() }
     }
 
+    /// Surfaces an error to the user via `bannerError`. Replaces silent
+    /// `try?` swallows at call sites where the user needs to know
+    /// something went wrong (sync enqueue failures, assistant launch, etc).
+    public func surfaceError(_ error: Error) {
+        presentBanner(humanizeError(error))
+    }
+
+    /// Hides the banner. Wired to the banner's dismiss action and the
+    /// auto-dismiss timer in `MainTabView`.
+    public func dismissBannerError() {
+        bannerError = nil
+    }
+
+    /// Pushes `message` into `bannerError`, applying a 5-second same-string
+    /// debounce. Used by `surfaceError` and the post-sync mirror.
+    private func presentBanner(_ message: String) {
+        let now = Date()
+        if let last = lastBannerString, last == message,
+           let lastTime = lastBannerTime,
+           now.timeIntervalSince(lastTime) < 5 {
+            return
+        }
+        lastBannerString = message
+        lastBannerTime = now
+        bannerError = message
+    }
+
     /// Triggers a sync if the user is signed in. Safe to call repeatedly —
     /// `SyncEngine` debounces concurrent calls with `isSyncing`.
     ///
@@ -133,6 +171,14 @@ public final class AppEnvironment {
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
             await sync.syncAll(householdID: household.id)
+            // Mirror SyncEngine.lastError into the user-facing banner.
+            // SyncEngine isn't @Observable, so SwiftUI can't react to it
+            // directly — we surface here instead, on the boundary that
+            // every sync flows through. Debounce inside presentBanner
+            // keeps repeated identical errors from strobing the UI.
+            if let syncError = sync.lastError {
+                presentBanner(syncError)
+            }
             let transitions = PetStateEngine.tickAll(
                 householdID: household.id,
                 container: container

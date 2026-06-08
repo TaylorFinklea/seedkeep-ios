@@ -31,15 +31,15 @@ struct LibraryView: View {
                         FolioStrip(section: "Hortulus", folio: max(activeCount, 1))
 
                         headingBlock
-                            .padding(.horizontal, 26)
+                            .padding(.horizontal, HerbSpace.titleGutter)
                             .padding(.top, 2)
 
                         lifecycleStrip
-                            .padding(.horizontal, 26)
+                            .padding(.horizontal, HerbSpace.titleGutter)
                             .padding(.top, 12)
 
                         ScholarRule(verticalMargin: 4)
-                            .padding(.horizontal, 22)
+                            .padding(.horizontal, HerbSpace.gutter)
 
                         SpecimenGrid(
                             state: selectedState,
@@ -160,6 +160,8 @@ struct LibraryView: View {
                     .fill(active ? HerbColor.rose : Color.clear)
                     .frame(height: 1)
             }
+            .contentShape(Rectangle())
+            .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
     }
@@ -401,6 +403,23 @@ private struct SpecimenCard: View {
                 .offset(x: 56, y: -4)
         }
         .frame(minHeight: 210)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityDescription)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// Synthesized VoiceOver label combining the rendered fragments
+    /// (display name, scientific name / type, provenance) into one item.
+    private var accessibilityDescription: String {
+        var parts: [String] = [displayName]
+        let type = (seed.customType ?? "").trimmingCharacters(in: .whitespaces)
+        if !type.isEmpty {
+            parts.append(type)
+        }
+        if provenance != "—" {
+            parts.append(provenance)
+        }
+        return parts.joined(separator: ", ")
     }
 
     private var displayName: String {

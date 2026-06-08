@@ -65,6 +65,7 @@ struct TodayView: View {
                     .overlay(alignment: .bottomTrailing) { SproutFAB() }
             }
             .navigationTitle("")
+            .publishesAssistantContext(pageType: "today")
             .navigationDestination(for: PetDetailDestination.self) { dest in
                 PetDetailView(plantingEventID: dest.plantingEventID)
             }
@@ -87,27 +88,27 @@ struct TodayView: View {
             FolioStrip(section: "Diurnalis", folio: folioNumber)
 
             headingBlock
-                .padding(.horizontal, 26)
+                .padding(.horizontal, HerbSpace.titleGutter)
                 .padding(.top, 4)
 
             ScholarRule(verticalMargin: 12)
-                .padding(.horizontal, 22)
+                .padding(.horizontal, HerbSpace.gutter)
 
             sunArcBlock
-                .padding(.horizontal, 26)
+                .padding(.horizontal, HerbSpace.titleGutter)
                 .padding(.bottom, 4)
 
             gardenRollCallBlock
-                .padding(.horizontal, 22)
+                .padding(.horizontal, HerbSpace.gutter)
                 .padding(.top, 16)
 
             sowingsBlock
-                .padding(.horizontal, 22)
+                .padding(.horizontal, HerbSpace.gutter)
                 .padding(.top, 16)
 
             if let marginEntry {
                 marginNoteBlock(entry: marginEntry)
-                    .padding(.horizontal, 26)
+                    .padding(.horizontal, HerbSpace.titleGutter)
                     .padding(.top, 16)
             }
 
@@ -347,6 +348,8 @@ private struct SowingRow: View {
                 .fill(HerbColor.inkFaint)
                 .frame(height: 0.5)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(displayName), \(daysLabel)")
     }
 
     private var displayName: String {

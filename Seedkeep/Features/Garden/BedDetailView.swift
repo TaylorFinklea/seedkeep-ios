@@ -168,10 +168,15 @@ struct BedDetailView: View {
     }
 
     private func movePlacement(eventID: String, x: Double, y: Double) {
-        try? appEnv.sync.enqueueUpdatePlantingEvent(
-            id: eventID,
-            SeedkeepClient.UpdatePlantingEventInput(x_feet: x, y_feet: y)
-        )
+        do {
+            try appEnv.sync.enqueueUpdatePlantingEvent(
+                id: eventID,
+                SeedkeepClient.UpdatePlantingEventInput(x_feet: x, y_feet: y)
+            )
+        } catch {
+            appEnv.surfaceError(error)
+            return
+        }
         Task { await appEnv.syncIfPossible() }
     }
 
@@ -326,28 +331,48 @@ struct BedDetailView: View {
 
     private func markCompleted(_ event: LocalPlantingEvent) {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
-        try? appEnv.sync.enqueueUpdatePlantingEvent(
-            id: event.id,
-            SeedkeepClient.UpdatePlantingEventInput(completed_at: now)
-        )
+        do {
+            try appEnv.sync.enqueueUpdatePlantingEvent(
+                id: event.id,
+                SeedkeepClient.UpdatePlantingEventInput(completed_at: now)
+            )
+        } catch {
+            appEnv.surfaceError(error)
+            return
+        }
         Task { await appEnv.syncIfPossible() }
     }
 
     private func markIncomplete(_ event: LocalPlantingEvent) {
-        try? appEnv.sync.enqueueUpdatePlantingEvent(
-            id: event.id,
-            SeedkeepClient.UpdatePlantingEventInput(completed_at: 0)
-        )
+        do {
+            try appEnv.sync.enqueueUpdatePlantingEvent(
+                id: event.id,
+                SeedkeepClient.UpdatePlantingEventInput(completed_at: 0)
+            )
+        } catch {
+            appEnv.surfaceError(error)
+            return
+        }
         Task { await appEnv.syncIfPossible() }
     }
 
     private func deleteEvent(_ event: LocalPlantingEvent) {
-        try? appEnv.sync.enqueueDeletePlantingEvent(id: event.id)
+        do {
+            try appEnv.sync.enqueueDeletePlantingEvent(id: event.id)
+        } catch {
+            appEnv.surfaceError(error)
+            return
+        }
         Task { await appEnv.syncIfPossible() }
     }
 
     private func deleteBed() async {
-        try? appEnv.sync.enqueueDeleteBed(id: bedID)
+        do {
+            try appEnv.sync.enqueueDeleteBed(id: bedID)
+        } catch {
+            appEnv.surfaceError(error)
+            return
+        }
         await appEnv.syncIfPossible()
         dismiss()
     }

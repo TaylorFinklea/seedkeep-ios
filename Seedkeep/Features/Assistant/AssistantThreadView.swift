@@ -83,7 +83,7 @@ struct AssistantThreadView: View {
                 composer
             }
         }
-        .navigationTitle("Sprout")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             appEnv.assistant.openThread(threadID)
@@ -127,6 +127,8 @@ struct AssistantThreadView: View {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 28))
                         .foregroundStyle(canSend ? HerbColor.sepia : HerbColor.inkFaint)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .disabled(!canSend)
                 .accessibilityLabel("Send message")

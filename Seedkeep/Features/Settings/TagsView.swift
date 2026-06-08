@@ -98,7 +98,9 @@ struct TagsView: View {
                 householdID: household.id
             )
             Task { try? await appEnv.sync.flushPending() }
-        } catch {}
+        } catch {
+            appEnv.surfaceError(error)
+        }
     }
 
     private func saveRename() {
@@ -107,7 +109,9 @@ struct TagsView: View {
         do {
             try appEnv.sync.enqueueUpdateTag(id: id, name: trimmed, color: nil)
             Task { try? await appEnv.sync.flushPending() }
-        } catch {}
+        } catch {
+            appEnv.surfaceError(error)
+        }
         renamingID = nil
     }
 

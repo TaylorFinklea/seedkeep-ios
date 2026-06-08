@@ -71,7 +71,7 @@ struct SproutFAB: View {
         do {
             try await appEnv.assistant.presentSheet()
         } catch {
-            // Silent — user can still tap the Sprout tab manually.
+            appEnv.surfaceError(error)
         }
     }
 }

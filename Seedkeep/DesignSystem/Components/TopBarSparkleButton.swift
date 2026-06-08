@@ -34,9 +34,7 @@ struct TopBarSparkleButton: View {
             _ = try await appEnv.assistant.launchFromSparkle()
             appEnv.requestedTab = .assistant
         } catch {
-            // Silent fail — user can still tap the Assistant tab and try.
-            // We don't surface an error overlay here because the button is
-            // typically in a crowded toolbar.
+            appEnv.surfaceError(error)
         }
     }
 }
