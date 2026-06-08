@@ -96,6 +96,8 @@ struct HomeLocationSettingsView: View {
             appEnv.preferences.cachedLatitude = location.latitude
             appEnv.preferences.cachedLongitude = location.longitude
             appEnv.recommendations.needsHomeLocation = false
+            // Phase 4C — coord generation bump + cache clear + refresh.
+            await appEnv.weatherWarnings.invalidateLocation()
             saveState = .success(location)
         } catch let err as SeedkeepError {
             switch err.code {

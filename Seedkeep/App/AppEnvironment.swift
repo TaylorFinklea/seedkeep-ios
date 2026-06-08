@@ -24,6 +24,9 @@ public final class AppEnvironment {
     public let preferences: AppPreferences
     public let apiKeys: APIKeyStore
     public let subscriptions: SubscriptionManager
+    /// Phase 4C — orchestrator for frost / heat / water weather warnings.
+    /// Replaces the old `NotificationsCenter.refreshFrostWarnings` path.
+    let weatherWarnings: WeatherWarningsService
 
     /// Lets feature views request a tab switch (e.g. TopBarSparkleButton →
     /// Assistant). MainTabView observes this and binds it to the TabView's
@@ -49,12 +52,40 @@ public final class AppEnvironment {
         let assistant = AIAssistantCoordinator(client: client, container: container)
         assistant.wireSync(sync)
         let subscriptions = SubscriptionManager(client: client)
+        // Phase 4C — weather warnings service. Replaces the legacy
+        // `NotificationsCenter.refreshFrostWarnings` path with the
+        // actor-orchestrated frost/heat/water flow. Providers are
+        // wired here so tests can swap them out via a separate init.
+        let weatherWarnings = WeatherWarningsService(
+            container: container,
+            provider: WeatherKitProvider(container: container),
+            scheduler: SystemNotificationScheduler(),
+            planting: SwiftDataPlantingEventQuery(container: container),
+            wateringState: SystemWateringStateClient(client: client),
+            clock: SystemClock(),
+            thresholds: .kc,
+            householdIDProvider: { @MainActor [weak auth] in
+                guard case .signedIn(_, let household) = auth?.state else { return nil }
+                return household.id
+            },
+            preferencesProvider: { @MainActor [weak prefs] in
+                (lat: prefs?.cachedLatitude, lon: prefs?.cachedLongitude)
+            },
+            togglesProvider: { @MainActor in
+                (
+                    frost: UserDefaults.standard.bool(forKey: "seedkeep.notif.frost"),
+                    heat: UserDefaults.standard.bool(forKey: "seedkeep.notif.heat"),
+                    water: UserDefaults.standard.bool(forKey: "seedkeep.notif.water")
+                )
+            }
+        )
         return AppEnvironment(
             client: client, auth: auth, container: container,
             sync: sync, recommendations: recommendations,
             journal: journal, assistant: assistant,
             preferences: prefs, apiKeys: apiKeys,
-            subscriptions: subscriptions
+            subscriptions: subscriptions,
+            weatherWarnings: weatherWarnings
         )
     }
 
@@ -68,7 +99,8 @@ public final class AppEnvironment {
         assistant: AIAssistantCoordinator,
         preferences: AppPreferences,
         apiKeys: APIKeyStore,
-        subscriptions: SubscriptionManager
+        subscriptions: SubscriptionManager,
+        weatherWarnings: WeatherWarningsService
     ) {
         self.client = client
         self.auth = auth
@@ -80,6 +112,11 @@ public final class AppEnvironment {
         self.preferences = preferences
         self.apiKeys = apiKeys
         self.subscriptions = subscriptions
+        self.weatherWarnings = weatherWarnings
+        // Phase 4C — wire `NotificationCenter.default` observers
+        // (active-plantings debounce + system-timezone-change). The
+        // service is idempotent so a second start() is a no-op.
+        Task { await weatherWarnings.start() }
     }
 
     /// Triggers a sync if the user is signed in. Safe to call repeatedly —
@@ -110,6 +147,10 @@ public final class AppEnvironment {
             // date when re-scheduling with the same identifier + same
             // DateComponents shape, so this is cheap to call every sync.
             await rescheduleWeeklyPetRoundup()
+            // Phase 4C: refresh weather warnings if stale. Honors the
+            // 2h staleness gate when called with `.foreground` so a
+            // tab-back-in doesn't burn a WeatherKit fetch.
+            _ = await weatherWarnings.refreshAllIfStale(reason: .foreground)
         }
     }
 

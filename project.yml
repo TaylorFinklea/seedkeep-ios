@@ -118,6 +118,8 @@ targets:
         com.apple.developer.associated-domains:
           - "applinks:seedkeep.app"
         com.apple.developer.weatherkit: true
+        # Phase 4C — frost/heat/water warnings fire during DND windows.
+        com.apple.developer.usernotifications.time-sensitive: true
 
   SeedkeepTests:
     type: bundle.unit-test

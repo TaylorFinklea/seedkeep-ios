@@ -74,6 +74,80 @@ public actor SeedkeepClient {
         try await postJSON(path: "/api/invites/\(code)/accept", body: EmptyBody())
     }
 
+    // MARK: - Watering state (Phase 4C)
+
+    /// Household-scoped last-watering-notification timestamp. The server
+    /// stores this as `households.last_watering_notification_at` (TIMESTAMPTZ
+    /// nullable); the wire shape is an ISO-8601 string OR JSON null. The
+    /// custom Codable conformance below handles both directions so the
+    /// rest of the client can deal in `Date?`.
+    ///
+    /// Spec: §7 (server piece) and §3 (SeedkeepKit additions). Phase 4C
+    /// is the only consumer in v1 — watering-reminder dedup across the
+    /// household's devices.
+    public struct WateringStateDTO: Codable, Sendable, Equatable {
+        public let lastWateringNotificationAt: Date?
+
+        public init(lastWateringNotificationAt: Date?) {
+            self.lastWateringNotificationAt = lastWateringNotificationAt
+        }
+
+        public enum CodingKeys: String, CodingKey {
+            case lastWateringNotificationAt = "last_watering_notification_at"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            if let s = try c.decodeIfPresent(String.self, forKey: .lastWateringNotificationAt) {
+                let f = ISO8601DateFormatter()
+                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = f.date(from: s) {
+                    self.lastWateringNotificationAt = date
+                } else {
+                    // Server sometimes omits fractional seconds. Retry without.
+                    let fallback = ISO8601DateFormatter()
+                    fallback.formatOptions = [.withInternetDateTime]
+                    self.lastWateringNotificationAt = fallback.date(from: s)
+                }
+            } else {
+                self.lastWateringNotificationAt = nil
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            if let date = lastWateringNotificationAt {
+                let f = ISO8601DateFormatter()
+                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                try c.encode(f.string(from: date), forKey: .lastWateringNotificationAt)
+            } else {
+                try c.encodeNil(forKey: .lastWateringNotificationAt)
+            }
+        }
+    }
+
+    /// `GET /api/households/:id/watering-state` — returns the household's
+    /// last-watering-notification timestamp (or null if the household has
+    /// never scheduled one).
+    public func getWateringState(householdID: String) async throws -> WateringStateDTO {
+        try await getJSON(path: "/api/households/\(householdID)/watering-state")
+    }
+
+    /// `POST /api/households/:id/watering-state` — records a scheduled
+    /// watering notification. The server takes `max(existing, scheduled_for)`
+    /// so retries and out-of-order POSTs are idempotent and monotonic.
+    public func putWateringState(householdID: String, scheduledFor: Date) async throws -> WateringStateDTO {
+        struct Body: Encodable {
+            let scheduled_for: String
+        }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return try await postJSON(
+            path: "/api/households/\(householdID)/watering-state",
+            body: Body(scheduled_for: f.string(from: scheduledFor))
+        )
+    }
+
     // MARK: - Locations
 
     public func locations(since: Int64 = 0, limit: Int? = nil) async throws -> DeltaPage<LocationDTO> {

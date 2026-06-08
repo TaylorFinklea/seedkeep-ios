@@ -708,6 +708,8 @@ public final class SyncEngine {
         // when the user has notifications off; permission check happens
         // inside the call.
         scheduleEventReminder(local)
+        // Phase 4C — let WeatherWarningsService refresh its 0/active gate.
+        NotificationCenter.default.post(name: .weatherWarningsActivePlantingsChanged, object: nil)
         return local
     }
 
@@ -744,6 +746,9 @@ public final class SyncEngine {
                 scheduleEventReminder(local)
             }
         }
+        // Phase 4C — let WeatherWarningsService re-evaluate (an update
+        // may have toggled completedAt, changing the active count).
+        NotificationCenter.default.post(name: .weatherWarningsActivePlantingsChanged, object: nil)
     }
 
     public func enqueueDeletePlantingEvent(id: String) throws {
@@ -766,6 +771,9 @@ public final class SyncEngine {
             NotificationsCenter.shared.cancelPlantingEventReminder(eventID: id)
             NotificationsCenter.shared.cancelAllPetNotifications(eventID: id)
         }
+        // Phase 4C — let WeatherWarningsService re-evaluate (a delete
+        // may drop the active count to 0).
+        NotificationCenter.default.post(name: .weatherWarningsActivePlantingsChanged, object: nil)
     }
 
     // MARK: - SwiftData helpers

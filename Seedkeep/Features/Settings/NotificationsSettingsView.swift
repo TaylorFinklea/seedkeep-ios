@@ -1,13 +1,20 @@
 import SwiftUI
 import UserNotifications
 
-/// Phase 4 C · Settings → Notifications. Two toggles wired to local
-/// scheduling: frost warnings (10-day WeatherKit forecast) and
-/// planting-event reminders (scheduled at event-create time).
+/// Phase 4C · Settings → Notifications. Frost / heat / watering toggles
+/// driven by `WeatherWarningsService`, plus the existing planting-event
+/// + plant-pet toggles. Weather status renders from the actor's
+/// `@Observable Projection.lastRefreshOutcome` — 13 outcome branches
+/// per spec §8.
 struct NotificationsSettingsView: View {
     @Environment(AppEnvironment.self) private var appEnv
+    @Environment(\.openURL) private var openURL
 
+    // Phase 4C — three weather toggles. `frost` key preserved.
     @AppStorage("seedkeep.notif.frost") private var frostEnabled: Bool = false
+    @AppStorage("seedkeep.notif.heat") private var heatEnabled: Bool = false
+    @AppStorage("seedkeep.notif.water") private var waterEnabled: Bool = false
+
     @AppStorage("seedkeep.notif.events") private var eventsEnabled: Bool = false
     // Phase 5.1.4 — plant pets. All default-off per spec line 1250.
     @AppStorage("seedkeep.notif.pet.wilted") private var petWiltedEnabled: Bool = false
@@ -15,9 +22,11 @@ struct NotificationsSettingsView: View {
     @AppStorage("seedkeep.notif.pet.roundup") private var petRoundupEnabled: Bool = false
 
     @State private var authStatus: UNAuthorizationStatus = .notDetermined
-    @State private var hasFrostScheduled: Bool = false
     @State private var refreshing: Bool = false
-    @State private var refreshError: String?
+
+    private var weatherWatchVisible: Bool {
+        frostEnabled || heatEnabled || waterEnabled
+    }
 
     var body: some View {
         ZStack {
@@ -40,7 +49,29 @@ struct NotificationsSettingsView: View {
                         }
                     }
                     .onChange(of: frostEnabled) { _, newValue in
-                        Task { await applyFrost(enabled: newValue) }
+                        Task { await applyWeather(kind: .frost, enabled: newValue) }
+                    }
+                    Toggle(isOn: $heatEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Heat warnings", systemImage: "thermometer.sun")
+                            Text("7pm the evening before a heat-index ≥ 100°F day or a 4+ day heatwave")
+                                .font(HerbFont.bodyItalic(size: 11))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    .onChange(of: heatEnabled) { _, newValue in
+                        Task { await applyWeather(kind: .heat, enabled: newValue) }
+                    }
+                    Toggle(isOn: $waterEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Watering reminders", systemImage: "drop")
+                            Text("8am after 5 dry days with no soaking rain in the 3-day forecast")
+                                .font(HerbFont.bodyItalic(size: 11))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    .onChange(of: waterEnabled) { _, newValue in
+                        Task { await applyWeather(kind: .water, enabled: newValue) }
                     }
                     Toggle(isOn: $eventsEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -101,22 +132,17 @@ struct NotificationsSettingsView: View {
                     }
                 }
 
-                if frostEnabled {
+                if weatherWatchVisible {
                     Section {
-                        if hasFrostScheduled {
-                            HStack(spacing: 8) {
-                                Text("✓").foregroundStyle(HerbColor.verdictNow)
-                                Text("Watching the forecast")
-                                    .font(HerbFont.bodyItalic(size: 13))
-                                    .foregroundStyle(HerbColor.ink)
-                            }
-                        } else {
-                            Text("No frost in the next 10 days.")
-                                .font(HerbFont.bodyItalic(size: 13))
-                                .foregroundStyle(HerbColor.inkSoft)
-                        }
+                        WarningStatusSection(
+                            outcome: appEnv.weatherWarnings.projection.lastRefreshOutcome,
+                            frostEnabled: frostEnabled,
+                            heatEnabled: heatEnabled,
+                            waterEnabled: waterEnabled,
+                            openURL: openURL
+                        )
                         Button {
-                            Task { await refresh() }
+                            Task { await manualRefresh() }
                         } label: {
                             HStack(spacing: 6) {
                                 if refreshing {
@@ -132,13 +158,22 @@ struct NotificationsSettingsView: View {
                             }
                         }
                         .disabled(refreshing)
-                        if let refreshError {
-                            Text(refreshError)
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.rose)
-                        }
                     } header: {
-                        Rubric(text: "frost watch")
+                        Rubric(text: "weather watch")
+                    } footer: {
+                        // Apple WeatherKit attribution — App Store
+                        // review requirement (spec §8).
+                        Button {
+                            if let url = URL(string: "https://weatherkit.apple.com/legal-attribution.html") {
+                                openURL(url)
+                            }
+                        } label: {
+                            Text("Weather")
+                                .font(HerbFont.bodyItalic(size: 11))
+                                .foregroundStyle(HerbColor.inkSoft)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -148,7 +183,6 @@ struct NotificationsSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             authStatus = await NotificationsCenter.shared.authorizationStatus()
-            hasFrostScheduled = await NotificationsCenter.shared.hasScheduledFrostWarnings()
         }
     }
 
@@ -176,12 +210,14 @@ struct NotificationsSettingsView: View {
         }
     }
 
-    private func applyFrost(enabled: Bool) async {
+    // MARK: - Toggle handlers
+
+    private func applyWeather(kind: WarningKind, enabled: Bool) async {
         if enabled {
-            await refresh()
+            _ = await NotificationsCenter.shared.requestAuthorization()
+            _ = await appEnv.weatherWarnings.refreshAll(reason: .toggleEnable(kind))
         } else {
-            await NotificationsCenter.shared.clearFrostWarnings()
-            hasFrostScheduled = false
+            await appEnv.weatherWarnings.clearKind(kind)
         }
         authStatus = await NotificationsCenter.shared.authorizationStatus()
     }
@@ -236,16 +272,165 @@ struct NotificationsSettingsView: View {
         authStatus = await NotificationsCenter.shared.authorizationStatus()
     }
 
-    private func refresh() async {
-        guard let lat = appEnv.preferences.cachedLatitude,
-              let lon = appEnv.preferences.cachedLongitude else {
-            refreshError = "Set a home location first (Settings → Home location)."
-            return
-        }
+    private func manualRefresh() async {
         refreshing = true
-        refreshError = nil
         defer { refreshing = false }
-        await NotificationsCenter.shared.refreshFrostWarnings(latitude: lat, longitude: lon)
-        hasFrostScheduled = await NotificationsCenter.shared.hasScheduledFrostWarnings()
+        _ = await appEnv.weatherWarnings.refreshAll(reason: .manualRefresh)
+    }
+}
+
+// MARK: - Status section
+
+/// Renders one row per refresh-outcome case per spec §8. The view is
+/// driven by `appEnv.weatherWarnings.projection.lastRefreshOutcome`,
+/// which is `@Observable` so Settings reacts to every refresh.
+private struct WarningStatusSection: View {
+    let outcome: RefreshOutcome
+    let frostEnabled: Bool
+    let heatEnabled: Bool
+    let waterEnabled: Bool
+    let openURL: OpenURLAction
+
+    var body: some View {
+        switch outcome {
+        case .success(let scheduledByKind, _):
+            perKindRows(scheduledByKind: scheduledByKind)
+        case .successNoWarnings(let perKindEmpty):
+            perKindEmptyRows(perKindEmpty: perKindEmpty)
+        case .missingLocation:
+            errorRow(text: "Set a home location first (Settings → Home location).")
+        case .noActivePlantings:
+            mutedRow(text: "Nothing planted to watch over.")
+        case .permissionDenied(let url):
+            tappableRow(
+                text: "Notifications are off for Seedkeep in iOS Settings.",
+                color: HerbColor.rose,
+                deepLink: url
+            )
+        case .provisionalDelivery:
+            tappableRow(
+                text: "Notifications deliver quietly — tap to allow alerts.",
+                color: HerbColor.ochre,
+                deepLink: nil
+            )
+        case .partialData(let validDays, _, let waterSuppressed):
+            VStack(alignment: .leading, spacing: 4) {
+                errorRow(text: partialDataMessage(validDays: validDays, waterSuppressed: waterSuppressed))
+                if waterSuppressed {
+                    mutedRow(text: "Water reminder collects 3 days of rain history before firing.")
+                }
+            }
+        case .clockSkew:
+            errorRow(text: "Device clock changed — rebuilding warnings.")
+        case .weatherKitUnauthorized:
+            errorRow(text: "Weather service unavailable for this build. Contact support.")
+        case .weatherKitFailedUsingStale(let age):
+            let hours = max(1, Int(age / 3600))
+            errorRow(text: "Using a forecast from \(hours)h ago — couldn't reach WeatherKit just now.")
+        case .weatherKitFailed:
+            errorRow(text: "Couldn't reach the forecast. Tap refresh to try again.")
+        case .allSchedulingFailed:
+            errorRow(text: "Couldn't schedule warnings (system busy). Tap refresh to retry.")
+        case .queueBudgetReachedWithDropped(let scheduledByKind, let dropped):
+            VStack(alignment: .leading, spacing: 4) {
+                perKindRows(scheduledByKind: scheduledByKind)
+                mutedRow(text: "Watching the nearest warnings; \(dropped) further-out ones will schedule as nearer ones fire.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func perKindRows(scheduledByKind: [WarningKind: Int]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if frostEnabled {
+                let count = scheduledByKind[.frost] ?? 0
+                if count > 0 {
+                    watchingRow(text: "Watching the forecast")
+                } else {
+                    mutedRow(text: "No frost in the next 10 days.")
+                }
+            }
+            if heatEnabled {
+                let count = scheduledByKind[.heat] ?? 0
+                if count > 0 {
+                    watchingRow(text: "Watching for heat")
+                } else {
+                    mutedRow(text: "Nothing dangerous in sight.")
+                }
+            }
+            if waterEnabled {
+                let count = scheduledByKind[.water] ?? 0
+                if count > 0 {
+                    watchingRow(text: "Watching for dry stretches")
+                } else {
+                    mutedRow(text: "No dry stretch in sight.")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func perKindEmptyRows(perKindEmpty: [WarningKind: Bool]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if frostEnabled {
+                mutedRow(text: "No frost in the next 10 days.")
+            }
+            if heatEnabled {
+                mutedRow(text: "Nothing dangerous in sight.")
+            }
+            if waterEnabled {
+                mutedRow(text: "No dry stretch in sight.")
+            }
+            // Suppress unused-parameter warning while keeping the
+            // dict in the API surface for future per-kind detail.
+            let _ = perKindEmpty
+        }
+    }
+
+    @ViewBuilder
+    private func watchingRow(text: String) -> some View {
+        HStack(spacing: 8) {
+            Text("✓").foregroundStyle(HerbColor.verdictNow)
+            Text(text)
+                .font(HerbFont.bodyItalic(size: 13))
+                .foregroundStyle(HerbColor.ink)
+        }
+    }
+
+    @ViewBuilder
+    private func mutedRow(text: String) -> some View {
+        Text(text)
+            .font(HerbFont.bodyItalic(size: 11))
+            .foregroundStyle(HerbColor.inkSoft)
+    }
+
+    @ViewBuilder
+    private func errorRow(text: String) -> some View {
+        Text(text)
+            .font(HerbFont.bodyItalic(size: 11))
+            .foregroundStyle(HerbColor.rose)
+    }
+
+    @ViewBuilder
+    private func tappableRow(text: String, color: Color, deepLink: URL?) -> some View {
+        Button {
+            if let deepLink {
+                openURL(deepLink)
+            }
+        } label: {
+            Text(text)
+                .font(HerbFont.bodyItalic(size: 11))
+                .foregroundStyle(color)
+                .underline(deepLink != nil)
+        }
+        .buttonStyle(.plain)
+        .disabled(deepLink == nil)
+    }
+
+    private func partialDataMessage(validDays: Int, waterSuppressed: Bool) -> String {
+        let base = "Forecast was incomplete (\(validDays) days)."
+        return waterSuppressed
+            ? base + " Water reminder needs 3+ days — waiting for next refresh."
+            : base
     }
 }

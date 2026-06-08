@@ -1,19 +1,16 @@
 import Foundation
 import UserNotifications
-import WeatherKit
-import CoreLocation
 
-/// Phase 4 C · Local notification scheduling. Two surfaces:
+/// Phase 4 C · Local notification scheduling. Frost warnings live in the
+/// `WeatherWarningsService` actor (Phase 4C native-warnings refactor);
+/// this center now owns:
 ///
-/// 1. **Frost warnings** — fetched from WeatherKit (10-day forecast) when
-///    the user toggles them on. For every day in the next 10 with a low
-///    below `frostThresholdF` (33°F default), schedule a notification
-///    for 8am the morning *before*. Existing scheduled frost
-///    notifications are cleared on each refresh.
-///
-/// 2. **Planting-event reminders** — scheduled when an event is created
+/// 1. **Planting-event reminders** — scheduled when an event is created
 ///    or updated. Notification fires at 7am local time on the planned
 ///    date. Cancelled when the event is completed or deleted.
+///
+/// 2. **Plant-pet notifications** — wilted / departed / Sunday-roundup
+///    (Phase 5.1.4).
 ///
 /// All scheduling happens locally — no server push, no APNS provisioning
 /// required. The user must grant permission once (`requestAuthorization`).
@@ -24,16 +21,14 @@ final class NotificationsCenter {
 
     /// Centralized identifier prefixes so we can clear-by-prefix.
     enum IdPrefix {
-        static let frost = "seedkeep.notif.frost."
         static let event = "seedkeep.notif.event."
-        // Phase 5 — plant pets. Singular `pet` matches `event` + `frost`.
+        // Phase 5 — plant pets. Singular `pet` matches `event` prefix.
         static let petWilted = "seedkeep.notif.pet.wilted."
         static let petDeparted = "seedkeep.notif.pet.departed."
         static let petRoundup = "seedkeep.notif.pet.roundup"
     }
 
     private let center = UNUserNotificationCenter.current()
-    private let frostThresholdF: Double = 33.0
 
     // MARK: - Permission
 
@@ -51,56 +46,6 @@ final class NotificationsCenter {
     /// Settings" guidance when the user has previously denied.
     func authorizationStatus() async -> UNAuthorizationStatus {
         await center.notificationSettings().authorizationStatus
-    }
-
-    // MARK: - Frost warnings
-
-    /// Refresh frost-warning notifications. Clears existing frost
-    /// notifications, then schedules new ones for every forecast day with
-    /// a low below the threshold (default 33°F) in the next 10 days.
-    /// Silent on WeatherKit / permission failures.
-    func refreshFrostWarnings(latitude: Double, longitude: Double) async {
-        await clearFrostWarnings()
-        guard await ensureGranted() else { return }
-        let forecast: [DailyFrostForecast]
-        do {
-            forecast = try await Self.fetchForecast(latitude: latitude, longitude: longitude)
-        } catch {
-            return
-        }
-        let cal = Calendar(identifier: .gregorian)
-        for day in forecast {
-            guard day.lowF < frostThresholdF else { continue }
-            // Notify at 8am the morning *before* the frost day.
-            guard let warnDate = cal.date(byAdding: .hour, value: 8,
-                                          to: cal.startOfDay(for: day.date.addingTimeInterval(-86400))),
-                  warnDate > Date() else { continue }
-            let id = IdPrefix.frost + isoDay(day.date)
-            schedule(
-                id: id,
-                title: "Frost warning",
-                body: frostBody(for: day),
-                fireDate: warnDate
-            )
-        }
-    }
-
-    /// Drops every scheduled frost notification. Called when the user
-    /// flips the frost-warning toggle off, or before re-scheduling.
-    func clearFrostWarnings() async {
-        let pending = await center.pendingNotificationRequests()
-        let ids = pending
-            .map(\.identifier)
-            .filter { $0.hasPrefix(IdPrefix.frost) }
-        center.removePendingNotificationRequests(withIdentifiers: ids)
-    }
-
-    private func frostBody(for day: DailyFrostForecast) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "EEEE"
-        let weekday = f.string(from: day.date)
-        let lowText = String(format: "%.0f", day.lowF)
-        return "\(weekday) night drops to \(lowText)°F. Cover tender plants or pull tender seedlings inside."
     }
 
     // MARK: - Planting-event reminders
@@ -142,15 +87,6 @@ final class NotificationsCenter {
     func cancelPlantingEventReminder(eventID: String) {
         center.removePendingNotificationRequests(
             withIdentifiers: [IdPrefix.event + eventID])
-    }
-
-    // MARK: - Diagnostics
-
-    /// Returns true if at least one frost notification is currently
-    /// scheduled. Used by Settings to show "active / inactive" state.
-    func hasScheduledFrostWarnings() async -> Bool {
-        let pending = await center.pendingNotificationRequests()
-        return pending.contains { $0.identifier.hasPrefix(IdPrefix.frost) }
     }
 
     // MARK: - Internals
@@ -272,25 +208,5 @@ final class NotificationsCenter {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone.current
         return f.string(from: date)
-    }
-
-    // MARK: - WeatherKit lookup
-
-    private struct DailyFrostForecast {
-        let date: Date
-        let lowF: Double
-    }
-
-    private static func fetchForecast(
-        latitude: Double, longitude: Double
-    ) async throws -> [DailyFrostForecast] {
-        let weather = try await WeatherService.shared.weather(
-            for: CLLocation(latitude: latitude, longitude: longitude))
-        return weather.dailyForecast.forecast.prefix(10).map { day in
-            DailyFrostForecast(
-                date: day.date,
-                lowF: day.lowTemperature.converted(to: .fahrenheit).value
-            )
-        }
     }
 }
