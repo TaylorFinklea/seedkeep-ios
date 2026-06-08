@@ -20,6 +20,7 @@ struct BedDetailView: View {
 
     @State private var showAddEvent = false
     @State private var showEditBed = false
+    @State private var eventPendingDelete: LocalPlantingEvent?
 
     /// Catalog data keyed by catalog ID. Populated lazily on view appear:
     /// for each event in this bed that has a seed with a catalog ID, we
@@ -91,6 +92,25 @@ struct BedDetailView: View {
                     }
                     }
                     .scrollContentBackground(.hidden)
+                    .confirmationDialog(
+                        "Delete this planting event?",
+                        isPresented: Binding(
+                            get: { eventPendingDelete != nil },
+                            set: { if !$0 { eventPendingDelete = nil } }
+                        ),
+                        titleVisibility: .visible,
+                        presenting: eventPendingDelete
+                    ) { event in
+                        Button("Delete", role: .destructive) {
+                            deleteEvent(event)
+                            eventPendingDelete = nil
+                        }
+                        Button("Cancel", role: .cancel) {
+                            eventPendingDelete = nil
+                        }
+                    } message: { _ in
+                        Text("This planting event will be removed from the bed. You can't undo this.")
+                    }
                 }
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
@@ -241,7 +261,7 @@ struct BedDetailView: View {
                                 }.tint(HerbColor.sepia)
                             }
                             Button(role: .destructive) {
-                                deleteEvent(event)
+                                eventPendingDelete = event
                             } label: {
                                 Image(systemName: "trash")
                             }

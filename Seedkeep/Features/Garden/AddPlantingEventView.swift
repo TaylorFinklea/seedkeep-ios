@@ -48,6 +48,7 @@ struct AddPlantingEventView: View {
                 notesSection
                 errorSection
             }
+            .vellumForm()
             .navigationTitle("Plan event")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
@@ -64,7 +65,7 @@ struct AddPlantingEventView: View {
 
     @ViewBuilder
     private var actionSection: some View {
-        Section("Action") {
+        Section {
             Picker("Kind", selection: $kind) {
                 ForEach(PlantingEventKind.allCases) { k in
                     Label(k.displayName, systemImage: k.systemImage).tag(k)
@@ -88,6 +89,8 @@ struct AddPlantingEventView: View {
                         .font(.caption)
                 }
             }
+        } header: {
+            Rubric(text: "action")
         }
     }
 
@@ -138,7 +141,7 @@ struct AddPlantingEventView: View {
 
     @ViewBuilder
     private var whereSection: some View {
-        Section("Where + what") {
+        Section {
             Picker("Bed", selection: $selectedBedID) {
                 Text("None").tag(String?.none)
                 ForEach(beds) { bed in
@@ -151,6 +154,8 @@ struct AddPlantingEventView: View {
                     Text(seed.customName ?? "Unnamed seed").tag(Optional(seed.id))
                 }
             }
+        } header: {
+            Rubric(text: "where + what")
         }
     }
 
@@ -184,7 +189,7 @@ struct AddPlantingEventView: View {
                     }
                 }
             } header: {
-                Text("Planting window")
+                Rubric(text: "planting window")
             } footer: {
                 Text("Server-computed from this seed's catalog entry and your garden location.")
             }
@@ -203,7 +208,7 @@ struct AddPlantingEventView: View {
                         Slider(value: $xFeet, in: 0...width, step: 0.5)
                         Text("\(formatFt(xFeet))′")
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HerbColor.inkSoft)
                             .frame(width: 36, alignment: .trailing)
                     }
                     HStack {
@@ -211,7 +216,7 @@ struct AddPlantingEventView: View {
                         Slider(value: $yFeet, in: 0...length, step: 0.5)
                         Text("\(formatFt(yFeet))′")
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HerbColor.inkSoft)
                             .frame(width: 36, alignment: .trailing)
                     }
                     BedLayoutCanvas(
@@ -231,7 +236,7 @@ struct AddPlantingEventView: View {
                     .listRowBackground(Color.clear)
                 }
             } header: {
-                Text("Position")
+                Rubric(text: "position")
             } footer: {
                 Text("Distance in feet from the bottom-left corner of the bed.")
             }
@@ -240,9 +245,11 @@ struct AddPlantingEventView: View {
 
     @ViewBuilder
     private var notesSection: some View {
-        Section("Notes") {
+        Section {
             TextField("Optional", text: $notes, axis: .vertical)
                 .lineLimit(2...6)
+        } header: {
+            Rubric(text: "notes")
         }
     }
 

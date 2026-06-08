@@ -29,7 +29,7 @@ struct TagsView: View {
         Group {
             if tags.isEmpty {
                 ContentUnavailableView(
-                    "No tags yet",
+                    "no tags yet",
                     systemImage: "tag",
                     description: Text("Tags help you slice the library — try 'heirloom', 'salsa', or 'native'.")
                 )
@@ -44,11 +44,11 @@ struct TagsView: View {
                                 Circle()
                                     .fill(colorFor(hex: tag.color))
                                     .frame(width: 14, height: 14)
-                                    .overlay(Circle().strokeBorder(.tertiary, lineWidth: 0.5))
+                                    .overlay(Circle().strokeBorder(HerbColor.inkFaint, lineWidth: 0.5))
                                 Text(tag.name)
                                 Spacer()
                                 Image(systemName: "pencil")
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(HerbColor.inkFaint)
                             }
                         }
                         .buttonStyle(.plain)
@@ -139,11 +139,13 @@ private struct NewTagSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Name") {
+                Section {
                     TextField("Tag name", text: $name)
                         .textInputAutocapitalization(.words)
+                } header: {
+                    Rubric(text: "name")
                 }
-                Section("Color") {
+                Section {
                     ForEach(palette, id: \.hex) { entry in
                         Button {
                             selectedHex = (selectedHex == entry.hex) ? nil : entry.hex
@@ -152,7 +154,7 @@ private struct NewTagSheet: View {
                                 Circle()
                                     .fill(entry.color)
                                     .frame(width: 18, height: 18)
-                                    .overlay(Circle().strokeBorder(.tertiary, lineWidth: 0.5))
+                                    .overlay(Circle().strokeBorder(HerbColor.inkFaint, lineWidth: 0.5))
                                 Text(entry.name)
                                 Spacer()
                                 if selectedHex == entry.hex {
@@ -162,8 +164,11 @@ private struct NewTagSheet: View {
                         }
                         .buttonStyle(.plain)
                     }
+                } header: {
+                    Rubric(text: "color")
                 }
             }
+            .vellumForm()
             .navigationTitle("New tag")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

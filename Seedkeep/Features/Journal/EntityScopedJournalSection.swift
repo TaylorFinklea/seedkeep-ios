@@ -84,7 +84,7 @@ struct EntityScopedJournalSection: View {
                     .tracking(1.3)
                     .foregroundStyle(HerbColor.sepia)
                     .textCase(.uppercase)
-                Text(entry.body.isEmpty ? "(empty)" : entry.body)
+                Text(entry.body.isEmpty ? "no entries" : entry.body)
                     .font(HerbFont.body(size: 13))
                     .foregroundStyle(HerbColor.ink)
                     .lineLimit(2)

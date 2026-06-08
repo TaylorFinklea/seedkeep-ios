@@ -28,7 +28,7 @@ struct AssistantKeySettingsView: View {
                     .disabled(working)
                 }
             } else {
-                Section("Anthropic API key") {
+                Section {
                     SecureField("sk-ant-…", text: $keyInput)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
@@ -42,25 +42,38 @@ struct AssistantKeySettingsView: View {
                             keyInput = ""
                         }
                     }
+                } header: {
+                    Rubric(text: "anthropic api key")
                 }
             }
 
-            Section("Privacy") {
+            Section {
                 Text("Your API key is encrypted with AES-256-GCM and stored on Seedkeep's server. We use it to make Anthropic calls on your behalf when you talk to Sprout. The key is never displayed back to you after saving.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
                 Text("Cost: Anthropic bills you directly through their API. Seedkeep doesn't add fees.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
+            } header: {
+                Rubric(text: "privacy")
             }
 
             if let infoMessage {
-                Section { Text(infoMessage).font(.footnote).foregroundStyle(HerbColor.sage) }
+                Section {
+                    Text(infoMessage)
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.sage)
+                }
             }
             if let errorMessage {
-                Section { Text(errorMessage).font(.footnote).foregroundStyle(HerbColor.rose) }
+                Section {
+                    Text(errorMessage)
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.rose)
+                }
             }
         }
+        .vellumForm()
         .navigationTitle("AI Assistant")
         .navigationBarTitleDisplayMode(.inline)
         .task { await appEnv.assistant.refreshKeyStatus() }

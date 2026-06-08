@@ -18,8 +18,8 @@ struct APIKeysSettingsView: View {
         Form {
             Section {
                 Label("These keys never leave your device. The Seedkeep server never sees them — every BYOK extraction goes from your iPhone directly to the model provider.", systemImage: "lock.shield")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
 
             keySection(
@@ -45,15 +45,18 @@ struct APIKeysSettingsView: View {
                 } else {
                     LabeledContent("Active") {
                         Text("None")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HerbColor.inkSoft)
                     }
                 }
             } header: {
-                Text("Active provider")
+                Rubric(text: "active provider")
             } footer: {
                 Text("If both keys are set, BYOK extractions prefer Anthropic (matches the server's Hosted-tier model family).")
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
         }
+        .vellumForm()
         .navigationTitle("API keys")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -73,11 +76,11 @@ struct APIKeysSettingsView: View {
             SecureField(saved.wrappedValue ? "•••••• (saved)" : "Paste key", text: draft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.callout.monospaced())
+                .font(HerbFont.body(size: 14).monospaced())
 
             if let warning = warning.wrappedValue {
                 Text(warning)
-                    .font(.footnote)
+                    .font(HerbFont.bodyItalic(size: 12))
                     .foregroundStyle(HerbColor.ochre)
             }
 
@@ -96,9 +99,11 @@ struct APIKeysSettingsView: View {
                 }
             }
         } header: {
-            Text(provider.displayName)
+            Rubric(text: provider.displayName.lowercased())
         } footer: {
             Text(provider.keyHelpText)
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
         }
     }
 

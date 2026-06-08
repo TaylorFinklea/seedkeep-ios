@@ -190,20 +190,11 @@ struct NotificationsSettingsView: View {
     private var permissionBanner: some View {
         switch authStatus {
         case .denied:
-            HStack(alignment: .top, spacing: 10) {
-                Text("⚠")
-                    .font(.system(size: 14))
-                    .foregroundStyle(HerbColor.ochre)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("NOTIFICATIONS BLOCKED")
-                        .font(HerbFont.smallCaps(size: 10))
-                        .tracking(1.5)
-                        .foregroundStyle(HerbColor.ink)
-                    Text("Enable in iOS Settings → Seedkeep → Notifications to use the switches below.")
-                        .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.inkSoft)
-                }
-            }
+            HerbBanner(
+                severity: .warning,
+                title: "Notifications blocked",
+                message: "Enable in iOS Settings → Seedkeep → Notifications to use the switches below."
+            )
             .padding(.vertical, 4)
         default:
             EmptyView()

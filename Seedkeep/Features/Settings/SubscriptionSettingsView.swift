@@ -15,26 +15,28 @@ struct SubscriptionSettingsView: View {
             Section {
                 LabeledContent("Server tier") {
                     Text(appEnv.preferences.cachedTier ?? "(unknown)")
-                        .foregroundStyle(appEnv.preferences.cachedTier == "hosted" ? HerbColor.sage : Color.secondary)
+                        .foregroundStyle(appEnv.preferences.cachedTier == "hosted" ? HerbColor.sage : HerbColor.inkSoft)
                 }
                 if !appEnv.subscriptions.purchasedProductIDs.isEmpty {
                     LabeledContent("Purchased") {
                         Text(appEnv.subscriptions.purchasedProductIDs.sorted().joined(separator: ", "))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HerbColor.inkSoft)
                             .font(.caption.monospaced())
                     }
                 }
             } header: {
-                Text("Status")
+                Rubric(text: "status")
             } footer: {
                 Text("The Seedkeep server is the authority on whether you're on the Hosted tier. Your iCloud account's subscription state syncs here automatically; tap Restore if it doesn't.")
+                    .font(HerbFont.bodyItalic(size: 11))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
 
-            Section("Subscribe") {
+            Section {
                 if appEnv.subscriptions.products.isEmpty {
                     Text("No subscription products available. They're configured in App Store Connect — until that's wired up, stay on Free or BYOK.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.inkSoft)
                 } else {
                     ForEach(appEnv.subscriptions.products, id: \.id) { product in
                         Button {
@@ -43,21 +45,24 @@ struct SubscriptionSettingsView: View {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(product.displayName)
-                                        .font(.body.weight(.medium))
+                                        .font(HerbFont.bodyEmph(size: 14))
+                                        .foregroundStyle(HerbColor.ink)
                                     Text(product.description)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
+                                        .font(HerbFont.bodyItalic(size: 12))
+                                        .foregroundStyle(HerbColor.inkSoft)
                                 }
                                 Spacer()
                                 Text(product.displayPrice)
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(.tint)
+                                    .font(HerbFont.bodyEmph(size: 14))
+                                    .foregroundStyle(HerbColor.sepia)
                             }
                         }
                         .buttonStyle(.plain)
                         .disabled(appEnv.subscriptions.isPurchasing)
                     }
                 }
+            } header: {
+                Rubric(text: "subscribe")
             }
 
             Section {
@@ -74,7 +79,8 @@ struct SubscriptionSettingsView: View {
                     HStack {
                         ProgressView().controlSize(.small).herbProgressStyle()
                         Text(appEnv.subscriptions.isPurchasing ? "Processing purchase…" : "Verifying with server…")
-                            .font(.footnote)
+                            .font(HerbFont.bodyItalic(size: 12))
+                            .foregroundStyle(HerbColor.inkSoft)
                     }
                 }
             }
@@ -82,11 +88,12 @@ struct SubscriptionSettingsView: View {
             if let err = appEnv.subscriptions.lastError {
                 Section {
                     Text(err)
-                        .font(.footnote)
+                        .font(HerbFont.bodyItalic(size: 12))
                         .foregroundStyle(HerbColor.rose)
                 }
             }
         }
+        .vellumForm()
         .navigationTitle("Subscription")
         .navigationBarTitleDisplayMode(.inline)
         .task {

@@ -20,13 +20,13 @@ struct YouView: View {
                     }
                     if case .signedIn(let user, let household) = auth.state {
                         Section {
-                            LabeledContent("Email") { Text(user.email ?? "—").font(HerbFont.bodyItalic(size: 12)) }
-                            LabeledContent("Name") { Text(user.name ?? "—").font(HerbFont.bodyItalic(size: 12)) }
+                            LabeledContent("Email") { Text(user.email ?? "no email yet").font(HerbFont.body(size: 14)) }
+                            LabeledContent("Name") { Text(user.name ?? "no name yet").font(HerbFont.bodyEmph(size: 14)) }
                         } header: {
                             Rubric(text: "steward")
                         }
                         Section {
-                            LabeledContent("Name") { Text(household.name).font(HerbFont.bodyItalic(size: 12)) }
+                            LabeledContent("Name") { Text(household.name).font(HerbFont.bodyEmph(size: 14)) }
                         } header: {
                             Rubric(text: "house")
                         }

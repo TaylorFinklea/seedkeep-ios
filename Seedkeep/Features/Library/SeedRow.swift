@@ -85,7 +85,7 @@ struct SeedRow: View {
         guard let catalogID = seed.catalogID,
               let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
         else { return nil }
-        return VerdictPalette.foregroundColor(for: verdict)
+        return HerbColor.verdictForeground(for: verdict)
     }
 
     private var displayTitle: String {

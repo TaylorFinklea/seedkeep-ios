@@ -52,28 +52,26 @@ struct AddSeedView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                VellumBackground()
-                Form {
-                    Section {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(prefill == nil ? "Lay a new packet" : "Confirm specimen")
-                                .font(HerbFont.smallCaps(size: 10))
-                                .tracking(2)
-                                .foregroundStyle(HerbColor.sepia)
-                                .textCase(.uppercase)
-                            Text(prefill == nil ? "Add seed" : "Specimen review")
-                                .font(HerbFont.display(size: 30))
-                                .foregroundStyle(HerbColor.ink)
-                        }
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
-                        .listRowSeparator(.hidden)
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(prefill == nil ? "Lay a new packet" : "Confirm specimen")
+                            .font(HerbFont.smallCaps(size: 10))
+                            .tracking(2)
+                            .foregroundStyle(HerbColor.sepia)
+                            .textCase(.uppercase)
+                        Text(prefill == nil ? "Add seed" : "Specimen review")
+                            .font(HerbFont.display(size: 30))
+                            .foregroundStyle(HerbColor.ink)
                     }
-                    if prefill != nil {
-                        Section { prefillBanner }
-                    }
-                    extractedGrowingInfoSection
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
+                    .listRowSeparator(.hidden)
+                }
+                if prefill != nil {
+                    Section { prefillBanner }
+                }
+                extractedGrowingInfoSection
                 Section {
                     Picker("State", selection: $state) {
                         Text("Active").tag(SeedState.active)
@@ -153,9 +151,8 @@ struct AddSeedView: View {
                             .foregroundStyle(HerbColor.rose)
                     }
                 }
-                }
-                .scrollContentBackground(.hidden)
             }
+            .vellumForm()
             .navigationTitle(prefill == nil ? "Add seed" : "Confirm seed")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { applyPrefillIfNeeded() }
@@ -222,7 +219,7 @@ struct AddSeedView: View {
                     LabeledContent("Hardiness zones", value: zones)
                 }
             } header: {
-                Text("Growing info (extracted)")
+                Rubric(text: "growing info (extracted)")
             } footer: {
                 Text("Surfaced from the packet. Will be added to the shared catalog so other households who scan the same packet get an instant match.")
             }
@@ -297,6 +294,7 @@ struct AddSeedView: View {
         case 1: return "1\""
         default:
             let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.maximumFractionDigits = 2
             formatter.minimumFractionDigits = 0
             return "\(formatter.string(from: NSNumber(value: value)) ?? "\(value)")\""
@@ -318,39 +316,23 @@ struct AddSeedView: View {
     private var prefillBanner: some View {
         switch prefill {
         case .catalog:
-            Label {
-                Text("Pre-filled from catalog. Review and confirm.")
-                    .font(.footnote)
-            } icon: {
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(HerbColor.sage)
-            }
+            HerbBanner(
+                severity: .success,
+                title: "Pre-filled from catalog",
+                message: "Review and confirm."
+            )
         case .extraction(let result, _):
-            VStack(alignment: .leading, spacing: 4) {
-                Label {
-                    Text("AI-extracted from photos. Please review.")
-                        .font(.footnote.weight(.medium))
-                } icon: {
-                    Image(systemName: "sparkles")
-                        .foregroundStyle(HerbColor.sepia)
-                }
-                Text("Reviewer score: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            HerbBanner(
+                severity: .info,
+                title: "AI-extracted from photos",
+                message: "Please review. Reviewer score: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)"
+            )
         case .preExtraction(let result, _):
-            VStack(alignment: .leading, spacing: 4) {
-                Label {
-                    Text("Extracted on-device. Please review.")
-                        .font(.footnote.weight(.medium))
-                } icon: {
-                    Image(systemName: "iphone.gen3")
-                        .foregroundStyle(HerbColor.sepia)
-                }
-                Text("Self-confidence: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            HerbBanner(
+                severity: .info,
+                title: "Extracted on-device",
+                message: "Please review. Self-confidence: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)"
+            )
         case .none:
             EmptyView()
         }

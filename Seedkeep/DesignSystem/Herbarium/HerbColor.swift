@@ -84,6 +84,35 @@ enum HerbColor {
     static let verdictClose = dyn(light: 0xA6571D, dark: 0xD37C3A)
     static let verdictMiss  = dyn(light: 0x8E2A1F, dark: 0xD67868)
 
+    // MARK: - Verdict helpers
+
+    /// Foreground (text / dot) colour for a recommendation verdict string.
+    /// Returns `nil` for unknown verdicts so callers can choose to hide the
+    /// affordance entirely (matches `SeedRow`'s verdict-dot semantics).
+    static func verdictForeground(for verdict: String) -> Color? {
+        switch verdict {
+        case "plant_now":  return verdictNow
+        case "plant_soon": return verdictSoon
+        case "too_early":  return verdictEarly
+        case "late":       return verdictClose
+        case "too_late":   return verdictMiss
+        default:           return nil
+        }
+    }
+
+    /// Same as `verdictForeground(for:)` but falls back to `.secondary` for
+    /// unknown verdicts — used in badge-label contexts that always need a colour.
+    static func verdictForegroundFallback(for verdict: String) -> Color {
+        verdictForeground(for: verdict) ?? .secondary
+    }
+
+    /// Background (badge fill) colour for a recommendation verdict string.
+    /// Derived from the foreground token at 15% opacity; unknown verdicts
+    /// fall back to the system gray fill used by neutral badges.
+    static func verdictBackground(for verdict: String) -> Color {
+        verdictForeground(for: verdict)?.opacity(0.15) ?? Color(.systemGray5)
+    }
+
     // MARK: - Helpers
 
     /// Build a dynamic SwiftUI Color from light + dark RGB hex literals.

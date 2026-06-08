@@ -167,22 +167,19 @@ struct MCPSettingsView: View {
     @ViewBuilder
     private var newTokenSheet: some View {
         NavigationStack {
-            ZStack {
-                VellumBackground()
-                Form {
-                    Section {
-                        TextField("Label (e.g. \"Claude Desktop\")", text: $pendingLabel)
-                            .font(HerbFont.body(size: 14))
-                    } header: {
-                        Rubric(text: "name this token")
-                    } footer: {
-                        Text("Pick a label you'll recognize when you come back to revoke this token later. Defaults to \"Untitled\".")
-                            .font(HerbFont.bodyItalic(size: 11))
-                            .foregroundStyle(HerbColor.inkSoft)
-                    }
+            Form {
+                Section {
+                    TextField("Label (e.g. \"Claude Desktop\")", text: $pendingLabel)
+                        .font(HerbFont.body(size: 14))
+                } header: {
+                    Rubric(text: "name this token")
+                } footer: {
+                    Text("Pick a label you'll recognize when you come back to revoke this token later. Defaults to \"Untitled\".")
+                        .font(HerbFont.bodyItalic(size: 11))
+                        .foregroundStyle(HerbColor.inkSoft)
                 }
-                .scrollContentBackground(.hidden)
             }
+            .vellumForm()
             .navigationTitle("New MCP token")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

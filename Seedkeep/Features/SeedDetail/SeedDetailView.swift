@@ -68,31 +68,28 @@ struct SeedDetailView: View {
     var body: some View {
         Group {
             if let seed = seedQuery.first {
-                ZStack {
-                    VellumBackground()
-                    Form {
-                        Section {
-                            herbariumHero(seed)
-                                .listRowBackground(Color.clear)
-                                .listRowInsets(EdgeInsets())
-                                .listRowSeparator(.hidden)
-                        }
-                        identitySection(seed)
-                        photosSection(seed)
-                        growingInfoSection(seed)
-                        lifecycleSection(seed)
-                        if seed.state != .wishlist {
-                            quantitySection(seed)
-                        }
-                        storageSection(seed)
-                        provenanceSection(seed)
-                        notesSection(seed)
-                        plantSection(seed)
-                        EntityScopedJournalSection(parent: .seed(seed.id))
-                        deleteSection(seed)
+                Form {
+                    Section {
+                        herbariumHero(seed)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
                     }
-                    .scrollContentBackground(.hidden)
+                    identitySection(seed)
+                    photosSection(seed)
+                    growingInfoSection(seed)
+                    lifecycleSection(seed)
+                    if seed.state != .wishlist {
+                        quantitySection(seed)
+                    }
+                    storageSection(seed)
+                    provenanceSection(seed)
+                    notesSection(seed)
+                    plantSection(seed)
+                    EntityScopedJournalSection(parent: .seed(seed.id))
+                    deleteSection(seed)
                 }
+                .vellumForm()
                 .sheet(isPresented: $showPlanEvent) {
                     AddPlantingEventView(bedID: nil, prefillSeedID: seedID)
                 }
@@ -222,11 +219,11 @@ struct SeedDetailView: View {
 
     @ViewBuilder
     private func photosSection(_ seed: LocalSeed) -> some View {
-        Section("Photos") {
+        Section {
             if photoQuery.isEmpty {
                 Text("No photos yet")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
@@ -267,6 +264,8 @@ struct SeedDetailView: View {
                     .font(.footnote)
                     .foregroundStyle(HerbColor.rose)
             }
+        } header: {
+            Rubric(text: "photos")
         }
         .onChange(of: pickedPhoto) { _, item in
             guard let item else { return }
@@ -360,8 +359,9 @@ struct SeedDetailView: View {
                 if let inst = info.instructions, !inst.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Instructions")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
+                            .font(HerbFont.smallCaps(size: 10))
+                            .tracking(1.4)
+                            .foregroundStyle(HerbColor.sepia)
                         Text(inst)
                             .font(.body)
                     }
@@ -386,7 +386,7 @@ struct SeedDetailView: View {
                     }
                 }
             } header: {
-                Text("Growing info")
+                Rubric(text: "growing info")
             } footer: {
                 Text(growingInfoFooter(seed))
             }
@@ -505,7 +505,7 @@ struct SeedDetailView: View {
 
     @ViewBuilder
     private func identitySection(_ seed: LocalSeed) -> some View {
-        Section("Identity") {
+        Section {
             TextField("Type (e.g. Pepper)", text: $typeDraft)
                 .textInputAutocapitalization(.words)
                 .onChange(of: typeDraft) { _, new in
@@ -545,6 +545,8 @@ struct SeedDetailView: View {
                         .init(custom_company: trimmed.isEmpty ? nil : trimmed)
                     )
                 }
+        } header: {
+            Rubric(text: "identity")
         }
         .onAppear {
             if !identityHydrated {
@@ -562,7 +564,7 @@ struct SeedDetailView: View {
 
     @ViewBuilder
     private func lifecycleSection(_ seed: LocalSeed) -> some View {
-        Section("Lifecycle") {
+        Section {
             Picker(
                 "State",
                 selection: Binding(
@@ -578,12 +580,14 @@ struct SeedDetailView: View {
                 Text("Saved").tag(SeedState.saved)
                 Text("Archive").tag(SeedState.archived)
             }
+        } header: {
+            Rubric(text: "lifecycle")
         }
     }
 
     @ViewBuilder
     private func quantitySection(_ seed: LocalSeed) -> some View {
-        Section("Quantity") {
+        Section {
             Stepper(
                 "\(seed.packetCount) packet\(seed.packetCount == 1 ? "" : "s")",
                 value: Binding(
@@ -595,12 +599,14 @@ struct SeedDetailView: View {
                 ),
                 in: 0...100
             )
+        } header: {
+            Rubric(text: "quantity")
         }
     }
 
     @ViewBuilder
     private func storageSection(_ seed: LocalSeed) -> some View {
-        Section("Storage") {
+        Section {
             Picker(
                 "Location",
                 selection: Binding(
@@ -636,12 +642,14 @@ struct SeedDetailView: View {
                     }
                 }
             }
+        } header: {
+            Rubric(text: "storage")
         }
     }
 
     @ViewBuilder
     private func provenanceSection(_ seed: LocalSeed) -> some View {
-        Section("Provenance") {
+        Section {
             Picker(
                 "Source",
                 selection: Binding(
@@ -667,12 +675,14 @@ struct SeedDetailView: View {
                     }
                 )
             )
+        } header: {
+            Rubric(text: "provenance")
         }
     }
 
     @ViewBuilder
     private func notesSection(_ seed: LocalSeed) -> some View {
-        Section("Notes") {
+        Section {
             TextField(
                 "Notes",
                 text: Binding(
@@ -689,6 +699,8 @@ struct SeedDetailView: View {
                 axis: .vertical
             )
             .lineLimit(3...8)
+        } header: {
+            Rubric(text: "notes")
         }
         .onDisappear {
             Task { try? await appEnv.sync.flushPending() }
@@ -710,7 +722,7 @@ struct SeedDetailView: View {
         // Planting-window recommendation — only shown when the seed has a
         // catalog link (manually-entered seeds have no server recommendation).
         if seed.catalogID != nil {
-            Section("Planting window") {
+            Section {
                 if appEnv.recommendations.needsHomeLocation {
                     RecommendationPanel.needsLocation
                 } else {
@@ -720,6 +732,8 @@ struct SeedDetailView: View {
                         userDate: nil
                     )
                 }
+            } header: {
+                Rubric(text: "planting window")
             }
         }
     }

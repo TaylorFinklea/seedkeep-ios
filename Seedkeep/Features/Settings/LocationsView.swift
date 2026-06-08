@@ -37,7 +37,7 @@ struct LocationsView: View {
     private var listContent: some View {
         if locations.isEmpty {
             ContentUnavailableView(
-                "No locations yet",
+                "no locations yet",
                 systemImage: "tray",
                 description: Text("Add the spots where seeds physically live so you can find them again.")
             )
@@ -60,7 +60,7 @@ struct LocationsView: View {
             HStack {
                 Text(loc.name)
                 Spacer()
-                Image(systemName: "pencil").foregroundStyle(.tertiary)
+                Image(systemName: "pencil").foregroundStyle(HerbColor.inkFaint)
             }
         }
         .buttonStyle(.plain)

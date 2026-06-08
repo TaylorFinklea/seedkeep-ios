@@ -54,22 +54,38 @@ struct JournalView: View {
                         }
                     }
                     if entries.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "book.closed")
-                                .font(.system(size: 32))
-                                .foregroundStyle(HerbColor.sepia.opacity(0.6))
-                            Text("Begin the daybook")
-                                .font(HerbFont.display(size: 22))
-                                .foregroundStyle(HerbColor.ink)
-                            Text("Track what passed in the garden today. Tap + to write the first entry.")
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
-                                .multilineTextAlignment(.center)
+                        if appEnv.sync.isSyncing {
+                            VStack(spacing: 8) {
+                                ProgressView()
+                                    .herbProgressStyle()
+                                    .controlSize(.small)
+                                Text("turning the page…")
+                                    .font(HerbFont.bodyItalic(size: 12))
+                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 48)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                        } else {
+                            VStack(spacing: 12) {
+                                Image(systemName: "book.closed")
+                                    .font(.system(size: 32))
+                                    .foregroundStyle(HerbColor.sepia.opacity(0.6))
+                                Text("Begin the daybook")
+                                    .font(HerbFont.display(size: 22))
+                                    .foregroundStyle(HerbColor.ink)
+                                Text("Track what passed in the garden today. Tap + to write the first entry.")
+                                    .font(HerbFont.bodyItalic(size: 12))
+                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
                     } else {
                         ForEach(entries) { entry in
                             NavigationLink(value: Route.existing(entry.id)) {
@@ -150,7 +166,7 @@ struct JournalView: View {
             dateRoundel(ymd: entry.occurredOn)
                 .frame(width: 44)
             VStack(alignment: .leading, spacing: 6) {
-                Text(entry.body.isEmpty ? "(no entry)" : entry.body)
+                Text(entry.body.isEmpty ? "no entry yet" : entry.body)
                     .font(HerbFont.body(size: 13))
                     .foregroundStyle(HerbColor.ink)
                     .lineLimit(3)

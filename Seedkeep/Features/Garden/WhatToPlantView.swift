@@ -35,18 +35,22 @@ struct WhatToPlantView: View {
                 let grouped = groupedSeeds()
 
                 if !grouped.plantNow.isEmpty {
-                    Section("Plant now") {
+                    Section {
                         ForEach(grouped.plantNow, id: \.seed.id) { row in
                             plantRow(row)
                         }
+                    } header: {
+                        Rubric(text: "plant now")
                     }
                 }
 
                 if !grouped.plantSoon.isEmpty {
-                    Section("Plant soon") {
+                    Section {
                         ForEach(grouped.plantSoon, id: \.seed.id) { row in
                             plantRow(row)
                         }
+                    } header: {
+                        Rubric(text: "plant soon")
                     }
                 }
 
@@ -63,16 +67,30 @@ struct WhatToPlantView: View {
 
                 if grouped.plantNow.isEmpty && grouped.plantSoon.isEmpty
                     && grouped.laterAndMissed.isEmpty {
-                    ContentUnavailableView(
-                        "No recommendations yet",
-                        systemImage: "leaf",
-                        description: Text("Pull to refresh, or add catalog-linked seeds to your library.")
-                    )
+                    if appEnv.sync.isSyncing {
+                        VStack(spacing: 8) {
+                            ProgressView()
+                                .herbProgressStyle()
+                                .controlSize(.small)
+                            Text("turning the page…")
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 48)
+                    } else {
+                        ContentUnavailableView(
+                            "No recommendations yet",
+                            systemImage: "leaf",
+                            description: Text("Pull to refresh, or add catalog-linked seeds to your library.")
+                        )
+                    }
                 }
             }
         }
         .navigationTitle("What to plant")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable {
             let ids = seeds.compactMap(\.catalogID)
             if !ids.isEmpty {
@@ -98,15 +116,15 @@ struct WhatToPlantView: View {
                 if let window = row.windowLabel {
                     Text(window)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HerbColor.inkSoft)
                 }
                 if let days = row.daysLabel {
                     Text("·")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(HerbColor.inkFaint)
                     Text(days)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HerbColor.inkSoft)
                 }
             }
         }

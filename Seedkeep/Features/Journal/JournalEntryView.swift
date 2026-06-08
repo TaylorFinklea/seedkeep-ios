@@ -43,12 +43,31 @@ struct JournalEntryView: View {
 
     var body: some View {
         Form {
-            Section("Date") {
-                DatePicker("Occurred on", selection: $occurredOn, displayedComponents: .date)
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entryID == nil ? "Press a new leaf" : "Tend the record")
+                        .font(HerbFont.smallCaps(size: 10))
+                        .tracking(2)
+                        .foregroundStyle(HerbColor.sepia)
+                        .textCase(.uppercase)
+                    Text(entryID == nil ? "New entry" : "Edit entry")
+                        .font(HerbFont.display(size: 30))
+                        .foregroundStyle(HerbColor.ink)
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
+                .listRowSeparator(.hidden)
             }
-            Section("Entry") {
+            Section {
+                DatePicker("Occurred on", selection: $occurredOn, displayedComponents: .date)
+            } header: {
+                Rubric(text: "date")
+            }
+            Section {
                 TextField("What happened?", text: $entryBody, axis: .vertical)
                     .lineLimit(3...12)
+            } header: {
+                Rubric(text: "entry")
             }
             Section {
                 AttachedEntityPicker(
@@ -56,14 +75,14 @@ struct JournalEntryView: View {
                     bedID: $bedID,
                     plantingEventID: $plantingEventID)
             } header: {
-                Text("Attached to")
+                Rubric(text: "attached to")
             }
 
-            Section("Photos") {
+            Section {
                 if photos.isEmpty && entryID == nil {
                     Text("Save the entry before adding photos")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HerbColor.inkSoft)
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -89,13 +108,15 @@ struct JournalEntryView: View {
                         }
                     }
                 }
+            } header: {
+                Rubric(text: "photos")
             }
 
-            Section("Checklist") {
+            Section {
                 if checklistItems.isEmpty && entryID == nil {
                     Text("Save the entry before adding checklist items")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HerbColor.inkSoft)
                 } else {
                     ForEach(checklistItems) { item in
                         checklistRow(item)
@@ -115,6 +136,8 @@ struct JournalEntryView: View {
                         }
                     }
                 }
+            } header: {
+                Rubric(text: "checklist")
             }
 
             if let errorMessage {
@@ -123,7 +146,8 @@ struct JournalEntryView: View {
                 }
             }
         }
-        .navigationTitle(entryID == nil ? "New entry" : "Edit entry")
+        .vellumForm()
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -216,12 +240,12 @@ struct JournalEntryView: View {
                 Task { await toggle(item) }
             } label: {
                 Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(item.completed ? HerbColor.sage : Color.secondary)
+                    .foregroundStyle(item.completed ? HerbColor.sage : HerbColor.inkSoft)
             }
             .buttonStyle(.plain)
             Text(item.text)
-                .strikethrough(item.completed, color: .secondary)
-                .foregroundStyle(item.completed ? .secondary : .primary)
+                .strikethrough(item.completed, color: HerbColor.inkSoft)
+                .foregroundStyle(item.completed ? HerbColor.inkSoft : HerbColor.ink)
             Spacer()
         }
         .swipeActions(edge: .trailing) {

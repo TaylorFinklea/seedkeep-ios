@@ -34,9 +34,11 @@ struct HomeLocationSettingsView: View {
                         if case .error = saveState { saveState = .idle }
                     }
             } header: {
-                Text("ZIP code")
+                Rubric(text: "zip code")
             } footer: {
                 Text("Enter your home ZIP code. Seedkeep uses it to look up your USDA hardiness zone and average frost dates.")
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
 
             if case .loading = saveState {
@@ -46,28 +48,31 @@ struct HomeLocationSettingsView: View {
                             .controlSize(.small)
                             .herbProgressStyle()
                         Text("Looking up…")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HerbColor.inkSoft)
                     }
                 }
             }
 
             if case .success(let location) = saveState {
-                Section("Location resolved") {
+                Section {
                     LabeledContent("ZIP", value: location.zip)
                     LabeledContent("USDA zone", value: "Zone \(location.usdaZone)")
                     LabeledContent("Avg last frost", value: frostLabel(location.avgLastFrost))
                     LabeledContent("Avg first frost", value: frostLabel(location.avgFirstFrost))
+                } header: {
+                    Rubric(text: "location resolved")
                 }
             }
 
             if case .error(let message) = saveState {
                 Section {
                     Text(message)
-                        .font(.footnote)
+                        .font(HerbFont.bodyItalic(size: 12))
                         .foregroundStyle(HerbColor.rose)
                 }
             }
         }
+        .vellumForm()
         .navigationTitle("Home location")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

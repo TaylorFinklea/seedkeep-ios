@@ -213,7 +213,11 @@ private struct SpecimenGrid: View {
         let filtered = filterBySearch(seeds, query: searchText)
         Group {
             if filtered.isEmpty {
-                emptyState
+                if appEnv.sync.isSyncing && seeds.isEmpty {
+                    loadingState
+                } else {
+                    emptyState
+                }
             } else if groupByType {
                 groupedGrid(filtered)
             } else {
@@ -225,6 +229,21 @@ private struct SpecimenGrid: View {
             guard !catalogIDs.isEmpty else { return }
             await appEnv.recommendations.bulkRefresh(catalogSeedIDs: catalogIDs)
         }
+    }
+
+    @ViewBuilder
+    private var loadingState: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .herbProgressStyle()
+                .controlSize(.small)
+            Text("turning the page…")
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
     }
 
     @ViewBuilder
@@ -338,7 +357,9 @@ private struct SpecimenCard: View {
                 .padding(.bottom, 6)
 
                 Text(scientificName)
-                    .font(HerbFont.bodyItalic(size: 11))
+                    .font(HerbFont.smallCaps(size: 10))
+                    .tracking(1.2)
+                    .textCase(.uppercase)
                     .foregroundStyle(HerbColor.inkSoft)
                     .padding(.horizontal, 8)
                 Text(displayName)
@@ -410,6 +431,6 @@ private struct SpecimenCard: View {
         guard let catalogID = seed.catalogID,
               let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
         else { return nil }
-        return VerdictPalette.foregroundColor(for: verdict)
+        return HerbColor.verdictForeground(for: verdict)
     }
 }

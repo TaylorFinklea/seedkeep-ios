@@ -266,14 +266,14 @@ private struct VerdictInfo {
         }
     }
 
-    /// Delegates to `VerdictPalette` — shared source of truth with `SeedRow`.
+    /// Delegates to `HerbColor` — shared source of truth with `SeedRow`.
     var foregroundColor: Color {
-        VerdictPalette.foregroundColorFallback(for: raw)
+        HerbColor.verdictForegroundFallback(for: raw)
     }
 
-    /// Delegates to `VerdictPalette`.
+    /// Delegates to `HerbColor`.
     var backgroundColor: Color {
-        VerdictPalette.backgroundColor(for: raw)
+        HerbColor.verdictBackground(for: raw)
     }
 }
 

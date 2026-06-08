@@ -18,13 +18,17 @@ struct AddBedView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Name") {
+                Section {
                     TextField("Back garden, greenhouse shelf, etc.", text: $name)
                         .textInputAutocapitalization(.sentences)
+                } header: {
+                    Rubric(text: "name")
                 }
-                Section("Description (optional)") {
+                Section {
                     TextField("What's special about this bed?", text: $description, axis: .vertical)
                         .lineLimit(2...4)
+                } header: {
+                    Rubric(text: "description")
                 }
                 Section {
                     HStack {
@@ -34,7 +38,7 @@ struct AddBedView: View {
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 80)
-                        Text("ft").foregroundStyle(.secondary)
+                        Text("ft").foregroundStyle(HerbColor.inkSoft)
                     }
                     HStack {
                         Text("Length")
@@ -43,10 +47,10 @@ struct AddBedView: View {
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 80)
-                        Text("ft").foregroundStyle(.secondary)
+                        Text("ft").foregroundStyle(HerbColor.inkSoft)
                     }
                 } header: {
-                    Text("Dimensions (optional)")
+                    Rubric(text: "dimensions")
                 } footer: {
                     Text("Used later for spatial layout. You can fill these in any time.")
                 }
@@ -59,6 +63,7 @@ struct AddBedView: View {
                     }
                 }
             }
+            .vellumForm()
             .navigationTitle("New bed")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

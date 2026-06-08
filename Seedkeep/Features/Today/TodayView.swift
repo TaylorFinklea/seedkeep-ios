@@ -25,6 +25,11 @@ struct TodayView: View {
     /// in Menagerie, not in Today.
     @Query private var departures: [LocalPetDeparture]
 
+    /// Drives the "Set home location" sheet from the sun-arc empty state.
+    /// Hosts `HomeLocationSettingsView` in its own NavigationStack so the
+    /// user can resolve their ZIP without leaving Today.
+    @State private var showHomeLocationSheet: Bool = false
+
     init() {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
@@ -62,6 +67,16 @@ struct TodayView: View {
             .navigationTitle("")
             .navigationDestination(for: PetDetailDestination.self) { dest in
                 PetDetailView(plantingEventID: dest.plantingEventID)
+            }
+            .sheet(isPresented: $showHomeLocationSheet) {
+                NavigationStack {
+                    HomeLocationSettingsView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") { showHomeLocationSheet = false }
+                            }
+                        }
+                }
             }
         }
     }
@@ -203,14 +218,22 @@ struct TodayView: View {
             SunArc(sunrise: dayLight.sunrise, sunset: dayLight.sunset, now: Date())
                 .padding(.top, 4)
         } else {
-            VStack(spacing: 4) {
+            VStack(spacing: 10) {
                 Text("Set a home location to see today's daylight arc.")
                     .font(HerbFont.bodyItalic(size: 12))
                     .foregroundStyle(HerbColor.inkSoft)
-                Text("ORDER · HOME LOCATION")
-                    .font(HerbFont.smallCaps(size: 9))
-                    .tracking(1.5)
-                    .foregroundStyle(HerbColor.sepia)
+                Button {
+                    showHomeLocationSheet = true
+                } label: {
+                    Text("Set home location")
+                        .font(HerbFont.smallCaps(size: 11))
+                        .tracking(2)
+                        .textCase(.uppercase)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+                .tint(HerbColor.sepia)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
@@ -234,11 +257,25 @@ struct TodayView: View {
                 .padding(.horizontal, 4)
 
             if dueEvents.isEmpty {
-                Text("No sowings planned. A quiet day in the herbarium.")
-                    .font(HerbFont.bodyItalic(size: 13))
-                    .foregroundStyle(HerbColor.inkSoft)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 4)
+                if appEnv.sync.isSyncing {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .herbProgressStyle()
+                            .controlSize(.small)
+                        Text("turning the page…")
+                            .font(HerbFont.bodyItalic(size: 12))
+                            .foregroundStyle(HerbColor.inkSoft)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 48)
+                } else {
+                    Text("No sowings planned. A quiet day in the herbarium.")
+                        .font(HerbFont.bodyItalic(size: 13))
+                        .foregroundStyle(HerbColor.inkSoft)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 4)
+                }
             } else {
                 ForEach(dueEvents.prefix(6)) { event in
                     SowingRow(event: event, seed: seedFor(eventID: event.id))

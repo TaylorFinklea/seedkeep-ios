@@ -27,23 +27,25 @@ struct ServerSettingsView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             } header: {
-                Text("Server URL")
+                Rubric(text: "server url")
             } footer: {
                 Text("The base URL for the Seedkeep API. Saving validates the URL by calling /api/health.")
+                    .font(HerbFont.bodyItalic(size: 11))
+                    .foregroundStyle(HerbColor.inkSoft)
             }
 
-            Section("Current") {
+            Section {
                 LabeledContent("Active") {
                     Text(appEnv.preferences.effectiveServerURL.absoluteString)
                         .font(.callout.monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HerbColor.inkSoft)
                         .lineLimit(2)
                         .multilineTextAlignment(.trailing)
                 }
                 LabeledContent("Default") {
                     Text(appEnv.preferences.bundleDefault.absoluteString)
                         .font(.callout.monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(HerbColor.inkSoft)
                         .lineLimit(2)
                         .multilineTextAlignment(.trailing)
                 }
@@ -52,22 +54,25 @@ struct ServerSettingsView: View {
                         Task { await reset() }
                     }
                 }
+            } header: {
+                Rubric(text: "current")
             }
 
             if let errorText {
                 Section {
                     Text(errorText)
-                        .font(.footnote)
+                        .font(HerbFont.bodyItalic(size: 12))
                         .foregroundStyle(HerbColor.rose)
                 }
             } else if savedSuccessfully {
                 Section {
                     Label("Server reachable. Saved.", systemImage: "checkmark.seal.fill")
                         .foregroundStyle(HerbColor.sage)
-                        .font(.footnote)
+                        .font(HerbFont.body(size: 13))
                 }
             }
         }
+        .vellumForm()
         .navigationTitle("Server")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

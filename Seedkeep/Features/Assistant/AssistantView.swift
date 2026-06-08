@@ -14,6 +14,11 @@ struct AssistantView: View {
     @State private var creatingThread = false
     @State private var errorMessage: String?
 
+    /// Drives the "Add API key" sheet from the empty-key state. Hosts
+    /// `AssistantKeySettingsView` in its own NavigationStack so the user
+    /// can configure their Anthropic key without leaving the Sprout tab.
+    @State private var showKeySheet = false
+
     private static let starterPrompts: [String] = [
         "What did I plant in May 2024?",
         "Help me plan Bed A for June",
@@ -79,6 +84,16 @@ struct AssistantView: View {
                     await appEnv.sync.syncAll(householdID: household.id)
                 }
             }
+            .sheet(isPresented: $showKeySheet) {
+                NavigationStack {
+                    AssistantKeySettingsView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") { showKeySheet = false }
+                            }
+                        }
+                }
+            }
         }
     }
 
@@ -110,10 +125,23 @@ struct AssistantView: View {
             Text("Sprout awaits a key")
                 .font(HerbFont.display(size: 22))
                 .foregroundStyle(HerbColor.ink)
-            Text("Open Settings → AI Assistant and paste your Anthropic API key. Sprout will then read your garden and help you plan.")
+            Text("Paste your Anthropic API key and Sprout will read your garden and help you plan.")
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
                 .multilineTextAlignment(.center)
+            Button {
+                showKeySheet = true
+            } label: {
+                Text("Add API key")
+                    .font(HerbFont.smallCaps(size: 11))
+                    .tracking(2)
+                    .textCase(.uppercase)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.bordered)
+            .tint(HerbColor.sepia)
+            .padding(.top, 4)
         }
         .padding(.vertical, 48)
         .frame(maxWidth: .infinity)

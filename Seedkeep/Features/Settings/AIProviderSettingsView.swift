@@ -13,7 +13,7 @@ struct AIProviderSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Provider") {
+            Section {
                 ForEach(availableProviders) { provider in
                     Button {
                         appEnv.preferences.aiProvider = provider
@@ -26,23 +26,25 @@ struct AIProviderSettingsView: View {
                                 .padding(.top, 2)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(provider.displayName)
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(.primary)
+                                    .font(HerbFont.body(size: 14))
+                                    .foregroundStyle(HerbColor.ink)
                                 Text(provider.helpText)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
+                                    .font(HerbFont.bodyItalic(size: 12))
+                                    .foregroundStyle(HerbColor.inkSoft)
                             }
                         }
                     }
                     .buttonStyle(.plain)
                 }
+            } header: {
+                Rubric(text: "provider")
             }
 
             if AppPreferences.isHostedTierEnabled {
                 Section {
                     LabeledContent("Server-reported tier") {
                         Text(appEnv.preferences.cachedTier ?? "(unknown)")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(HerbColor.inkSoft)
                     }
                     Button {
                         Task { await refresh() }
@@ -57,9 +59,11 @@ struct AIProviderSettingsView: View {
                     }
                     .disabled(refreshing)
                 } header: {
-                    Text("Subscription")
+                    Rubric(text: "subscription")
                 } footer: {
                     Text("Hosted requires an active subscription. The server records your purchase and reports it back here. Your local picker chooses your *preferred* extraction path; the server enforces what you can actually use.")
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.inkSoft)
                 }
 
                 if appEnv.preferences.aiProvider == .hosted &&
@@ -67,7 +71,8 @@ struct AIProviderSettingsView: View {
                     Section {
                         Label {
                             Text("You picked Hosted, but the server doesn't yet see an active subscription. Subscribe in the next step (or restore a previous purchase). Until then, extractions will fall back to on-device.")
-                                .font(.footnote)
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
                         } icon: {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(HerbColor.ochre)
@@ -76,6 +81,7 @@ struct AIProviderSettingsView: View {
                 }
             }
         }
+        .vellumForm()
         .navigationTitle("AI provider")
         .navigationBarTitleDisplayMode(.inline)
         .task {

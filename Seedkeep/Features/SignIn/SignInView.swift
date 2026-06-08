@@ -11,38 +11,66 @@ struct SignInView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            Image("BrandMark")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 140, height: 140)
-            VStack(spacing: 8) {
-                Text("Seedkeep")
-                    .font(.largeTitle.weight(.bold))
-                Text("Your seed library, in one place.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+        ZStack {
+            VellumBackground()
 
-            SignInWithAppleButton(.signIn) { request in
-                request.requestedScopes = [.fullName, .email]
-            } onCompletion: { result in
-                handle(result)
-            }
-            .signInWithAppleButtonStyle(.black)
-            .frame(height: 50)
-            .padding(.horizontal)
+            VStack(spacing: 28) {
+                Spacer()
 
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.rose)
-                    .multilineTextAlignment(.center)
+                Image("BrandMark")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 140, height: 140)
+
+                VStack(spacing: 10) {
+                    Text("the herbarium")
+                        .font(HerbFont.smallCaps(size: 11))
+                        .tracking(3.0)
+                        .textCase(.uppercase)
+                        .foregroundStyle(HerbColor.sepia)
+
+                    Text("Seedkeep")
+                        .font(HerbFont.display(size: 48))
+                        .foregroundStyle(HerbColor.ink)
+
+                    Text("Your seed library, pressed between the pages.")
+                        .font(HerbFont.bodyItalic(size: 14))
+                        .foregroundStyle(HerbColor.inkSoft)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
+
+                ScholarRule(verticalMargin: 4)
+                    .padding(.horizontal, 48)
+
+                Spacer()
+
+                VStack(spacing: 12) {
+                    SignInWithAppleButton(.signIn) { request in
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        handle(result)
+                    }
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 50)
                     .padding(.horizontal)
+
+                    Text("Sign in to begin your library.")
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.inkFaint)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.rose)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+
+                Spacer().frame(height: 32)
             }
-            Spacer().frame(height: 32)
         }
     }
 
