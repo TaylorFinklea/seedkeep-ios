@@ -827,23 +827,262 @@ public actor SeedkeepClient {
         public let deleted_at: Int64?
     }
 
-    /// Phase 4 D · submit a free-form correction / observation about a
-    /// catalog entry. Stored on the server and reviewed out of band; no
-    /// in-app review UI for the queue yet. Returns the feedback id.
+    /// Phase 4 D · submit a structured catalog correction or free-form note.
+    ///
+    /// The legacy two-arg call (only `catalogID` + `body`) still works for
+    /// the original "suggest a correction" path; the additional fields land
+    /// on the extended `POST /api/catalog/:id/feedback` route. Pass an
+    /// `idempotencyKey` to make the request safe to retry — the server
+    /// stores it under a partial unique index on `(idempotency_key, user_id)`
+    /// and returns the original row on replay.
+    ///
+    /// On a 409 `open_correction_exists` the server returns the conflicting
+    /// `CatalogCorrectionDTO` alongside the error envelope; the response is
+    /// translated to a `SubmitFeedbackResponse` with `existingDTO` populated
+    /// and `status == "open_correction_exists"`.
     public func submitCatalogFeedback(
         catalogID: String,
         body: String,
-        fieldHint: String? = nil
-    ) async throws -> String {
+        fieldHint: String? = nil,
+        fieldName: String? = nil,
+        suggestedValue: String? = nil,
+        clientSeenValue: String? = nil,
+        userAcknowledgedBounds: Bool = false,
+        idempotencyKey: String? = nil
+    ) async throws -> SubmitFeedbackResponse {
         struct Input: Encodable, Sendable {
             let body: String
             let field_hint: String?
+            let field_name: String?
+            let suggested_value: String?
+            let client_seen_value: String?
+            let user_acknowledged_bounds: Bool?
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(body, forKey: .body)
+                if let field_hint { try c.encode(field_hint, forKey: .field_hint) }
+                if let field_name { try c.encode(field_name, forKey: .field_name) }
+                if let suggested_value { try c.encode(suggested_value, forKey: .suggested_value) }
+                if let client_seen_value {
+                    try c.encode(client_seen_value, forKey: .client_seen_value)
+                }
+                if let user_acknowledged_bounds {
+                    try c.encode(user_acknowledged_bounds, forKey: .user_acknowledged_bounds)
+                }
+            }
+            enum CodingKeys: String, CodingKey {
+                case body
+                case field_hint
+                case field_name
+                case suggested_value
+                case client_seen_value
+                case user_acknowledged_bounds
+            }
         }
-        struct Response: Decodable, Sendable { let id: String }
-        let res: Response = try await postJSON(
-            path: "/api/catalog/\(catalogID)/feedback",
-            body: Input(body: body, field_hint: fieldHint))
-        return res.id
+
+        // Submission is hand-rolled because (a) the optional
+        // `Idempotency-Key` header rides on the request, and (b) a 409 reply
+        // carries the conflicting `CatalogCorrectionDTO` in the error
+        // envelope — the standard `perform` discards extras after `code` +
+        // `message`, so we parse the raw body before falling back.
+        let url = configuration.baseURL.appendingPathComponent("/api/catalog/\(catalogID)/feedback")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let key = idempotencyKey {
+            req.setValue(key, forHTTPHeaderField: "Idempotency-Key")
+        }
+        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let payload = Input(
+            body: body,
+            field_hint: fieldHint,
+            field_name: fieldName,
+            suggested_value: suggestedValue,
+            client_seen_value: clientSeenValue,
+            user_acknowledged_bounds: userAcknowledgedBounds ? true : nil
+        )
+        req.httpBody = try JSONEncoder().encode(payload)
+
+        let (data, _) = try await configuration.session.data(for: req)
+
+        // Happy path: ok=true envelope with { id, status, replay? }.
+        struct OkBody: Decodable, Sendable {
+            let id: String
+            let status: String
+            let replay: Bool?
+        }
+        if let env = try? JSONDecoder().decode(Envelope<OkBody>.self, from: data) {
+            switch env {
+            case .ok(let value, _):
+                return SubmitFeedbackResponse(
+                    id: value.id,
+                    status: value.status,
+                    replay: value.replay ?? false,
+                    existingDTO: nil
+                )
+            case .failure(let err):
+                // 409 carries the existing DTO as a sibling of `error` in the
+                // failure envelope. Re-parse to extract it; if the shape isn't
+                // there (any other failure), surface the typed error as-is.
+                if err.code == "open_correction_exists",
+                   let existing = Self.parseExistingCorrection(from: data) {
+                    return SubmitFeedbackResponse(
+                        id: existing.id,
+                        status: "open_correction_exists",
+                        replay: false,
+                        existingDTO: existing
+                    )
+                }
+                throw err
+            }
+        }
+        // Envelope decode failed outright — surface the same shape `perform`
+        // would have surfaced.
+        let detail = Self.describeDecodeError(
+            DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "submit feedback")),
+            body: data
+        )
+        throw SeedkeepError(code: "decode_failed", message: detail)
+    }
+
+    /// Body shape: `{ ok: false, error: {code, message}, existing: CatalogCorrectionDTO }`.
+    /// Returns nil when the field isn't present.
+    private static func parseExistingCorrection(from data: Data) -> CatalogCorrectionDTO? {
+        struct Wrapper: Decodable { let existing: CatalogCorrectionDTO? }
+        return (try? JSONDecoder().decode(Wrapper.self, from: data))?.existing
+    }
+
+    /// Envelope returned by `submitCatalogFeedback`. On a happy submit
+    /// `status` is the server's current row status (typically `"open"`,
+    /// or a terminal state on an idempotency replay). On a 409 the response
+    /// carries the conflicting row in `existingDTO` and `status` is the
+    /// sentinel `"open_correction_exists"`.
+    public struct SubmitFeedbackResponse: Sendable, Equatable {
+        public let id: String
+        public let status: String
+        public let replay: Bool
+        public let existingDTO: CatalogCorrectionDTO?
+
+        public init(
+            id: String,
+            status: String,
+            replay: Bool = false,
+            existingDTO: CatalogCorrectionDTO? = nil
+        ) {
+            self.id = id
+            self.status = status
+            self.replay = replay
+            self.existingDTO = existingDTO
+        }
+    }
+
+    /// Phase 4 D · edit a still-open catalog correction. Allowed only while
+    /// `status == 'open'` and the moderation worker hasn't claimed the row
+    /// (`ai_locked_at IS NULL`). The server returns the updated DTO.
+    public func editOpenCorrection(
+        catalogID: String,
+        correctionID: String,
+        suggestedValue: String? = nil,
+        body: String? = nil,
+        idempotencyKey: String? = nil
+    ) async throws -> CatalogCorrectionDTO {
+        struct Input: Encodable, Sendable {
+            let suggested_value: String?
+            let body: String?
+            let idempotency_key: String?
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                if let suggested_value { try c.encode(suggested_value, forKey: .suggested_value) }
+                if let body { try c.encode(body, forKey: .body) }
+                if let idempotency_key {
+                    try c.encode(idempotency_key, forKey: .idempotency_key)
+                }
+            }
+            enum CodingKeys: String, CodingKey {
+                case suggested_value
+                case body
+                case idempotency_key
+            }
+        }
+        struct Wrapper: Decodable, Sendable { let correction: CatalogCorrectionDTO }
+        let res: Wrapper = try await sendJSON(
+            method: "PUT",
+            path: "/api/catalog/\(catalogID)/corrections/\(correctionID)",
+            body: Input(
+                suggested_value: suggestedValue,
+                body: body,
+                idempotency_key: idempotencyKey
+            )
+        )
+        return res.correction
+    }
+
+    /// Phase 4 D · escalate a dismissed correction with reason
+    /// `ai_low_confidence` back into the human-reviewed queue. Server flips
+    /// the row to `status='reviewed', dismissed_reason='user_escalated'`.
+    public func escalateDismissedCorrection(
+        catalogID: String,
+        correctionID: String
+    ) async throws -> CatalogCorrectionDTO {
+        struct Wrapper: Decodable, Sendable { let correction: CatalogCorrectionDTO }
+        let res: Wrapper = try await postJSON(
+            path: "/api/catalog/\(catalogID)/corrections/\(correctionID)/escalate",
+            body: EmptyBody()
+        )
+        return res.correction
+    }
+
+    /// Phase 4 D · delta-sync the current user's catalog corrections. The
+    /// server caps `limit` at 50 per page; pass the returned cursor back as
+    /// `since` to walk later pages. Mirrors the standard delta-page
+    /// envelope used by every other pull endpoint.
+    public func catalogCorrectionsMine(
+        since: Int64 = 0,
+        limit: Int? = nil
+    ) async throws -> DeltaPage<CatalogCorrectionDTO> {
+        try await getJSON(
+            path: "/api/catalog/corrections/mine",
+            query: deltaQuery(since: since, limit: limit)
+        )
+    }
+
+    /// Phase 4 D · withdraw a correction (only while `status='open'`).
+    /// Server flips the row to `status='dismissed',
+    /// dismissed_reason='user_withdrawn'`.
+    public func withdrawCatalogCorrection(
+        catalogID: String,
+        correctionID: String
+    ) async throws {
+        let _: DeleteResult = try await deleteJSON(
+            path: "/api/catalog/\(catalogID)/corrections/\(correctionID)"
+        )
+    }
+
+    /// Phase 4 D · cross-device dedup ledger reader. Returns the list of
+    /// device IDs that have already scheduled a local notification for this
+    /// correction. The notifier checks this *before* scheduling; if its own
+    /// device is in the list it skips the schedule.
+    public func catalogCorrectionNotified(correctionID: String) async throws -> [String] {
+        struct Wrapper: Decodable, Sendable { let devices: [String] }
+        let res: Wrapper = try await getJSON(
+            path: "/api/catalog/corrections/\(correctionID)/notified"
+        )
+        return res.devices
+    }
+
+    /// Phase 4 D · cross-device dedup ledger writer. Records that this
+    /// device has scheduled a notification for the given correction. First
+    /// writer wins; subsequent POSTs are no-ops on the server side.
+    public func markCatalogCorrectionNotified(
+        correctionID: String,
+        deviceID: String
+    ) async throws {
+        struct Input: Encodable, Sendable { let device_id: String }
+        struct Empty: Decodable, Sendable {}
+        let _: Empty = try await postJSON(
+            path: "/api/catalog/corrections/\(correctionID)/notified",
+            body: Input(device_id: deviceID)
+        )
     }
 
     // MARK: - MCP tokens (Phase 4 E)
@@ -1382,5 +1621,104 @@ private extension Data {
         append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
         append(value.data(using: .utf8)!)
         append("\r\n".data(using: .utf8)!)
+    }
+}
+
+// MARK: - Catalog corrections (Phase 4 D)
+
+/// Wire-format DTO for a single catalog-correction row, returned by
+/// `GET /api/catalog/corrections/mine` and the per-correction routes
+/// (`edit`, `escalate`). Mirrors `catalog_feedback` after the 0020
+/// migration adds the structured columns.
+///
+/// `catalog_seed_id` is nullable because the FK is `ON DELETE SET NULL` —
+/// audit history survives a catalog row going away. `catalog_seed_name`
+/// is denormalized at submit time so offline notifications can name the
+/// seed even after deletion.
+///
+/// `applied_patch` accompanies rows transitioning to `applied`: the iOS
+/// sync engine uses it to invalidate the cached `CatalogSeedDTO`
+/// in-place, so SeedDetail shows the new value without an extra round
+/// trip.
+public struct CatalogCorrectionDTO: Codable, Sendable, Equatable {
+    public let id: String
+    public let catalog_seed_id: String?
+    public let catalog_seed_name: String?
+    public let field_name: String
+    public let value_type: String
+    public let suggested_value: String
+    public let client_seen_value: String?
+    public let body: String?
+    public let status: String           // "open" | "reviewed" | "applied" | "dismissed"
+    public let ai_review_score: Double?
+    public let ai_notes: String?        // surfaced verbatim in ContributionDetailSheet
+    public let dismissed_reason: String?
+    public let conflict_with_id: String?
+    public let user_acknowledged_bounds: Bool
+    public let created_at: Int64
+    public let reviewed_at: Int64?
+    public let applied_at: Int64?
+    public let escalated_at: Int64?
+    public let updated_at: Int64
+    public let deleted_at: Int64?
+    /// Present only on rows transitioning to `applied`. Carries the field
+    /// + new value so the client can patch its cached `CatalogSeedDTO`
+    /// without a follow-up GET. Server omits the key when not applicable.
+    public let applied_patch: AppliedPatch?
+
+    public struct AppliedPatch: Codable, Sendable, Equatable {
+        public let field_name: String
+        public let new_value: String
+
+        public init(field_name: String, new_value: String) {
+            self.field_name = field_name
+            self.new_value = new_value
+        }
+    }
+
+    public init(
+        id: String,
+        catalog_seed_id: String?,
+        catalog_seed_name: String?,
+        field_name: String,
+        value_type: String,
+        suggested_value: String,
+        client_seen_value: String?,
+        body: String?,
+        status: String,
+        ai_review_score: Double?,
+        ai_notes: String?,
+        dismissed_reason: String?,
+        conflict_with_id: String?,
+        user_acknowledged_bounds: Bool,
+        created_at: Int64,
+        reviewed_at: Int64?,
+        applied_at: Int64?,
+        escalated_at: Int64?,
+        updated_at: Int64,
+        deleted_at: Int64?,
+        applied_patch: AppliedPatch? = nil
+    ) {
+        self.id = id
+        self.catalog_seed_id = catalog_seed_id
+        self.catalog_seed_name = catalog_seed_name
+        self.field_name = field_name
+        self.value_type = value_type
+        self.suggested_value = suggested_value
+        self.client_seen_value = client_seen_value
+        self.body = body
+        self.status = status
+        self.ai_review_score = ai_review_score
+        self.ai_notes = ai_notes
+        self.dismissed_reason = dismissed_reason
+        self.conflict_with_id = conflict_with_id
+        self.user_acknowledged_bounds = user_acknowledged_bounds
+        self.created_at = created_at
+        self.reviewed_at = reviewed_at
+        self.applied_at = applied_at
+        self.escalated_at = escalated_at
+        self.updated_at = updated_at
+        self.deleted_at = deleted_at
+        self.applied_patch = applied_patch
     }
 }

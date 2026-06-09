@@ -375,3 +375,63 @@ extension PetDepartureDTO {
         local.deletedAt = deleted_at
     }
 }
+
+// MARK: - CatalogCorrection (Phase 4D)
+
+extension CatalogCorrectionDTO {
+    func makeLocal() -> LocalCatalogCorrection {
+        LocalCatalogCorrection(
+            id: id,
+            catalogSeedID: catalog_seed_id,
+            catalogSeedName: catalog_seed_name,
+            fieldName: field_name,
+            valueType: value_type,
+            suggestedValue: suggested_value,
+            clientSeenValue: client_seen_value,
+            body: body,
+            status: status,
+            aiReviewScore: ai_review_score,
+            aiNotes: ai_notes,
+            dismissedReason: dismissed_reason,
+            conflictWithID: conflict_with_id,
+            userAcknowledgedBounds: user_acknowledged_bounds,
+            createdAt: created_at,
+            reviewedAt: reviewed_at,
+            appliedAt: applied_at,
+            escalatedAt: escalated_at,
+            updatedAt: updated_at,
+            deletedAt: deleted_at,
+            appliedFieldName: applied_patch?.field_name,
+            appliedNewValue: applied_patch?.new_value
+        )
+    }
+
+    func apply(to local: LocalCatalogCorrection) {
+        local.catalogSeedID = catalog_seed_id
+        local.catalogSeedName = catalog_seed_name
+        local.fieldName = field_name
+        local.valueType = value_type
+        local.suggestedValue = suggested_value
+        local.clientSeenValue = client_seen_value
+        local.body = body
+        local.status = status
+        local.aiReviewScore = ai_review_score
+        local.aiNotes = ai_notes
+        local.dismissedReason = dismissed_reason
+        local.conflictWithID = conflict_with_id
+        local.userAcknowledgedBounds = user_acknowledged_bounds
+        local.createdAt = created_at
+        local.reviewedAt = reviewed_at
+        local.appliedAt = applied_at
+        local.escalatedAt = escalated_at
+        local.updatedAt = updated_at
+        local.deletedAt = deleted_at
+        // `applied_patch` is delivered only on the row's transition to
+        // `applied`; preserve any previously captured patch values when
+        // the server omits the field on subsequent syncs.
+        if let patch = applied_patch {
+            local.appliedFieldName = patch.field_name
+            local.appliedNewValue = patch.new_value
+        }
+    }
+}

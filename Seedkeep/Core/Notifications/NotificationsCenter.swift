@@ -26,6 +26,14 @@ final class NotificationsCenter {
         static let petWilted = "seedkeep.notif.pet.wilted."
         static let petDeparted = "seedkeep.notif.pet.departed."
         static let petRoundup = "seedkeep.notif.pet.roundup"
+        // Phase 4D — catalog correction outcomes. Per-correction pings
+        // (`catalogCorrection + <id>`) and batch roundup pings
+        // (`catalogCorrectionRoundup + <bucket>`) share the
+        // `seedkeep.notif.catalog.` namespace so a single hasPrefix
+        // sweep can clear all of them when the user disables the
+        // toggle.
+        static let catalogCorrection = "seedkeep.notif.catalog."
+        static let catalogCorrectionRoundup = "seedkeep.notif.catalog.roundup."
     }
 
     private let center = UNUserNotificationCenter.current()
@@ -208,5 +216,119 @@ final class NotificationsCenter {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone.current
         return f.string(from: date)
+    }
+
+    // MARK: - Catalog corrections (Phase 4D)
+
+    /// Schedule a per-correction outcome ping. Used by
+    /// `CatalogCorrectionNotifier` when a sync batch surfaces ≤3
+    /// status transitions. Body copy is dictated by `newStatus` +
+    /// `dismissedReason` per spec §7 — the orchestrator picks the
+    /// reason; this method just renders it.
+    ///
+    /// Identifier is deterministic from `correctionID` so the
+    /// cross-device dedup ledger can prevent double-pings (both
+    /// devices try to schedule with the same UN identifier — second
+    /// `add` is a no-op once the first lands).
+    func scheduleCatalogCorrectionPing(
+        correctionID: String,
+        newStatus: String,
+        catalogSeedName: String,
+        fieldLabel: String,
+        dismissedReason: String?
+    ) async {
+        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.catalog") else { return }
+        guard await ensureGranted() else { return }
+
+        let title: String
+        let body: String
+        switch newStatus {
+        case "applied":
+            title = "Suggestion applied"
+            body = "Your fix to \(catalogSeedName) (\(fieldLabel)) was applied automatically. Tap to see how we decided."
+        case "dismissed":
+            title = "Suggestion not applied"
+            switch dismissedReason {
+            case "ai_low_confidence":
+                body = "Our AI moderator didn't agree about \(catalogSeedName). Tap to send it to a human reviewer."
+            case "out_of_bounds", "invalid_enum":
+                body = "Your suggestion was outside the typical range. Tap to send it on for human review."
+            case "catalog_entry_unavailable":
+                body = "The catalog entry for \(catalogSeedName) was removed before we could review your suggestion."
+            default:
+                body = "Your suggestion for \(catalogSeedName) wasn't applied. Tap to see why."
+            }
+        default:
+            // `reviewed` transitions intentionally don't ping — the
+            // user already saw the "saved for review" copy at submit.
+            return
+        }
+
+        let id = IdPrefix.catalogCorrection + correctionID
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.interruptionLevel = .active
+        // Immediate-delivery trigger — outcome pings ride in on the
+        // next sync, so the user expects "you have a result now."
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+        center.add(request) { _ in /* silent — denial caught above */ }
+    }
+
+    /// Schedule a coalesced roundup ping when a single sync batch
+    /// surfaces more than 3 transitions. Title + body summarize
+    /// applied / dismissed counts and tap routes to YouView. The
+    /// identifier bucket is the wall-clock timestamp at schedule time
+    /// so rapid-fire batches don't collide.
+    func scheduleCatalogCorrectionRoundup(
+        applied: Int,
+        dismissed: Int,
+        ids: [String]
+    ) async {
+        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.catalog") else { return }
+        guard await ensureGranted() else { return }
+
+        let bucket = Int64(Date().timeIntervalSince1970)
+        let id = IdPrefix.catalogCorrectionRoundup + String(bucket)
+        let title = "Your suggestions updated"
+        let body = "\(applied) applied, \(dismissed) dismissed. Tap to review."
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.interruptionLevel = .active
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+        center.add(request) { _ in /* silent */ }
+    }
+
+    /// Cancel any pending UN request for a given correction. Called
+    /// when the row is tombstoned server-side so a withdrawn /
+    /// revoked correction doesn't leave a ghost ping queued.
+    func cancelCatalogCorrectionPing(correctionID: String) {
+        center.removePendingNotificationRequests(
+            withIdentifiers: [IdPrefix.catalogCorrection + correctionID]
+        )
+    }
+
+    /// Clear every catalog-correction ping — pending AND delivered.
+    /// Used when the user flips the Settings toggle off. The delivered
+    /// sweep matters because lock-screen pings accumulated before the
+    /// toggle-off would otherwise stay visible.
+    func clearAllCatalogCorrectionPings() async {
+        let pending = await center.pendingNotificationRequests()
+        let pendingIDs = pending
+            .map(\.identifier)
+            .filter { $0.hasPrefix(IdPrefix.catalogCorrection) }
+        center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
+
+        let delivered = await center.deliveredNotifications()
+        let deliveredIDs = delivered
+            .map(\.request.identifier)
+            .filter { $0.hasPrefix(IdPrefix.catalogCorrection) }
+        center.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
     }
 }

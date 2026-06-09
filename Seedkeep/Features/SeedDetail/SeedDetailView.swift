@@ -387,14 +387,13 @@ struct SeedDetailView: View {
                 }
             } header: {
                 Rubric(text: "growing info")
-            } footer: {
-                Text(growingInfoFooter(seed))
             }
             .sheet(isPresented: $showCatalogFeedback) {
                 if let catalogID = seed.catalogID {
                     CatalogFeedbackSheet(
                         catalogID: catalogID,
-                        catalogName: catalog?.common_name ?? seed.customName
+                        catalogName: catalog?.common_name ?? seed.customName,
+                        currentValues: effectiveGrowingInfo(seed)
                     )
                 }
             }
@@ -408,14 +407,6 @@ struct SeedDetailView: View {
         if let snap = seed.growingInfo, snap.hasAny { return snap }
         guard let catalog else { return nil }
         return Self.snapshot(from: catalog)
-    }
-
-    private func growingInfoFooter(_ seed: LocalSeed) -> String {
-        if let catalog {
-            let variety = catalog.variety.map { " — \($0)" } ?? ""
-            return "From the catalog (\(catalog.common_name)\(variety)). Phase 2 will let you correct or annotate these."
-        }
-        return "Captured from the seed packet. Phase 2 will let you correct or annotate these."
     }
 
     fileprivate static func snapshot(from c: CatalogSeedDTO) -> GrowingInfoSnapshot {

@@ -16,6 +16,10 @@ struct NotificationsSettingsView: View {
     @AppStorage("seedkeep.notif.water") private var waterEnabled: Bool = false
 
     @AppStorage("seedkeep.notif.events") private var eventsEnabled: Bool = false
+    // Phase 4D — catalog correction outcomes. Default-on; new users
+    // opt-in once they file their first suggestion. Disabling sweeps
+    // pending + delivered pings (see `clearAllCatalogCorrectionPings`).
+    @AppStorage("seedkeep.notif.catalog") private var catalogEnabled: Bool = true
     // Phase 5.1.4 — plant pets. All default-off per spec line 1250.
     @AppStorage("seedkeep.notif.pet.wilted") private var petWiltedEnabled: Bool = false
     @AppStorage("seedkeep.notif.pet.departed") private var petDepartedEnabled: Bool = false
@@ -83,6 +87,19 @@ struct NotificationsSettingsView: View {
                     }
                     .onChange(of: eventsEnabled) { _, newValue in
                         Task { await applyEvents(enabled: newValue) }
+                    }
+                    Toggle(isOn: $catalogEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Correction outcomes", systemImage: "doc.text.magnifyingglass")
+                            Text("When off, new corrections still appear in House → your contributions. Past notifications already on your lock screen aren't removed.")
+                                .font(HerbFont.bodyItalic(size: 11))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    .onChange(of: catalogEnabled) { _, newValue in
+                        if !newValue {
+                            Task { await NotificationsCenter.shared.clearAllCatalogCorrectionPings() }
+                        }
                     }
                 } header: {
                     Rubric(text: "what to notify")

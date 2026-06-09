@@ -25,6 +25,12 @@ public final class SyncEngine {
     /// loop and any future cursor-reset / diagnostic surface.
     private static let petDeparturesKind = "pet_departures"
 
+    /// Cursor kind for the `GET /api/catalog/corrections/mine` delta
+    /// feed (Phase 4D). Same rationale as `petDeparturesKind` — keep the
+    /// string in one place so the pull loop, any cursor-reset path, and
+    /// diagnostics can't drift.
+    private static let catalogCorrectionsKind = "catalog_corrections"
+
     private let client: SeedkeepClient
     private let container: ModelContainer
     public private(set) var isSyncing: Bool = false
@@ -48,6 +54,7 @@ public final class SyncEngine {
             try await pullBeds(householdID: householdID)
             try await pullPlantingEvents(householdID: householdID)
             try await pullPetDepartures(householdID: householdID)
+            try await pullCatalogCorrections(householdID: householdID)
             try await pullJournalEntries(householdID: householdID)
             try await pullAssistantThreads(householdID: householdID)
             try await flushPending()
@@ -152,6 +159,31 @@ public final class SyncEngine {
             try upsertJournalEntries(page.items)
             since = page.cursor
             try saveCursor(householdID: householdID, kind: "journal_entries", cursor: since)
+            if !page.has_more { break }
+        } while true
+    }
+
+    /// Phase 4D — cross-device fan-out of catalog correction rows. The
+    /// server returns the current user's `catalog_feedback` rows that
+    /// have moved since the cursor, including tombstones (rows
+    /// `deleted_at != nil`) which we hard-delete locally. Modeled on
+    /// `pullPetDepartures` — same delta-page envelope, same
+    /// tombstone-on-the-same-channel shape.
+    private func pullCatalogCorrections(householdID: String) async throws {
+        let cursor = currentCursor(
+            householdID: householdID,
+            kind: Self.catalogCorrectionsKind
+        )
+        var since = cursor
+        repeat {
+            let page = try await client.catalogCorrectionsMine(since: since)
+            try upsertCatalogCorrections(page.items)
+            since = page.cursor
+            try saveCursor(
+                householdID: householdID,
+                kind: Self.catalogCorrectionsKind,
+                cursor: since
+            )
             if !page.has_more { break }
         } while true
     }
@@ -927,6 +959,90 @@ public final class SyncEngine {
             }
         }
         try context.save()
+    }
+
+    /// Phase 4D — pull-side upsert for the catalog corrections delta
+    /// feed. Mirrors `upsertJournalEntries`/`upsertPetDepartures` with
+    /// two additions:
+    ///
+    /// 1. **Transition detection.** When an existing row's status was
+    ///    `open` / `reviewed` and the incoming DTO is `applied` or
+    ///    `dismissed`, capture the id into `correctionsToNotify`. After
+    ///    `context.save()` we post `.catalogCorrectionsChanged` on the
+    ///    main actor with the captured ids so
+    ///    `CatalogCorrectionNotifier` can debounce + schedule the
+    ///    user-facing pings.
+    ///
+    /// 2. **Tombstone hard-delete + UN cleanup.** Rows with
+    ///    `deleted_at != nil` are removed from SwiftData and any
+    ///    pending UN request for that correction is cancelled so the
+    ///    lock screen doesn't carry ghost pings for a withdrawn /
+    ///    revoked correction.
+    ///
+    /// `applied_patch` cache invalidation is handled at the
+    /// `LocalCatalogCorrection` row level — `CatalogCorrectionDTO.apply`
+    /// writes `appliedFieldName` / `appliedNewValue` from
+    /// `applied_patch` when the row transitions to `applied`. SeedDetail
+    /// reads those fields on appear so the new value lands without
+    /// waiting on a follow-up `catalogByID` round-trip.
+    private func upsertCatalogCorrections(_ items: [CatalogCorrectionDTO]) throws {
+        let context = ModelContext(container)
+        var correctionsToNotify: [String] = []
+        var idsToCancelPing: [String] = []
+        for dto in items {
+            let id = dto.id
+            let descriptor = FetchDescriptor<LocalCatalogCorrection>(
+                predicate: #Predicate { $0.id == id }
+            )
+            if let existing = try context.fetch(descriptor).first {
+                if dto.deleted_at != nil {
+                    // Tombstone — hard-delete locally + sweep any
+                    // pending UN request so the user doesn't get a
+                    // stale lock-screen ping for a withdrawn /
+                    // server-revoked correction.
+                    idsToCancelPing.append(existing.id)
+                    context.delete(existing)
+                } else {
+                    let priorStatus = existing.status
+                    let nextStatus = dto.status
+                    let wasPending = priorStatus == "open" || priorStatus == "reviewed"
+                    let nowTerminal = nextStatus == "applied" || nextStatus == "dismissed"
+                    if wasPending && nowTerminal {
+                        correctionsToNotify.append(id)
+                    }
+                    dto.apply(to: existing)
+                }
+            } else if dto.deleted_at == nil {
+                // First sight of this row — if it lands already in a
+                // terminal state (e.g. the user transitioned across a
+                // device switch) treat it as a fresh transition so the
+                // notifier still gets a chance to inform the user.
+                if dto.status == "applied" || dto.status == "dismissed" {
+                    correctionsToNotify.append(id)
+                }
+                context.insert(dto.makeLocal())
+            }
+        }
+        try context.save()
+        if !idsToCancelPing.isEmpty {
+            Task { @MainActor in
+                for id in idsToCancelPing {
+                    NotificationsCenter.shared.cancelCatalogCorrectionPing(
+                        correctionID: id
+                    )
+                }
+            }
+        }
+        if !correctionsToNotify.isEmpty {
+            let payload = correctionsToNotify
+            Task { @MainActor in
+                NotificationCenter.default.post(
+                    name: .catalogCorrectionsChanged,
+                    object: nil,
+                    userInfo: ["transitionedIDs": payload]
+                )
+            }
+        }
     }
 
     /// Hard-deletes the per-pet children of a planting whose parent is

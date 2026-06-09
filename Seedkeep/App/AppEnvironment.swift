@@ -128,6 +128,14 @@ public final class AppEnvironment {
         // (active-plantings debounce + system-timezone-change). The
         // service is idempotent so a second start() is a no-op.
         Task { await weatherWarnings.start() }
+        // Phase 4D — catalog-corrections orchestrator. Observes
+        // `.catalogCorrectionsChanged` posted by `SyncEngine` and
+        // schedules outcome pings (with cross-device dedup via the
+        // server ledger). Idempotent — safe to call from tests too.
+        CatalogCorrectionNotifier.shared.start(
+            client: client,
+            container: container
+        )
     }
 
     /// Surfaces an error to the user via `bannerError`. Replaces silent
@@ -300,6 +308,7 @@ public final class AppEnvironment {
             LocalAssistantKeyStatus.self,
             LocalPetMoodSnapshot.self,
             LocalPetDeparture.self,
+            LocalCatalogCorrection.self,
         ])
         let config = ModelConfiguration("seedkeep", schema: schema)
         do {
