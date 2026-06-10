@@ -570,6 +570,10 @@ public final class SyncEngine {
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchSeed(id: id, in: context) {
+            // Nullable fields are double-optional (contract decision 8):
+            // `if let` unwraps only the OUTER optional, so an omitted
+            // field (nil) is left alone while an explicit clear
+            // (.some(nil)) assigns nil through to the local row.
             if let s = patch.state { local.state = s }
             if let n = patch.packet_count { local.packetCount = n }
             if let lid = patch.location_id { local.locationID = lid }
@@ -770,6 +774,9 @@ public final class SyncEngine {
             if let c = patch.catalog_seed_id { local.catalogSeedID = c }
             if let k = patch.kind { local.kindRaw = k }
             if let p = patch.planned_for { local.plannedFor = p }
+            // completed_at is double-optional: omitted leaves the local
+            // value alone; .some(nil) (mark incomplete) clears it, which
+            // also flows into the reminder reschedule branch below.
             if let done = patch.completed_at { local.completedAt = done }
             if let n = patch.notes { local.notes = n }
             if let x = patch.x_feet { local.xFeet = x }

@@ -345,9 +345,12 @@ struct BedDetailView: View {
 
     private func markIncomplete(_ event: LocalPlantingEvent) {
         do {
+            // `.some(nil)` -> JSON null (explicit-null pattern, contract
+            // decision 8). The old `completed_at: 0` sentinel was mapped
+            // by nothing — the server stored "completed Jan 1 1970".
             try appEnv.sync.enqueueUpdatePlantingEvent(
                 id: event.id,
-                SeedkeepClient.UpdatePlantingEventInput(completed_at: 0)
+                SeedkeepClient.UpdatePlantingEventInput(completed_at: .some(nil))
             )
         } catch {
             appEnv.surfaceError(error)
