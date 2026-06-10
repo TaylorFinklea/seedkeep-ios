@@ -79,7 +79,7 @@ final class NotificationsCenter {
 
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone.current
-        guard let fire = cal.date(byAdding: .hour, value: 7, to: cal.startOfDay(for: date)),
+        guard let fire = Self.reminderFireDate(onDayOf: date, calendar: cal),
               fire > Date() else { return }
 
         let body = seedName.map { "\(kindLabel) · \($0)" } ?? kindLabel
@@ -88,6 +88,22 @@ final class NotificationsCenter {
             title: "Planned for today",
             body: body,
             fireDate: fire
+        )
+    }
+
+    /// DST-safe "7am on the day of `date`". `startOfDay + 7 elapsed
+    /// hours` lands at 8am on spring-forward days and 6am on fall-back
+    /// days; `bySettingHour` pins the wall clock instead. Mirrors the
+    /// weather evaluators' fire-time math (Evaluators.swift).
+    nonisolated static func reminderFireDate(onDayOf date: Date, calendar: Calendar) -> Date? {
+        calendar.date(
+            bySettingHour: 7,
+            minute: 0,
+            second: 0,
+            of: calendar.startOfDay(for: date),
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
         )
     }
 

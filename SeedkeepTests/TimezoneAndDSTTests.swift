@@ -204,6 +204,40 @@ struct TimezoneAndDSTTests {
         #expect(fireComps.minute == 0)
     }
 
+    // MARK: - Planting-event reminder: 7am wall-clock, DST-safe
+
+    @Test("planting-event reminder fires at 7am wall-clock, including DST transition days", arguments: zoneIdentifiers)
+    func eventReminderSevenAMWallClock(zoneID: String) {
+        guard let tz = TimeZone(identifier: zoneID) else {
+            Issue.record("invalid TZ: \(zoneID)")
+            return
+        }
+        let cal = Self.calendar(in: tz)
+        // US spring-forward (Mar 8) + fall-back (Nov 1), the southern-
+        // hemisphere transitions Lord Howe observes (Apr 5 / Oct 4 — its
+        // quirky 30-minute jump), and a plain mid-June day. The old
+        // `startOfDay + 7h` math fired at 8am / 6am (or :30 offsets on
+        // Lord Howe) on the transition days.
+        let days: [(Int, Int, Int)] = [
+            (2026, 3, 8),
+            (2026, 11, 1),
+            (2026, 4, 5),
+            (2026, 10, 4),
+            (2026, 6, 15),
+        ]
+        for (year, month, day) in days {
+            let date = Self.midnight(year: year, month: month, day: day, in: tz)
+            guard let fire = NotificationsCenter.reminderFireDate(onDayOf: date, calendar: cal) else {
+                Issue.record("no fire date for \(year)-\(month)-\(day) in \(zoneID)")
+                continue
+            }
+            let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: fire)
+            #expect(comps.hour == 7, "reminder must fire 7am wall-clock on \(year)-\(month)-\(day) in \(zoneID), got \(comps.hour ?? -1)")
+            #expect(comps.minute == 0, "minute must be 0 on \(year)-\(month)-\(day) in \(zoneID)")
+            #expect(comps.day == day, "reminder must stay on the planned day in \(zoneID)")
+        }
+    }
+
     // MARK: - Identifier YMD is home-TZ-bound
 
     @Test("identifier YMD is computed in home-TZ (not device-TZ)", arguments: zoneIdentifiers)

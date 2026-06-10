@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import SeedkeepKit
+import UserNotifications
 
 /// Phase 4D — orchestrator that turns `SyncEngine` status-transition
 /// posts into user-facing local notifications, deduped across devices
@@ -13,7 +14,9 @@ import SeedkeepKit
 ///
 /// 1. Honors the `seedkeep.notif.catalog` UserDefaults toggle BEFORE
 ///    asking the system for authorization, so a disabled toggle never
-///    prompts.
+///    prompts. Then snapshots the UN authorization status (without
+///    prompting) and bails when not granted — an unauthorized device
+///    must never claim the household's notification slot in the ledger.
 /// 2. Calls `GET /api/catalog/corrections/:id/notified` — if ANY
 ///    device id is already in the ledger, skip (a sibling device on the
 ///    same account already pinged the user). First writer wins.
@@ -45,6 +48,14 @@ final class CatalogCorrectionNotifier {
 
     private var client: SeedkeepClient?
     private var container: ModelContainer?
+
+    /// Test hook — overrides the UN authorization read in
+    /// `scheduleBatch`. Production (nil) reads
+    /// `NotificationsCenter.shared.authorizationStatus()`. The unit-test
+    /// process can't grant UN authorization, so the suite injects
+    /// `.authorized` / `.denied` here.
+    var authorizationStatusOverrideForTesting: (() async -> UNAuthorizationStatus)?
+
     private var observerToken: NSObjectProtocol?
     private var debounceTask: Task<Void, Never>?
     /// Accumulates transitioned ids across debounce window posts so a
@@ -144,6 +155,28 @@ final class CatalogCorrectionNotifier {
     private func scheduleBatch(ids: [String]) async {
         guard UserDefaults.standard.bool(forKey: "seedkeep.notif.catalog") else { return }
         guard let client, let container else { return }
+
+        // OS-authorization gate — checked BEFORE any ledger read/write.
+        // The POST below permanently claims the household's one
+        // notification slot; on a device whose UN permission is denied
+        // (or never granted) the subsequent schedule silently no-ops in
+        // `ensureGranted()`, so the ping would be consumed and lost for
+        // every device. Status only — never `requestAuthorization` on
+        // this path: prompting from a background sync is wrong UX, and
+        // awaiting the prompt hangs the unit-test process while the
+        // status is `.notDetermined`.
+        let authStatus: UNAuthorizationStatus
+        if let override = authorizationStatusOverrideForTesting {
+            authStatus = await override()
+        } else {
+            authStatus = await NotificationsCenter.shared.authorizationStatus()
+        }
+        switch authStatus {
+        case .authorized, .provisional, .ephemeral:
+            break
+        default:
+            return
+        }
 
         // Snapshot local rows by id. Rows may have already been
         // tombstoned between the sync post and this flush; skip ids

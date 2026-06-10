@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import SwiftData
+@preconcurrency import UserNotifications
 @testable import Seedkeep
 import SeedkeepKit
 
@@ -139,7 +140,10 @@ struct CatalogCorrectionNotifierTests {
     /// each test. The `.serialized` suite trait guarantees ordering, so
     /// resetting at the top of each test is sufficient — no
     /// RAII-style scope needed.
-    private static func resetStubAndDefaults(toggle: Bool = true) {
+    private static func resetStubAndDefaults(
+        toggle: Bool = true,
+        authStatus: UNAuthorizationStatus = .authorized
+    ) {
         // Eagerly bootstrap so the notifier observer is registered
         // before the test posts a notification.
         _ = bootstrap
@@ -148,6 +152,12 @@ struct CatalogCorrectionNotifierTests {
         CorrNotifMockURLProtocol.setInsertedFlags([:])
         CorrNotifMockURLProtocol.setExtraRoutes([:])
         UserDefaults.standard.set(toggle, forKey: userDefaultsKey)
+        // The unit-test process can't grant real UN authorization (and
+        // the status check must never prompt), so the notifier's gate
+        // reads this injected status.
+        CatalogCorrectionNotifier.shared.authorizationStatusOverrideForTesting = {
+            authStatus
+        }
     }
 
     // MARK: - Test 1: cross-device dedup (skip when our device is in the ledger)
@@ -246,6 +256,51 @@ struct CatalogCorrectionNotifierTests {
             deviceID: "dev_x"
         )
         #expect(won == true, "inserted:true (claimed the slot) must surface as true")
+    }
+
+    // MARK: - Test 2d: OS-permission-denied device never claims the ledger
+
+    @Test("UN authorization denied: notifier skips BEFORE the ledger — no GET, no POST, slot left for siblings")
+    func deniedDeviceNeverClaimsLedger() async {
+        let id1 = "corr_auth_denied"
+        Self.resetStubAndDefaults(toggle: true, authStatus: .denied)
+        CorrNotifMockURLProtocol.setLedger([id1: []])
+        Self.seedRow(id: id1, status: "applied")
+
+        NotificationCenter.default.post(
+            name: .catalogCorrectionsChanged,
+            object: nil,
+            userInfo: ["transitionedIDs": [id1]]
+        )
+
+        await Self.waitForFlush()
+
+        let gets = CorrNotifMockURLProtocol.capturedNotifiedGETs()
+        let posts = CorrNotifMockURLProtocol.capturedNotifiedPOSTs()
+        #expect(gets.isEmpty, "denied device must not touch the ledger; got GETs \(gets)")
+        #expect(
+            posts.isEmpty,
+            "a device that cannot deliver must never consume the household's notification slot; got POSTs \(posts)"
+        )
+    }
+
+    @Test("UN authorization notDetermined: notifier skips without prompting (no ledger traffic)")
+    func notDeterminedSkipsWithoutPrompt() async {
+        let id1 = "corr_auth_notdet"
+        Self.resetStubAndDefaults(toggle: true, authStatus: .notDetermined)
+        CorrNotifMockURLProtocol.setLedger([id1: []])
+        Self.seedRow(id: id1, status: "applied")
+
+        NotificationCenter.default.post(
+            name: .catalogCorrectionsChanged,
+            object: nil,
+            userInfo: ["transitionedIDs": [id1]]
+        )
+
+        await Self.waitForFlush()
+
+        let posts = CorrNotifMockURLProtocol.capturedNotifiedPOSTs()
+        #expect(posts.isEmpty, "notDetermined must not claim the ledger (and must not prompt); got \(posts)")
     }
 
     // MARK: - Test 3: UserDefaults toggle-off short-circuits before ledger GET
