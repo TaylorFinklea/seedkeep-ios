@@ -679,4 +679,113 @@ struct WaterEvaluatorTests {
             Issue.record("expected .dryStretchStarting, got \(decision)")
         }
     }
+
+    // MARK: - Future ledger timestamp (cancel-before-fire fixes)
+
+    @Test("FUTURE ledger timestamp matching our pending request is ignored (own scheduled-not-fired reminder)")
+    func futureLedgerWithMatchingPendingIgnored() {
+        // The ledger stores scheduledFor at schedule time: after refresh 1
+        // schedules today's 8am reminder, refresh 2's GET returns that
+        // future timestamp. With the matching request still pending the
+        // evaluator must NOT dedup-skip — that skip is what cancelled the
+        // reminder before it ever fired.
+        let now = Self.anchorNow  // 03:00 home-TZ
+        guard let yesterday = Self.calendar.date(byAdding: .day, value: -1, to: now) else {
+            Issue.record("calendar.date failure"); return
+        }
+        let past = Self.observations(endingAt: yesterday, rainMM: 0, highF: 90, days: 5)
+        let forecast = Self.dryForecast(start: now)
+        // Today's 8am — 5h in the future.
+        let scheduledFor = now.addingTimeInterval(5 * 3_600)
+        let identifier = "seedkeep.notif.water."
+            + Identifier.isoDay(scheduledFor, in: Self.homeTimeZone)
+        let decision = WaterEvaluator.evaluate(
+            forecast: forecast,
+            past: past,
+            thresholds: .kc,
+            householdLastWaterAt: scheduledFor,
+            lastLocalFireDate: nil,
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone,
+            pendingFireDates: [identifier: scheduledFor]
+        )
+        if case .notify(let fireDate, let id, _) = decision {
+            #expect(id == identifier)
+            #expect(fireDate == scheduledFor)
+        } else {
+            Issue.record("expected .notify (pending reminder re-planned), got \(decision)")
+        }
+    }
+
+    @Test("FUTURE ledger timestamp with NO matching pending request still dedup-skips (sibling device will fire)")
+    func futureLedgerWithoutPendingStillSkips() {
+        let now = Self.anchorNow
+        guard let yesterday = Self.calendar.date(byAdding: .day, value: -1, to: now) else {
+            Issue.record("calendar.date failure"); return
+        }
+        let past = Self.observations(endingAt: yesterday, rainMM: 0, highF: 90, days: 5)
+        let forecast = Self.dryForecast(start: now)
+        let decision = WaterEvaluator.evaluate(
+            forecast: forecast,
+            past: past,
+            thresholds: .kc,
+            householdLastWaterAt: now.addingTimeInterval(5 * 3_600),
+            lastLocalFireDate: nil,
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone,
+            pendingFireDates: [:]
+        )
+        if case .skip(.dedupWindow) = decision {
+            // OK — the sibling that scheduled it will deliver.
+        } else {
+            Issue.record("expected .dedupWindow, got \(decision)")
+        }
+    }
+
+    @Test("refresh inside the pre-fire buffer keeps today's pending reminder instead of advancing to tomorrow")
+    func preFireBufferKeepsTodaysPendingReminder() {
+        // Now = 07:50 home-TZ; today's 8am reminder is pending. Advancing
+        // to tomorrow would change the identifier and cancel today's
+        // reminder minutes before delivery.
+        let cal = Self.calendar
+        let comps = DateComponents(
+            calendar: cal, timeZone: Self.homeTimeZone,
+            year: 2026, month: 7, day: 15, hour: 7, minute: 50
+        )
+        guard let now = cal.date(from: comps),
+              let yesterday = cal.date(byAdding: .day, value: -1, to: now),
+              let todayEight = cal.date(
+                bySettingHour: 8, minute: 0, second: 0,
+                of: cal.startOfDay(for: now),
+                matchingPolicy: .nextTime,
+                repeatedTimePolicy: .first,
+                direction: .forward
+              )
+        else {
+            Issue.record("calendar.date failure"); return
+        }
+        let past = Self.observations(endingAt: yesterday, rainMM: 0, highF: 90, days: 5)
+        let forecast = Self.dryForecast(start: now)
+        let identifier = "seedkeep.notif.water."
+            + Identifier.isoDay(todayEight, in: Self.homeTimeZone)
+        let decision = WaterEvaluator.evaluate(
+            forecast: forecast,
+            past: past,
+            thresholds: .kc,
+            householdLastWaterAt: nil,
+            lastLocalFireDate: nil,
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone,
+            pendingFireDates: [identifier: todayEight]
+        )
+        if case .notify(let fireDate, let id, _) = decision {
+            #expect(id == identifier, "must keep today's identifier, not advance to tomorrow")
+            #expect(fireDate == todayEight)
+        } else {
+            Issue.record("expected .notify keeping today's reminder, got \(decision)")
+        }
+    }
 }

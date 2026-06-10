@@ -538,7 +538,8 @@ actor WeatherWarningsService {
                 thresholdF: thresholds.frostLowF,
                 now: now,
                 calendar: calendar,
-                homeTimeZone: homeTimeZone
+                homeTimeZone: homeTimeZone,
+                pendingFireDates: pendingFireDates
             )
         } else {
             frostHits = []
@@ -583,7 +584,8 @@ actor WeatherWarningsService {
                 lastLocalFireDate: priorState.lastWaterFireDate,
                 now: now,
                 calendar: calendar,
-                homeTimeZone: homeTimeZone
+                homeTimeZone: homeTimeZone,
+                pendingFireDates: pendingFireDates
             )
         } else {
             waterDecision = nil
@@ -635,10 +637,37 @@ actor WeatherWarningsService {
             }
         }
 
+        // A pending water reminder is only removed when the evaluator
+        // AFFIRMATIVELY decided no-trigger (rain arrived, soil-dryness
+        // gate failed, toggle off). A dedup-window skip means "a reminder
+        // already covers this window" — for a future ledger timestamp
+        // that reminder IS the pending one, so removing it would cancel
+        // the household's only watering ping before it fires. The same
+        // keep applies when water evaluation didn't run for lack of data
+        // (suppressed forecast, insufficient history): no decision was
+        // made, so the standing reminder stays.
+        let keepPendingWater: Bool
+        if !prereqs.toggles.water {
+            keepPendingWater = false
+        } else if waterSuppressed {
+            keepPendingWater = true
+        } else {
+            switch waterDecision {
+            case .skip(.dedupWindow), .skip(.insufficientHistory):
+                keepPendingWater = true
+            default:
+                keepPendingWater = false
+            }
+        }
+
         let kept = keepIDs.union(Set(toReplaceIDs))
         let toRemove: [String] = ourPending
             .map(\.identifier)
-            .filter { !kept.contains($0) }
+            .filter { id in
+                if kept.contains(id) { return false }
+                if keepPendingWater && id.hasPrefix(IdPrefix.water) { return false }
+                return true
+            }
 
         // o. Apply removals first, then adds.
         let removeIDs = Array(Set(toRemove + toReplaceIDs))

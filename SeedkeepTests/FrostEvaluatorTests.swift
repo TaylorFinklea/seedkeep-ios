@@ -175,26 +175,25 @@ struct FrostEvaluatorTests {
         #expect(hits.isEmpty)
     }
 
-    @Test("fireDate 59s in the future is skipped (15-min buffer); 61s past buffer schedules")
+    @Test("fireDate 59s past the buffer keeps the canonical 8am; inside the buffer falls back to ASAP")
     func fireBufferBoundary() {
         let cal = Self.calendar
-        // Build "now" = 2026-02-11 07:59:01 home-TZ.
-        // A frost on 2026-02-12 schedules at 2026-02-11 08:00:00 (i.e.
-        // 59 seconds in the future) — within the 15-minute buffer.
+        // Build "now" = 2026-02-11 07:44:01 home-TZ.
+        // A frost on 2026-02-12 schedules at 2026-02-11 08:00:00.
+        // earliestFire = now + 15*60 = 2026-02-11 07:59:01.
+        // 08:00:00 > 07:59:01 → 59 seconds head-room → canonical fire.
         let beforeBuffer = DateComponents(
             calendar: cal, timeZone: Self.homeTimeZone,
             year: 2026, month: 2, day: 11, hour: 7, minute: 44, second: 1
         )
-        guard let nowInsideBuffer = cal.date(from: beforeBuffer) else {
-            Issue.record("could not construct nowInsideBuffer")
+        guard let nowOutsideBuffer = cal.date(from: beforeBuffer) else {
+            Issue.record("could not construct nowOutsideBuffer")
             return
         }
-        // Frost on 2026-02-12 → schedule 2026-02-11 08:00.
-        // earliestFire = nowInsideBuffer + 15*60 = 2026-02-11 07:59:01.
-        // 08:00:00 > 07:59:01 → 59 seconds head-room → SHOULD schedule.
-        // Build the opposite case: now = 2026-02-11 07:46:00 home-TZ
-        // (14 minutes before 08:00); earliestFire = 08:01:00 — fireDate
-        // 08:00:00 is < earliestFire → should be filtered.
+        // Opposite case: now = 2026-02-11 07:46:00 home-TZ (14 minutes
+        // before 08:00); earliestFire = 08:01:00 — the canonical fire is
+        // inside the buffer, the frost night is still ahead, and nothing
+        // is pending → late-discovery ASAP fire at earliestFire.
         let withinBufferComps = DateComponents(
             calendar: cal, timeZone: Self.homeTimeZone,
             year: 2026, month: 2, day: 11, hour: 7, minute: 46, second: 0
@@ -211,16 +210,87 @@ struct FrostEvaluatorTests {
             calendar: cal,
             homeTimeZone: Self.homeTimeZone
         )
-        #expect(hitsInsideBuffer.isEmpty)
+        #expect(hitsInsideBuffer.count == 1)
+        #expect(
+            hitsInsideBuffer.first?.fireDate == nowWithinBuffer.addingTimeInterval(15 * 60),
+            "late-discovered frost must fall back to an ASAP fire, not vanish"
+        )
 
         let hitsOutsideBuffer = FrostEvaluator.evaluate(
             forecast: forecast,
             thresholdF: 33.0,
-            now: nowInsideBuffer,
+            now: nowOutsideBuffer,
             calendar: cal,
             homeTimeZone: Self.homeTimeZone
         )
         #expect(hitsOutsideBuffer.count == 1)
+        let comps = cal.dateComponents([.hour, .minute], from: hitsOutsideBuffer.first?.fireDate ?? .distantPast)
+        #expect(comps.hour == 8)
+        #expect(comps.minute == 0)
+    }
+
+    // MARK: - Late discovery + pre-fire-buffer keep (cancel-before-fire fixes)
+
+    @Test("frost first seen after the canonical fire time delivers ASAP while the frost night is ahead")
+    func lateDiscoveryDeliversASAP() {
+        // Now = 2026-02-11 14:00 home-TZ. Frost overnight into 2026-02-12;
+        // the canonical fire (2026-02-11 08:00) already passed, but the
+        // frost is ~10h away — "cover tender plants tonight" must still go
+        // out instead of never warning at all.
+        let cal = Self.calendar
+        let comps = DateComponents(
+            calendar: cal, timeZone: Self.homeTimeZone,
+            year: 2026, month: 2, day: 11, hour: 14, minute: 0
+        )
+        guard let now = cal.date(from: comps) else {
+            Issue.record("could not construct test now")
+            return
+        }
+        let forecast = [Self.day("2026-02-12", lowF: 28.0)]
+        let hits = FrostEvaluator.evaluate(
+            forecast: forecast,
+            thresholdF: 33.0,
+            now: now,
+            calendar: cal,
+            homeTimeZone: Self.homeTimeZone
+        )
+        #expect(hits.count == 1)
+        #expect(hits.first?.fireDate == now.addingTimeInterval(15 * 60))
+        #expect(hits.first?.identifier == "seedkeep.notif.frost.2026-02-12")
+    }
+
+    @Test("refresh inside the pre-fire buffer keeps the already-pending fire date")
+    func preFireBufferKeepsPendingFireDate() {
+        // Now = 2026-02-11 07:50 home-TZ; the 08:00 warning is pending.
+        // The evaluator must re-plan it with the PENDING fire date so the
+        // diff keeps it — not drop it (cancel) or push it out to ASAP.
+        let cal = Self.calendar
+        let nowComps = DateComponents(
+            calendar: cal, timeZone: Self.homeTimeZone,
+            year: 2026, month: 2, day: 11, hour: 7, minute: 50
+        )
+        let fireComps = DateComponents(
+            calendar: cal, timeZone: Self.homeTimeZone,
+            year: 2026, month: 2, day: 11, hour: 8, minute: 0
+        )
+        guard let now = cal.date(from: nowComps),
+              let pendingFire = cal.date(from: fireComps) else {
+            Issue.record("could not construct dates")
+            return
+        }
+        let identifier = "seedkeep.notif.frost.2026-02-12"
+        let forecast = [Self.day("2026-02-12", lowF: 28.0)]
+        let hits = FrostEvaluator.evaluate(
+            forecast: forecast,
+            thresholdF: 33.0,
+            now: now,
+            calendar: cal,
+            homeTimeZone: Self.homeTimeZone,
+            pendingFireDates: [identifier: pendingFire]
+        )
+        #expect(hits.count == 1)
+        #expect(hits.first?.fireDate == pendingFire)
+        #expect(hits.first?.identifier == identifier)
     }
 
     // MARK: - Identifier is home-TZ-bound

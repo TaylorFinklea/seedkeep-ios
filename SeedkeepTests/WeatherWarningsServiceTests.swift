@@ -535,6 +535,124 @@ struct WeatherWarningsServiceTests {
         #expect(row?.outcome != nil)
     }
 
+    // MARK: - Watering cancel-before-fire pair (second refresh w/ pending)
+
+    @Test("watering reminder survives a second refresh that reads back the future ledger timestamp")
+    func waterPendingSurvivesSecondRefresh() async {
+        let harness = await Self.makeHarness(toggles: (false, false, true))
+        harness.provider.setForecast(Self.dryWarmForecast(start: Self.anchorNow))
+        harness.provider.setObserved(Self.dryWarmObservations(endingAtYesterdayOf: Self.anchorNow))
+        harness.watering.setGetResult(.success(nil))
+
+        _ = await harness.service.refreshAll(reason: .test)
+        let waterIDs = harness.scheduler.pendingSnapshot
+            .map(\.identifier)
+            .filter { $0.hasPrefix("seedkeep.notif.water.") }
+        #expect(!waterIDs.isEmpty, "first refresh must schedule a watering reminder")
+        guard let put = harness.watering.recordedPuts.first else {
+            Issue.record("first refresh must PUT the scheduled fireDate to the ledger")
+            return
+        }
+
+        // THE regression: the ledger now holds the FUTURE scheduledFor;
+        // the next refresh's GET returns it, the evaluator dedup-skipped,
+        // and the diff removed the still-pending reminder — so nobody in
+        // the household ever got it.
+        harness.watering.setGetResult(.success(put.scheduledFor))
+        _ = await harness.service.refreshAll(reason: .activePlantingsChanged)
+
+        let after = Set(
+            harness.scheduler.pendingSnapshot
+                .map(\.identifier)
+                .filter { $0.hasPrefix("seedkeep.notif.water.") }
+        )
+        for id in waterIDs {
+            #expect(after.contains(id), "pending watering reminder \(id) was cancelled by the follow-up refresh")
+        }
+    }
+
+    @Test("dedup-window skip KEEPS an existing pending water reminder (sibling future timestamp)")
+    func dedupSkipKeepsPendingWaterReminder() async {
+        let harness = await Self.makeHarness(toggles: (false, false, true))
+        harness.provider.setForecast(Self.dryWarmForecast(start: Self.anchorNow))
+        harness.provider.setObserved(Self.dryWarmObservations(endingAtYesterdayOf: Self.anchorNow))
+        // A FUTURE household timestamp that does NOT match our pending
+        // request (a sibling device scheduled its own reminder) →
+        // evaluator dedup-skips. The skip must keep our pending reminder
+        // rather than removing it: removal is only correct on an
+        // affirmative no-trigger decision.
+        harness.watering.setGetResult(.success(Self.anchorNow.addingTimeInterval(2 * 86_400)))
+
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = Self.homeTimeZone
+        guard let pendingFire = cal.date(
+            bySettingHour: 8, minute: 0, second: 0,
+            of: cal.startOfDay(for: Self.anchorNow),
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        ) else {
+            Issue.record("calendar.date failure")
+            return
+        }
+        let identifier = "seedkeep.notif.water."
+            + Identifier.isoDay(pendingFire, in: Self.homeTimeZone)
+        var trigComps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: pendingFire)
+        trigComps.timeZone = Self.homeTimeZone
+        let pendingRequest = UNNotificationRequest(
+            identifier: identifier,
+            content: UNMutableNotificationContent(),
+            trigger: UNCalendarNotificationTrigger(dateMatching: trigComps, repeats: false)
+        )
+        harness.scheduler.seedPending([pendingRequest])
+
+        _ = await harness.service.refreshAll(reason: .test)
+
+        let after = harness.scheduler.pendingSnapshot.map(\.identifier)
+        #expect(after.contains(identifier), "dedup-window skip must not cancel the pending water reminder")
+    }
+
+    // MARK: - Frost pre-fire-buffer refresh keeps pending warning
+
+    @Test("refresh inside the 15-min pre-fire buffer keeps the pending frost warning")
+    func preFireBufferRefreshKeepsFrostWarning() async {
+        // Now = 07:50; the 08:00 frost warning (for tomorrow's frost) is
+        // pending. The buffer guard used to drop the hit from `planned`,
+        // and the diff cancelled it ten minutes before it fired.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = Self.homeTimeZone
+        let nowComps = DateComponents(
+            calendar: cal, timeZone: Self.homeTimeZone,
+            year: 2026, month: 7, day: 15, hour: 7, minute: 50
+        )
+        let fireComps = DateComponents(
+            calendar: cal, timeZone: Self.homeTimeZone,
+            year: 2026, month: 7, day: 15, hour: 8, minute: 0
+        )
+        guard let now = cal.date(from: nowComps),
+              let pendingFire = cal.date(from: fireComps) else {
+            Issue.record("calendar.date failure")
+            return
+        }
+        let harness = await Self.makeHarness(now: now, toggles: (true, false, false))
+        harness.provider.setForecast(Self.coldForecast(start: now))
+
+        let identifier = "seedkeep.notif.frost.2026-07-16"
+        var trigComps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: pendingFire)
+        trigComps.timeZone = Self.homeTimeZone
+        let pendingRequest = UNNotificationRequest(
+            identifier: identifier,
+            content: UNMutableNotificationContent(),
+            trigger: UNCalendarNotificationTrigger(dateMatching: trigComps, repeats: false)
+        )
+        harness.scheduler.seedPending([pendingRequest])
+
+        _ = await harness.service.refreshAll(reason: .test)
+
+        let after = harness.scheduler.pendingSnapshot.map(\.identifier)
+        #expect(after.contains(identifier), "pre-fire-buffer refresh must not cancel the pending frost warning")
+    }
+
     /// 4-day dome (96°F) starting the day after `start`, then mild days.
     private static func hotDomeForecast(start: Date) -> [DailyWeather] {
         var cal = Calendar(identifier: .gregorian)

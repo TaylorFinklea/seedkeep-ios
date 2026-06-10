@@ -112,7 +112,12 @@ enum FrostEvaluator {
         now: Date,
         calendar: Calendar,
         homeTimeZone: TimeZone,
-        fireBufferSeconds: TimeInterval = 15 * 60
+        fireBufferSeconds: TimeInterval = 15 * 60,
+        /// Fire dates of OUR still-pending notification requests, keyed by
+        /// identifier. Lets a refresh inside the pre-fire buffer keep the
+        /// already-scheduled warning instead of cancelling it minutes
+        /// before delivery.
+        pendingFireDates: [String: Date] = [:]
     ) -> [Hit] {
         var hits: [Hit] = []
         let earliestFire = now.addingTimeInterval(fireBufferSeconds)
@@ -121,11 +126,16 @@ enum FrostEvaluator {
             // 1) Strict-less-than threshold (32.9°F fires, 33.0°F doesn't).
             guard day.lowF < thresholdF else { continue }
 
-            // 2) Prior day's midnight (home-TZ) → 8am.
+            // 2) TZ-bound identifier — must use Identifier.isoDay so the id
+            //    matches the legacy frost id char-for-char on upgrade.
+            let identifier = WeatherWarningIdPrefix.frost
+                + Identifier.isoDay(day.date, in: homeTimeZone)
+
+            // 3) Prior day's midnight (home-TZ) → 8am.
             guard let priorDay = calendar.date(byAdding: .day, value: -1, to: day.date) else {
                 continue
             }
-            guard let fireDate = calendar.date(
+            guard var fireDate = calendar.date(
                 bySettingHour: 8,
                 minute: 0,
                 second: 0,
@@ -137,13 +147,24 @@ enum FrostEvaluator {
                 continue
             }
 
-            // 3) Future-only filter — 15-min buffer absorbs scheduling latency.
-            guard fireDate > earliestFire else { continue }
-
-            // 4) TZ-bound identifier — must use Identifier.isoDay so the id
-            //    matches the legacy frost id char-for-char on upgrade.
-            let identifier = WeatherWarningIdPrefix.frost
-                + Identifier.isoDay(day.date, in: homeTimeZone)
+            // 4) Canonical fire time already passed (or is inside the
+            //    15-min scheduling buffer):
+            //    - our notification is still pending → keep its fire date
+            //      so the diff preserves it (a refresh at 7:50am must not
+            //      cancel the 8:00am warning);
+            //    - frost night still ahead → deliver ASAP ("cover tender
+            //      plants tonight" — a frost first forecast after 8am on
+            //      the prior day must still warn);
+            //    - frost morning already begun → nothing to deliver.
+            if fireDate <= earliestFire {
+                if let pendingFire = pendingFireDates[identifier] {
+                    fireDate = pendingFire
+                } else if day.date > now {
+                    fireDate = earliestFire
+                } else {
+                    continue
+                }
+            }
 
             hits.append(Hit(
                 frostDate: day.date,
@@ -229,7 +250,8 @@ enum HeatEvaluator {
                     calendar: calendar,
                     homeTimeZone: homeTimeZone,
                     now: now,
-                    fireBufferSeconds: fireBufferSeconds
+                    fireBufferSeconds: fireBufferSeconds,
+                    pendingFireDates: pendingFireDates
                 ) {
                     domeHits.append(hit)
                     // Mark every day in this run as dome-covered so the
@@ -257,7 +279,8 @@ enum HeatEvaluator {
                 calendar: calendar,
                 homeTimeZone: homeTimeZone,
                 now: now,
-                fireBufferSeconds: fireBufferSeconds
+                fireBufferSeconds: fireBufferSeconds,
+                pendingFireDates: pendingFireDates
             ) {
                 extremeHits.append(hit)
             }
@@ -309,20 +332,21 @@ enum HeatEvaluator {
     }
 
     /// Build a single `Hit` for the supplied hot day. Returns nil if the
-    /// fire date falls outside the future-only buffer or any calendar math
-    /// fails (DST-skipped 7pm hour, end-of-calendar overflow).
+    /// heat day has already begun (and nothing is pending) or any calendar
+    /// math fails (DST-skipped 7pm hour, end-of-calendar overflow).
     private static func makeHit(
         day: DailyWeather,
         variant: Variant,
         calendar: Calendar,
         homeTimeZone: TimeZone,
         now: Date,
-        fireBufferSeconds: TimeInterval
+        fireBufferSeconds: TimeInterval,
+        pendingFireDates: [String: Date]
     ) -> Hit? {
         guard let priorDay = calendar.date(byAdding: .day, value: -1, to: day.date) else {
             return nil
         }
-        guard let fireDate = calendar.date(
+        guard var fireDate = calendar.date(
             bySettingHour: 19,
             minute: 0,
             second: 0,
@@ -333,10 +357,24 @@ enum HeatEvaluator {
         ) else {
             return nil
         }
-        guard fireDate > now.addingTimeInterval(fireBufferSeconds) else { return nil }
 
         let identifier = WeatherWarningIdPrefix.heat
             + Identifier.isoDay(day.date, in: homeTimeZone)
+
+        // Canonical 7pm-evening-before already passed (or inside the
+        // 15-min buffer): keep a still-pending warning's fire date so a
+        // pre-fire refresh doesn't cancel it; otherwise deliver ASAP when
+        // the hot day is still ahead (first forecast after 7pm); drop it
+        // once the hot day has begun.
+        if fireDate <= now.addingTimeInterval(fireBufferSeconds) {
+            if let pendingFire = pendingFireDates[identifier] {
+                fireDate = pendingFire
+            } else if day.date > now {
+                fireDate = now.addingTimeInterval(fireBufferSeconds)
+            } else {
+                return nil
+            }
+        }
 
         return Hit(
             heatDate: day.date,
@@ -382,7 +420,12 @@ enum WaterEvaluator {
         now: Date,
         calendar: Calendar,
         homeTimeZone: TimeZone,
-        fireBufferSeconds: TimeInterval = 15 * 60
+        fireBufferSeconds: TimeInterval = 15 * 60,
+        /// Fire dates of OUR still-pending notification requests, keyed by
+        /// identifier. A FUTURE ledger timestamp matching a pending request
+        /// is this household's own scheduled-but-not-yet-fired reminder —
+        /// it must not dedup-suppress (and thereby cancel) itself.
+        pendingFireDates: [String: Date] = [:]
     ) -> Decision {
         // ── Build the past-N-days YMD set anchored at YESTERDAY. ────────
         // Step 1 (history sufficiency) checks a slightly wider window
@@ -453,7 +496,21 @@ enum WaterEvaluator {
         }
 
         // 5) ── Dedup + variant selection. ──────────────────────────────
-        let effectiveLastWaterAt = householdLastWaterAt ?? lastLocalFireDate
+        // The ledger stores scheduledFor at SCHEDULE time, so a future
+        // timestamp that matches one of our pending requests is just our
+        // own not-yet-fired reminder — treating it as a prior fire would
+        // dedup-skip, drop the warning from `planned`, and cancel the
+        // pending notification before it ever delivers.
+        var effectiveLastWaterAt = householdLastWaterAt ?? lastLocalFireDate
+        if let last = effectiveLastWaterAt, last > now {
+            let matchesPending = pendingFireDates.contains { id, fire in
+                id.hasPrefix(WeatherWarningIdPrefix.water)
+                    && abs(fire.timeIntervalSince(last)) < 60
+            }
+            if matchesPending {
+                effectiveLastWaterAt = nil
+            }
+        }
         let reason: FireReason
         if let last = effectiveLastWaterAt {
             let elapsed = now.timeIntervalSince(last)
@@ -483,6 +540,19 @@ enum WaterEvaluator {
             return .skip(.noTriggersInForecast)
         }
         if fireDate <= now.addingTimeInterval(fireBufferSeconds) {
+            // A refresh inside the pre-fire buffer (e.g. 7:50am for an
+            // 8:00am reminder) must keep today's still-pending request
+            // rather than advancing to tomorrow — the identifier change
+            // would cancel it minutes before delivery.
+            let todayIdentifier = WeatherWarningIdPrefix.water
+                + Identifier.isoDay(fireDate, in: homeTimeZone)
+            if pendingFireDates[todayIdentifier] != nil {
+                return .notify(
+                    fireDate: fireDate,
+                    identifier: todayIdentifier,
+                    reason: reason
+                )
+            }
             guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) else {
                 return .skip(.noTriggersInForecast)
             }

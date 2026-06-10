@@ -333,6 +333,76 @@ struct HeatEvaluatorTests {
         #expect(hits.count == 1)
     }
 
+    // MARK: - Late discovery (canonical 7pm fire already passed)
+
+    @Test("heat day first seen after 7pm the evening before delivers ASAP")
+    func lateDiscoveryDeliversASAP() {
+        // Now = 2026-07-04 21:00 — two hours past the canonical fire for
+        // a dome starting 2026-07-05. The hot day is still ahead, so the
+        // warning must go out ASAP instead of never.
+        guard let now = Self.calendar.date(
+            bySettingHour: 21, minute: 0, second: 0,
+            of: Self.midnight("2026-07-04"),
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        ) else {
+            Issue.record("calendar.date failure")
+            return
+        }
+        let forecast = [
+            Self.day("2026-07-05", highF: 96),
+            Self.day("2026-07-06", highF: 96),
+            Self.day("2026-07-07", highF: 96),
+            Self.day("2026-07-08", highF: 96),
+        ]
+        let hits = HeatEvaluator.evaluate(
+            forecast: forecast,
+            thresholds: .kc,
+            lastHeatDomeFireDate: nil,
+            lastHeatEventDate: now.addingTimeInterval(-3 * 86_400),
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone
+        )
+        #expect(hits.count == 1)
+        #expect(hits.first?.fireDate == now.addingTimeInterval(15 * 60))
+        #expect(hits.first?.identifier == "seedkeep.notif.heat.2026-07-05")
+    }
+
+    @Test("hot day already begun (and nothing pending) emits no hit")
+    func hotDayBegunNoHit() {
+        // Now = 2026-07-05 10:00 — the first dome day is in progress.
+        guard let now = Self.calendar.date(
+            bySettingHour: 10, minute: 0, second: 0,
+            of: Self.midnight("2026-07-05"),
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        ) else {
+            Issue.record("calendar.date failure")
+            return
+        }
+        let forecast = [
+            Self.day("2026-07-05", highF: 96),
+            Self.day("2026-07-06", highF: 96),
+            Self.day("2026-07-07", highF: 96),
+            Self.day("2026-07-08", highF: 96),
+        ]
+        // The dome hit is keyed to the run's first day (07-05), which has
+        // already begun — with nothing pending there is nothing to warn.
+        let hits = HeatEvaluator.evaluate(
+            forecast: forecast,
+            thresholds: .kc,
+            lastHeatDomeFireDate: nil,
+            lastHeatEventDate: now.addingTimeInterval(-3 * 86_400),
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone
+        )
+        #expect(hits.isEmpty)
+    }
+
     // MARK: - Fire time (7pm evening BEFORE)
 
     @Test("fire time is 7pm home-TZ on prior calendar day")
