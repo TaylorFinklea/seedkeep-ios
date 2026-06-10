@@ -37,14 +37,21 @@ fail() { echo -e "${RED}✘ $1${NC}"; exit 1; }
 
 # ---------- flags ----------
 BUMP_TYPE="build"
+SKIP_TESTS=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build) BUMP_TYPE="build"; shift ;;
         --patch) BUMP_TYPE="patch"; shift ;;
         --minor) BUMP_TYPE="minor"; shift ;;
-        *) fail "Unknown flag: $1. Use --build, --patch, or --minor." ;;
+        --skip-tests) SKIP_TESTS=true; shift ;;
+        *) fail "Unknown flag: $1. Use --build, --patch, --minor, or --skip-tests." ;;
     esac
 done
+
+# ---------- dirty tree check (before any version mutation) ----------
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    fail "Working tree is dirty. Commit or stash changes before releasing."
+fi
 
 # ---------- App Store Connect API key ----------
 ASC_KEY_PATH="${ASC_API_KEY_PATH:-$HOME/.appstoreconnect/AuthKey_J79935N6P6.p8}"
@@ -71,6 +78,19 @@ if [[ "$BUMP_TYPE" != "build" ]]; then
         patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
         minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
     esac
+fi
+
+# ---------- run tests before mutating anything ----------
+if [[ "$SKIP_TESTS" == "false" ]]; then
+    step "Running tests (xcodebuild test)"
+    xcodebuild \
+        -project "$REPO_ROOT/Seedkeep.xcodeproj" \
+        -scheme "Seedkeep" \
+        -destination 'platform=iOS Simulator,name=iPhone 16' \
+        test 2>&1 | grep -E "Test Suite|FAILED|error:|Executed [0-9]+" | tail -5
+    # xcodebuild exits non-zero on test failure, which kills the script via set -e.
+else
+    echo "[release] WARNING: skipping tests (--skip-tests)"
 fi
 
 step "Bumping version ($BUMP_TYPE)"
