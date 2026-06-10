@@ -10,9 +10,10 @@ import SeedkeepKit
 /// server marks `deleted_at`.
 ///
 /// **Push**: `flushPending()` drains `LocalPendingWrite` rows in createdAt
-/// order. On 2xx, it removes the pending row. On error it bumps
-/// `attemptCount` and stores `lastError`. Phase 1 doesn't add backoff —
-/// retries fire on the next `syncAll()` (see step E for hardening).
+/// order (serialized — concurrent callers await the in-flight pass). On
+/// 2xx, it removes the pending row. Definitive rejections bump
+/// `attemptCount` toward dead-letter; transient failures (offline / 5xx /
+/// 429) only push `nextAttemptAt` out, honoring `retry_after_seconds`.
 ///
 /// **Optimistic writes**: `enqueueCreate / enqueueUpdate / enqueueDelete`
 /// mutate the local entity AND insert a `LocalPendingWrite` in a single
@@ -218,7 +219,40 @@ public final class SyncEngine {
 
     // MARK: - Push (write queue)
 
+    /// In-flight flush pass. `flushPending` is fired directly from many
+    /// UI paths (SeedDetail field changes, onDisappear, Tags/Locations,
+    /// AddSeed) and can overlap a foreground `syncAll` — without a
+    /// serialization guard a second pass re-fetches the same pending rows
+    /// while the first is suspended mid-`dispatch`, POSTing duplicates.
+    private var flushTask: Task<Void, Error>?
+
+    /// Ids of pending writes currently awaiting their network dispatch.
+    /// Enqueue coalescing must NOT merge into these — the in-flight
+    /// request was built from the old payload, and the row is deleted on
+    /// success, so a merged-in edit would be silently lost.
+    private var inFlightWriteIDs: Set<String> = []
+
+    /// Backoff for transient (non-counting) failures — offline, 5xx,
+    /// un-hinted 429. Short enough that recovery isn't sluggish, long
+    /// enough that an offline editing session doesn't hammer retries.
+    static let transientRetryMillis: Int64 = 15_000
+
+    /// Serialized entry point: if a pass is already running, await it
+    /// instead of dispatching the same rows a second time. Rows enqueued
+    /// while a pass is in flight ride the next trigger (every UI call
+    /// site re-fires after enqueueing, and `syncAll` always flushes).
     public func flushPending() async throws {
+        if let inFlight = flushTask {
+            try await inFlight.value
+            return
+        }
+        let task = Task<Void, Error> { try await performFlushPass() }
+        flushTask = task
+        defer { flushTask = nil }
+        try await task.value
+    }
+
+    private func performFlushPass() async throws {
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<LocalPendingWrite>(
             sortBy: [SortDescriptor(\.createdAt, order: .forward)]
@@ -230,6 +264,9 @@ public final class SyncEngine {
             // hasn't elapsed.
             if write.isDeadLettered { continue }
             if write.nextAttemptAt > now { continue }
+
+            inFlightWriteIDs.insert(write.id)
+            defer { inFlightWriteIDs.remove(write.id) }
 
             do {
                 try await dispatch(write)
@@ -247,19 +284,72 @@ public final class SyncEngine {
                 }
                 context.delete(write)
                 try context.save()
-            } catch let err as SeedkeepError where write.operation == "delete" && err.code == "not_found" {
-                // A delete that the server says doesn't exist is a no-op
-                // success: the row is already gone (or never reached the
-                // server because its create failed). Either way our local
-                // intent — "this row should be deleted" — is satisfied.
+            } catch let err as SeedkeepError where
+                (write.operation == "delete" || write.operation == "update")
+                && err.code == "not_found" {
+                // A delete the server says doesn't exist is a no-op
+                // success: the row is already gone. An update against a
+                // tombstoned row (sibling device deleted it; our pull
+                // already removed the local row) is equally unsalvageable
+                // — retrying can never succeed, so dead-lettering it just
+                // parks permanent junk in Settings. Drop both cleanly.
                 context.delete(write)
                 try? context.save()
             } catch let err as SeedkeepError {
-                handleFailure(write, message: "\(err.code): \(err.message)", in: context)
+                if Self.isTransientFailure(err) {
+                    deferRetry(
+                        write,
+                        message: "\(err.code): \(err.message)",
+                        retryAfterSeconds: err.retryAfterSeconds,
+                        in: context)
+                } else {
+                    handleFailure(write, message: "\(err.code): \(err.message)", in: context)
+                }
+            } catch let err as URLError {
+                // Transport failure (offline, timeout, connection lost):
+                // the write was never rejected, so it must not strike
+                // toward the dead-letter quota.
+                deferRetry(
+                    write,
+                    message: err.localizedDescription,
+                    retryAfterSeconds: nil,
+                    in: context)
             } catch {
                 handleFailure(write, message: error.localizedDescription, in: context)
             }
         }
+    }
+
+    /// Failure classification (Stabilization B3): transport errors, 5xx,
+    /// and 429 are *transient* — they say nothing about the validity of
+    /// the write, so they back off without consuming a dead-letter
+    /// strike. Only definitive rejections (4xx, locally-minted errors,
+    /// 200-decode drift) count toward `maxAttempts`.
+    static func isTransientFailure(_ err: SeedkeepError) -> Bool {
+        if let status = err.httpStatus {
+            return status == 429 || status >= 500
+        }
+        // No HTTP status (locally minted) — only the rate-limit code is
+        // known-transient.
+        return err.code == "rate_limited"
+    }
+
+    /// Push the row's next attempt out WITHOUT incrementing
+    /// `attemptCount`. Honors the server's `retry_after_seconds` hint on
+    /// 429s (contract: envelope-level sibling, decoded in Batch 1).
+    private func deferRetry(
+        _ write: LocalPendingWrite,
+        message: String,
+        retryAfterSeconds: Int?,
+        in context: ModelContext
+    ) {
+        write.lastError = message
+        if let retryAfterSeconds, retryAfterSeconds > 0 {
+            write.nextAttemptAt = Self.nowMs() + Int64(retryAfterSeconds) * 1_000
+        } else {
+            write.nextAttemptAt = Self.nowMs() + Self.transientRetryMillis
+        }
+        try? context.save()
     }
 
     /// Reset dead-lettered pending writes that reference an entity we
@@ -290,6 +380,66 @@ public final class SyncEngine {
             }
         }
         try? context.save()
+    }
+
+    /// Inserts an update pending-write, COALESCING into an existing
+    /// queued update for the same (entityType, entityID) when one exists.
+    /// SeedDetail's identity/notes fields enqueue per keystroke — without
+    /// coalescing a 40-character note creates ~40 queue rows that flush
+    /// as ~40 sequential PATCHes. Merging is a shallow JSON overlay (new
+    /// keys win, including explicit nulls) so the double-optional
+    /// clear semantics survive. Rows that are dead-lettered or currently
+    /// in flight are never merged into: the in-flight request was built
+    /// from the old payload and the row is deleted on success, so a
+    /// merged edit would be lost.
+    private func enqueueOrCoalesceUpdate(
+        entityType: String,
+        entityID: String,
+        payload: Data,
+        now: Int64,
+        in context: ModelContext
+    ) throws {
+        let payloadString = String(decoding: payload, as: UTF8.self)
+        let typeMatch = entityType
+        let idMatch = entityID
+        // 2-clause predicate + post-fetch filter: 3-condition #Predicate
+        // trips the SwiftData macro type-checker in this codebase.
+        let descriptor = FetchDescriptor<LocalPendingWrite>(
+            predicate: #Predicate { $0.entityType == typeMatch && $0.entityID == idMatch }
+        )
+        let candidates = try context.fetch(descriptor).filter {
+            $0.operation == "update"
+                && !$0.isDeadLettered
+                && !inFlightWriteIDs.contains($0.id)
+        }
+        if let existing = candidates.max(by: { $0.createdAt < $1.createdAt }),
+           let merged = Self.mergedPatchJSON(base: existing.payloadJSON, overlay: payloadString) {
+            existing.payloadJSON = merged
+            try context.save()
+            return
+        }
+        context.insert(LocalPendingWrite(
+            id: "pw_\(UUID().uuidString)",
+            entityType: entityType, entityID: entityID, operation: "update",
+            payloadJSON: payloadString,
+            createdAt: now
+        ))
+        try context.save()
+    }
+
+    /// Shallow JSON-object merge: overlay keys (including JSON null —
+    /// the explicit-clear marker) replace base keys. Returns nil when
+    /// either side isn't a JSON object, in which case the caller inserts
+    /// a fresh row instead of risking data loss.
+    static func mergedPatchJSON(base: String, overlay: String) -> String? {
+        guard var baseObj = (try? JSONSerialization.jsonObject(with: Data(base.utf8))) as? [String: Any],
+              let overlayObj = (try? JSONSerialization.jsonObject(with: Data(overlay.utf8))) as? [String: Any]
+        else { return nil }
+        for (key, value) in overlayObj { baseObj[key] = value }
+        guard JSONSerialization.isValidJSONObject(baseObj),
+              let data = try? JSONSerialization.data(withJSONObject: baseObj)
+        else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func handleFailure(_ write: LocalPendingWrite, message: String, in context: ModelContext) {
@@ -453,13 +603,9 @@ public final class SyncEngine {
             local.updatedAt = now
         }
         let payload = try JSONEncoder().encode(LocationUpdate(name: name, sort_order: sortOrder))
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "location", entityID: id, operation: "update",
-            payloadJSON: String(decoding: payload, as: UTF8.self),
-            createdAt: now
-        ))
-        try context.save()
+        try enqueueOrCoalesceUpdate(
+            entityType: "location", entityID: id,
+            payload: payload, now: now, in: context)
     }
 
     public func enqueueDeleteLocation(id: String) throws {
@@ -508,13 +654,9 @@ public final class SyncEngine {
             name: name,
             color: color.flatMap { $0 }
         ))
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "tag", entityID: id, operation: "update",
-            payloadJSON: String(decoding: payload, as: UTF8.self),
-            createdAt: now
-        ))
-        try context.save()
+        try enqueueOrCoalesceUpdate(
+            entityType: "tag", entityID: id,
+            payload: payload, now: now, in: context)
     }
 
     public func enqueueDeleteTag(id: String) throws {
@@ -592,13 +734,9 @@ public final class SyncEngine {
             local.updatedAt = now
         }
         let payload = try JSONEncoder().encode(patch)
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "seed", entityID: id, operation: "update",
-            payloadJSON: String(decoding: payload, as: UTF8.self),
-            createdAt: now
-        ))
-        try context.save()
+        try enqueueOrCoalesceUpdate(
+            entityType: "seed", entityID: id,
+            payload: payload, now: now, in: context)
     }
 
     /// Updates the local-only growing-info snapshot on a seed. Not sent to
@@ -685,13 +823,9 @@ public final class SyncEngine {
             local.updatedAt = now
         }
         let payload = try JSONEncoder().encode(patch)
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "bed", entityID: id, operation: "update",
-            payloadJSON: String(decoding: payload, as: UTF8.self),
-            createdAt: now
-        ))
-        try context.save()
+        try enqueueOrCoalesceUpdate(
+            entityType: "bed", entityID: id,
+            payload: payload, now: now, in: context)
     }
 
     public func enqueueDeleteBed(id: String) throws {
@@ -799,13 +933,9 @@ public final class SyncEngine {
             local.updatedAt = now
         }
         let payload = try JSONEncoder().encode(patch)
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "planting_event", entityID: id, operation: "update",
-            payloadJSON: String(decoding: payload, as: UTF8.self),
-            createdAt: now
-        ))
-        try context.save()
+        try enqueueOrCoalesceUpdate(
+            entityType: "planting_event", entityID: id,
+            payload: payload, now: now, in: context)
         // Phase 4 C — reschedule (or cancel, if completed) the reminder.
         if let local = try fetchPlantingEvent(id: id, in: context) {
             if local.completedAt != nil {
