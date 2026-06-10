@@ -47,23 +47,33 @@ public final class SyncEngine {
         guard !isSyncing else { return }
         isSyncing = true
         defer { isSyncing = false }
-        do {
-            try await pullLocations(householdID: householdID)
-            try await pullTags(householdID: householdID)
-            try await pullSeeds(householdID: householdID)
-            try await pullBeds(householdID: householdID)
-            try await pullPlantingEvents(householdID: householdID)
-            try await pullPetDepartures(householdID: householdID)
-            try await pullCatalogCorrections(householdID: householdID)
-            try await pullJournalEntries(householdID: householdID)
-            try await pullAssistantThreads(householdID: householdID)
-            try await flushPending()
-            lastError = nil
-        } catch let err as SeedkeepError {
-            lastError = "\(err.code): \(err.message)"
-        } catch {
-            lastError = error.localizedDescription
+
+        // Each pull feed is isolated in its own do/catch so one poisoned
+        // row (or a transient per-route failure) can't abort the later
+        // feeds — and `flushPending` is ALWAYS attempted, so the push
+        // queue never starves behind a broken pull. Feed errors are
+        // aggregated into `lastError`.
+        var errors: [String] = []
+        func record(_ feed: String, _ error: Error) {
+            if let err = error as? SeedkeepError {
+                errors.append("\(feed): \(err.code): \(err.message)")
+            } else {
+                errors.append("\(feed): \(error.localizedDescription)")
+            }
         }
+
+        do { try await pullLocations(householdID: householdID) } catch { record("locations", error) }
+        do { try await pullTags(householdID: householdID) } catch { record("tags", error) }
+        do { try await pullSeeds(householdID: householdID) } catch { record("seeds", error) }
+        do { try await pullBeds(householdID: householdID) } catch { record("beds", error) }
+        do { try await pullPlantingEvents(householdID: householdID) } catch { record("planting_events", error) }
+        do { try await pullPetDepartures(householdID: householdID) } catch { record("pet_departures", error) }
+        do { try await pullCatalogCorrections(householdID: householdID) } catch { record("catalog_corrections", error) }
+        do { try await pullJournalEntries(householdID: householdID) } catch { record("journal_entries", error) }
+        do { try await pullAssistantThreads(householdID: householdID) } catch { record("assistant_threads", error) }
+        do { try await flushPending() } catch { record("push", error) }
+
+        lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
     }
 
     private func pullLocations(householdID: String) async throws {
@@ -174,10 +184,16 @@ public final class SyncEngine {
             householdID: householdID,
             kind: Self.catalogCorrectionsKind
         )
+        // Cursor at its initial value means this is the FIRST pull on
+        // this install/device — the feed replays the user's entire
+        // correction history, so first-sight terminal rows are ingested
+        // without being treated as fresh transitions (no notification
+        // pings for months-old outcomes).
+        let isInitialSync = cursor == 0
         var since = cursor
         repeat {
             let page = try await client.catalogCorrectionsMine(since: since)
-            try upsertCatalogCorrections(page.items)
+            try upsertCatalogCorrections(page.items, isInitialSync: isInitialSync)
             since = page.cursor
             try saveCursor(
                 householdID: householdID,
@@ -979,13 +995,18 @@ public final class SyncEngine {
     ///    lock screen doesn't carry ghost pings for a withdrawn /
     ///    revoked correction.
     ///
-    /// `applied_patch` cache invalidation is handled at the
-    /// `LocalCatalogCorrection` row level — `CatalogCorrectionDTO.apply`
-    /// writes `appliedFieldName` / `appliedNewValue` from
-    /// `applied_patch` when the row transitions to `applied`. SeedDetail
-    /// reads those fields on appear so the new value lands without
-    /// waiting on a follow-up `catalogByID` round-trip.
-    private func upsertCatalogCorrections(_ items: [CatalogCorrectionDTO]) throws {
+    /// `applied_patch` consumption: rows arriving `applied` with an
+    /// `applied_patch` payload patch the matching `LocalSeed` rows'
+    /// growing-info snapshots in place (idempotent — re-applying the
+    /// same value is a no-op), so SeedDetail and CatalogFeedbackSheet's
+    /// `client_seen_value` read the fresh value without a follow-up
+    /// `catalogByID` round-trip. The patch values are also captured on
+    /// the local correction row (`appliedFieldName` / `appliedNewValue`)
+    /// for notification copy.
+    private func upsertCatalogCorrections(
+        _ items: [CatalogCorrectionDTO],
+        isInitialSync: Bool = false
+    ) throws {
         let context = ModelContext(container)
         var correctionsToNotify: [String] = []
         var idsToCancelPing: [String] = []
@@ -1017,10 +1038,26 @@ public final class SyncEngine {
                 // terminal state (e.g. the user transitioned across a
                 // device switch) treat it as a fresh transition so the
                 // notifier still gets a chance to inform the user.
-                if dto.status == "applied" || dto.status == "dismissed" {
+                // EXCEPT on the initial sync (cursor 0), where the feed
+                // replays the full history — those are old outcomes,
+                // not transitions.
+                if !isInitialSync, dto.status == "applied" || dto.status == "dismissed" {
                     correctionsToNotify.append(id)
                 }
                 context.insert(dto.makeLocal())
+            }
+            // Applied corrections refresh the stale growing-info
+            // snapshot on any matching library seeds.
+            if dto.deleted_at == nil,
+               dto.status == "applied",
+               let patch = dto.applied_patch,
+               let catalogSeedID = dto.catalog_seed_id {
+                patchGrowingInfoSnapshots(
+                    catalogSeedID: catalogSeedID,
+                    fieldName: patch.field_name,
+                    newValue: patch.new_value,
+                    in: context
+                )
             }
         }
         try context.save()
@@ -1041,6 +1078,31 @@ public final class SyncEngine {
                     object: nil,
                     userInfo: ["transitionedIDs": payload]
                 )
+            }
+        }
+    }
+
+    /// Applies a correction's `applied_patch` to the local growing-info
+    /// snapshot of every library seed linked to the corrected catalog
+    /// entry. Without this, `effectiveGrowingInfo` keeps preferring the
+    /// save-time snapshot and the applied fix never surfaces in
+    /// SeedDetail (and a follow-up correction would echo a stale
+    /// `client_seen_value`). Fields the snapshot doesn't carry (e.g.
+    /// `variety`, `company`) are skipped — the snapshot only mirrors
+    /// growing-info columns.
+    private func patchGrowingInfoSnapshots(
+        catalogSeedID: String,
+        fieldName: String,
+        newValue: String,
+        in context: ModelContext
+    ) {
+        let descriptor = FetchDescriptor<LocalSeed>(
+            predicate: #Predicate { $0.catalogID == catalogSeedID }
+        )
+        for seed in (try? context.fetch(descriptor)) ?? [] {
+            guard var snap = seed.growingInfo else { continue }
+            if snap.applyCorrection(fieldName: fieldName, rawValue: newValue) {
+                seed.growingInfo = snap
             }
         }
     }

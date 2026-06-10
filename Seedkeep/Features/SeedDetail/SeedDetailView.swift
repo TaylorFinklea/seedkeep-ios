@@ -427,6 +427,7 @@ struct SeedDetailView: View {
             row_spacing_inches: c.row_spacing_inches,
             hardiness_zone_min: c.hardiness_zone_min,
             hardiness_zone_max: c.hardiness_zone_max,
+            viability_years: c.viability_years,
             instructions: c.instructions
         )
     }

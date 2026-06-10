@@ -147,13 +147,18 @@ struct CatalogCorrectionSyncTests {
         }
     }
 
+    /// Mirrors the REAL wire shape: `field_name` / `value_type` /
+    /// `suggested_value` are nullable (free-form "Something else"
+    /// submissions and legacy pre-4D feedback rows carry NULL for all
+    /// three — stabilization contract decision 1, no server coalescing).
     private static func makeCorrectionJSON(
         id: String,
         catalogSeedID: String? = "cs_x",
         catalogSeedName: String? = "Sungold",
-        fieldName: String = "days_to_maturity_min",
-        valueType: String = "integer",
-        suggestedValue: String = "70",
+        fieldName: String? = "days_to_maturity_min",
+        valueType: String? = "integer",
+        suggestedValue: String? = "70",
+        body: String? = nil,
         status: String = "open",
         appliedAt: Int64? = nil,
         reviewedAt: Int64? = nil,
@@ -172,6 +177,10 @@ struct CatalogCorrectionSyncTests {
         }
         let catalogSeedIDField = catalogSeedID.map { "\"\($0)\"" } ?? "null"
         let catalogSeedNameField = catalogSeedName.map { "\"\($0)\"" } ?? "null"
+        let fieldNameField = fieldName.map { "\"\($0)\"" } ?? "null"
+        let valueTypeField = valueType.map { "\"\($0)\"" } ?? "null"
+        let suggestedValueField = suggestedValue.map { "\"\($0)\"" } ?? "null"
+        let bodyField = body.map { "\"\($0)\"" } ?? "null"
         let appliedAtField = appliedAt.map(String.init) ?? "null"
         let reviewedAtField = reviewedAt.map(String.init) ?? "null"
         let deletedAtField = deletedAt.map(String.init) ?? "null"
@@ -180,11 +189,11 @@ struct CatalogCorrectionSyncTests {
           "id":"\(id)",
           "catalog_seed_id":\(catalogSeedIDField),
           "catalog_seed_name":\(catalogSeedNameField),
-          "field_name":"\(fieldName)",
-          "value_type":"\(valueType)",
-          "suggested_value":"\(suggestedValue)",
+          "field_name":\(fieldNameField),
+          "value_type":\(valueTypeField),
+          "suggested_value":\(suggestedValueField),
           "client_seen_value":null,
-          "body":null,
+          "body":\(bodyField),
           "status":"\(status)",
           "ai_review_score":null,
           "ai_notes":null,
@@ -276,6 +285,18 @@ struct CatalogCorrectionSyncTests {
     func idempotentResyncSilent() async {
         let container = Self.makeContainer()
 
+        // A non-zero cursor marks this device as already past its
+        // initial sync — first-sight terminal rows on later pulls are
+        // genuine cross-device transitions and should still ping.
+        let context = ModelContext(container)
+        context.insert(LocalSyncCursor(
+            householdID: Self.householdID,
+            kind: "catalog_corrections",
+            cursor: 1_716_000_000_000,
+            lastSyncedAt: 1_716_000_000_000
+        ))
+        try? context.save()
+
         // Server delivers the row in applied state on every sync.
         let id = "corr_idem"
         let now: Int64 = 1_717_000_000_000
@@ -294,7 +315,9 @@ struct CatalogCorrectionSyncTests {
         let engine = SyncEngine(client: client, container: container)
 
         // First sync: row lands fresh → notification fires (first-sight
-        // terminal-state rule in `upsertCatalogCorrections`).
+        // terminal-state rule in `upsertCatalogCorrections` — the
+        // cursor is non-zero, so this isn't suppressed as initial-sync
+        // history replay).
         let firstCapture = Self.captureNextNotification(expectedIDs: [id])
         await engine.syncAll(householdID: Self.householdID)
         await firstCapture.drain()
@@ -457,6 +480,220 @@ struct CatalogCorrectionSyncTests {
         #expect(cursorRow?.cursor == secondUpdatedAt,
                 "cursor should advance to the final page's cursor; got \(String(describing: cursorRow?.cursor))")
     }
+
+    // MARK: - Test 6: free-form (null field_name) rows decode and land locally
+
+    @Test("free-form row with null field_name/value_type/suggested_value (real wire shape) decodes — sync is not wedged")
+    func freeFormNullFieldsDecode() async {
+        let container = Self.makeContainer()
+
+        // The REAL wire shape for the sheet's DEFAULT mode ("Something
+        // else") and for every legacy pre-4D feedback row: all three
+        // structured columns are NULL.
+        let id = "corr_freeform"
+        let now: Int64 = 1_717_000_000_000
+        let body = Self.envelope(
+            items: [Self.makeCorrectionJSON(
+                id: id,
+                fieldName: nil,
+                valueType: nil,
+                suggestedValue: nil,
+                body: "Days to maturity is 75-85, not 60.",
+                status: "open",
+                updatedAt: now
+            )],
+            cursor: now,
+            hasMore: false
+        )
+        let client = Self.makeRoutedClient(routes: [Self.correctionsPath: body])
+        let engine = SyncEngine(client: client, container: container)
+
+        await engine.syncAll(householdID: Self.householdID)
+
+        #expect(engine.lastError == nil,
+                "free-form row must not poison the sync: \(String(describing: engine.lastError))")
+
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalCatalogCorrection>(
+            predicate: #Predicate { $0.id == id }
+        )
+        let row = try? context.fetch(descriptor).first
+        #expect(row != nil, "free-form row should land locally")
+        #expect(row?.fieldName == nil)
+        #expect(row?.valueType == nil)
+        #expect(row?.suggestedValue == nil)
+        #expect(row?.body == "Days to maturity is 75-85, not 60.")
+        #expect(row?.status == "open")
+
+        // The cursor must advance past the row so the feed isn't
+        // permanently stuck behind it.
+        let cursorKey = LocalSyncCursor.key(
+            householdID: Self.householdID,
+            kind: "catalog_corrections"
+        )
+        let cursorDescriptor = FetchDescriptor<LocalSyncCursor>(
+            predicate: #Predicate { $0.id == cursorKey }
+        )
+        let cursorRow = try? context.fetch(cursorDescriptor).first
+        #expect(cursorRow?.cursor == now)
+    }
+
+    // MARK: - Test 7: a poisoned feed doesn't starve later pulls or flushPending
+
+    @Test("poisoned corrections feed: later pulls still run and flushPending still drains the queue")
+    func poisonedFeedDoesNotStarveQueue() async throws {
+        let container = Self.makeContainer()
+
+        // Corrections feed persistently errors; the location create
+        // POST succeeds with the standard { location } wrapper.
+        let locationDTO = """
+        {"ok":true,"data":{"location":{"id":"loc_server_1","household_id":"\(Self.householdID)","name":"Shed","sort_order":0,"created_at":1,"updated_at":2,"deleted_at":null}}}
+        """
+        let client = Self.makeRoutedClient(routes: [
+            Self.correctionsPath: Data(#"{"ok":false,"error":{"code":"server_error","message":"poisoned row"}}"#.utf8),
+            "POST /api/locations": Data(locationDTO.utf8),
+        ])
+        let engine = SyncEngine(client: client, container: container)
+
+        // Queue a local write so flushPending has something to push.
+        _ = try engine.enqueueCreateLocation(
+            name: "Shed",
+            householdID: Self.householdID
+        )
+
+        await engine.syncAll(householdID: Self.householdID)
+
+        // Pulls AFTER the poisoned feed still ran.
+        let paths = CatalogRouterMockURLProtocol.capturedPaths()
+        #expect(paths.contains("/api/journal"),
+                "journal pull (after corrections in the sweep) must still run; got \(paths)")
+        #expect(paths.contains("/api/assistant/threads"),
+                "assistant pull must still run; got \(paths)")
+
+        // flushPending ran and drained the queue.
+        let context = ModelContext(container)
+        let pending = (try? context.fetch(FetchDescriptor<LocalPendingWrite>())) ?? []
+        #expect(pending.isEmpty,
+                "push queue must drain even when a pull feed is poisoned; \(pending.count) rows left")
+
+        // The feed error is surfaced, attributed to its feed.
+        #expect(engine.lastError?.contains("catalog_corrections") == true,
+                "lastError should aggregate the poisoned feed: \(String(describing: engine.lastError))")
+        #expect(engine.lastError?.contains("server_error") == true)
+    }
+
+    // MARK: - Test 8: applied_patch patches the matching seed's growing-info snapshot
+
+    @Test("applied transition patches LocalSeed.growingInfo from applied_patch")
+    func appliedPatchUpdatesSeedSnapshot() async {
+        let container = Self.makeContainer()
+        let context = ModelContext(container)
+
+        // A library seed linked to the corrected catalog entry, with a
+        // stale save-time snapshot.
+        context.insert(LocalSeed(
+            id: "seed_snap",
+            householdID: Self.householdID,
+            catalogID: "cs_x",
+            state: .active,
+            packetCount: 1,
+            source: .store,
+            customName: "Sungold",
+            growingInfo: GrowingInfoSnapshot(days_to_maturity_min: 60),
+            createdAt: 1_716_000_000_000,
+            updatedAt: 1_716_000_000_000
+        ))
+        // The open correction the server is about to flip.
+        let id = "corr_snap"
+        context.insert(LocalCatalogCorrection(
+            id: id,
+            catalogSeedID: "cs_x",
+            catalogSeedName: "Sungold",
+            fieldName: "days_to_maturity_min",
+            valueType: "integer",
+            suggestedValue: "70",
+            status: "open",
+            createdAt: 1_716_900_000_000,
+            updatedAt: 1_716_900_000_000
+        ))
+        try? context.save()
+
+        let now: Int64 = 1_717_000_000_000
+        let body = Self.envelope(
+            items: [Self.makeCorrectionJSON(
+                id: id,
+                status: "applied",
+                appliedAt: now,
+                reviewedAt: now,
+                updatedAt: now,
+                appliedPatchField: "days_to_maturity_min",
+                appliedPatchValue: "70"
+            )],
+            cursor: now,
+            hasMore: false
+        )
+        let client = Self.makeRoutedClient(routes: [Self.correctionsPath: body])
+        let engine = SyncEngine(client: client, container: container)
+
+        await engine.syncAll(householdID: Self.householdID)
+
+        let descriptor = FetchDescriptor<LocalSeed>(
+            predicate: #Predicate { $0.id == "seed_snap" }
+        )
+        let seed = try? context.fetch(descriptor).first
+        #expect(seed?.growingInfo?.days_to_maturity_min == 70,
+                "applied_patch must refresh the stale snapshot; got \(String(describing: seed?.growingInfo?.days_to_maturity_min))")
+    }
+
+    // MARK: - Test 9: first sync (cursor 0) suppresses historical terminal pings
+
+    @Test("first sync (cursor 0) ingests terminal rows WITHOUT notification pings")
+    func firstSyncSuppressesHistoricalPings() async {
+        let container = Self.makeContainer()
+
+        // Fresh install: no cursor row, server replays the full history
+        // including months-old terminal outcomes.
+        let appliedID = "corr_hist_applied"
+        let dismissedID = "corr_hist_dismissed"
+        let now: Int64 = 1_717_000_000_000
+        let body = Self.envelope(
+            items: [
+                Self.makeCorrectionJSON(
+                    id: appliedID,
+                    status: "applied",
+                    appliedAt: now - 5_000_000,
+                    reviewedAt: now - 5_000_000,
+                    updatedAt: now - 5_000_000
+                ),
+                Self.makeCorrectionJSON(
+                    id: dismissedID,
+                    status: "dismissed",
+                    reviewedAt: now - 4_000_000,
+                    updatedAt: now - 4_000_000
+                ),
+            ],
+            cursor: now,
+            hasMore: false
+        )
+        let client = Self.makeRoutedClient(routes: [Self.correctionsPath: body])
+        let engine = SyncEngine(client: client, container: container)
+
+        let capture = Self.captureNextNotification(
+            expectedIDs: [appliedID, dismissedID]
+        )
+        await engine.syncAll(householdID: Self.householdID)
+        await capture.drain()
+
+        #expect(capture.posted.isEmpty,
+                "initial sync must not replay historical terminal pings; got \(capture.posted)")
+
+        // Rows still land locally for YouView.
+        let context = ModelContext(container)
+        let rows = (try? context.fetch(FetchDescriptor<LocalCatalogCorrection>())) ?? []
+        let ids = Set(rows.map(\.id))
+        #expect(ids.contains(appliedID))
+        #expect(ids.contains(dismissedID))
+    }
 }
 
 // MARK: - Router URL protocol with sequence support
@@ -514,12 +751,18 @@ final class CatalogRouterMockURLProtocol: URLProtocol, @unchecked Sendable {
         Self.lock.lock()
         Self.capturedRequests.append(request)
         let path = request.url?.path ?? ""
+        let method = request.httpMethod ?? "GET"
         let body: Data
         if let seq = Self.sequences[path], !seq.isEmpty {
             let cursor = Self.sequenceCursors[path] ?? 0
             let idx = min(cursor, seq.count - 1)
             body = seq[idx]
             Self.sequenceCursors[path] = cursor + 1
+        } else if let methodRouted = Self.routes["\(method) \(path)"] {
+            // Method-qualified routes ("POST /api/locations") take
+            // precedence so a pull GET and a push POST on the same
+            // path can be stubbed independently.
+            body = methodRouted
         } else if let routed = Self.routes[path] {
             body = routed
         } else {

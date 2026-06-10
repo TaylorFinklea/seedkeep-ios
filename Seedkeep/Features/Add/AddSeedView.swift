@@ -447,6 +447,7 @@ struct AddSeedView: View {
                 row_spacing_inches: cat.row_spacing_inches,
                 hardiness_zone_min: cat.hardiness_zone_min,
                 hardiness_zone_max: cat.hardiness_zone_max,
+                viability_years: cat.viability_years,
                 instructions: cat.instructions
             )
         case .extraction(let result, _):
