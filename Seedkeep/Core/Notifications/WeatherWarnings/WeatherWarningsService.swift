@@ -300,9 +300,31 @@ actor WeatherWarningsService {
 
     /// Foreground-only staleness gate. Bypassed for every other reason.
     /// Returns nil if the gate suppressed the refresh.
+    ///
+    /// Permission-regrant bypass: warnings are cleared while UN
+    /// authorization is denied, so when the persisted
+    /// `lastAuthStatusRaw` says denied but the live status is granted
+    /// (the user just re-enabled notifications in iOS Settings), the
+    /// gate is bypassed and the refresh runs as `.permissionRegranted`
+    /// — otherwise the user stares at zero warnings for up to 2h.
     @discardableResult
     func refreshAllIfStale(reason: RefreshReason) async -> RefreshOutcome? {
         if reason == .foreground {
+            let current = await scheduler.authorizationStatus()
+            let isGranted = current == .authorized
+                || current == .provisional
+                || current == .ephemeral
+            if isGranted {
+                let container = self.container
+                let persistedRaw = await MainActor.run { () -> Int? in
+                    let context = ModelContext(container)
+                    let descriptor = FetchDescriptor<LocalForecastSnapshot>()
+                    return (try? context.fetch(descriptor))?.first?.lastAuthStatusRaw
+                }
+                if persistedRaw == Int(UNAuthorizationStatus.denied.rawValue) {
+                    return await refreshAll(reason: .permissionRegranted)
+                }
+            }
             let last = await MainActor.run { projection.lastSuccessAt }
             if let last,
                clock.now.timeIntervalSince(last) < 2 * 3_600 {
@@ -716,13 +738,11 @@ actor WeatherWarningsService {
             await scheduler.removePendingNotificationRequests(withIdentifiers: removeIDs)
         }
 
-        var scheduledByKind: [WarningKind: Int] = [:]
         var scheduledIDs: Set<String> = []
         for warning in toAdd {
             let request = makeRequest(from: warning, in: homeTimeZone, calendar: calendar)
             do {
                 try await scheduler.add(request)
-                scheduledByKind[warning.kind, default: 0] += 1
                 scheduledIDs.insert(warning.identifier)
             } catch {
                 // Per-id failure — other ids continue.
@@ -752,6 +772,22 @@ actor WeatherWarningsService {
         //    before persisting `lastWaterFireDate`.
         let postPending = await scheduler.pendingNotificationRequests()
         let postPendingIDs = Set(postPending.map(\.identifier))
+
+        // Settings' "weather watch" must reflect what is PENDING — kept
+        // AND added — not just this refresh's adds. A keep-path refresh
+        // (identical plan 2h after scheduling) used to report
+        // .successNoWarnings ("No frost in the next 10 days.") while a
+        // frost warning sat pending for tomorrow.
+        var watchedByKind: [WarningKind: Int] = [:]
+        for id in postPendingIDs {
+            if id.hasPrefix(IdPrefix.frost) {
+                watchedByKind[.frost, default: 0] += 1
+            } else if id.hasPrefix(IdPrefix.heat) {
+                watchedByKind[.heat, default: 0] += 1
+            } else if id.hasPrefix(IdPrefix.water) {
+                watchedByKind[.water, default: 0] += 1
+            }
+        }
 
         var confirmedWaterFireDate: Date?
         var confirmedWaterHouseholdPOST: (id: String, fire: Date)?
@@ -802,13 +838,13 @@ actor WeatherWarningsService {
             )
         } else if droppedFurthestOut > 0 {
             outcome = .queueBudgetReachedWithDropped(
-                scheduledByKind: scheduledByKind,
+                scheduledByKind: watchedByKind,
                 droppedFurthestOut: droppedFurthestOut
             )
         } else if isProvisional {
             outcome = .provisionalDelivery
-        } else if scheduledByKind.values.allSatisfy({ $0 == 0 }) {
-            // Nothing scheduled and no errors — emit per-kind empties
+        } else if watchedByKind.values.allSatisfy({ $0 == 0 }) {
+            // Nothing pending and no errors — emit per-kind empties
             // for whichever toggles are on so Settings can render
             // "watching / nothing in sight" rows.
             var perKindEmpty: [WarningKind: Bool] = [:]
@@ -818,7 +854,7 @@ actor WeatherWarningsService {
             outcome = .successNoWarnings(perKindEmpty: perKindEmpty)
         } else {
             outcome = .success(
-                scheduledByKind: scheduledByKind,
+                scheduledByKind: watchedByKind,
                 heldByBudget: droppedFurthestOut
             )
         }

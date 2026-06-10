@@ -794,6 +794,66 @@ struct WeatherWarningsServiceTests {
         #expect(!frostAdds.isEmpty, "the re-run refresh must see the newly enabled frost toggle")
     }
 
+    // MARK: - Settings "weather watch" counts kept warnings (not just adds)
+
+    @Test("keep-path refresh still reports .success — kept pending warnings count toward scheduledByKind")
+    func keptWarningsCountedInOutcome() async {
+        let harness = await Self.makeHarness(toggles: (true, false, false))
+        harness.provider.setForecast(Self.coldForecast(start: Self.anchorNow))
+
+        let first = await harness.service.refreshAll(reason: .test)
+        guard case .success(let firstByKind, _) = first, (firstByKind[.frost] ?? 0) > 0 else {
+            Issue.record("first refresh should report .success with frost warnings, got \(first)")
+            return
+        }
+
+        // Second refresh, unchanged forecast: the diff keeps every pending
+        // warning, toAdd is empty — Settings used to render "No frost in
+        // the next 10 days." while a frost warning sat pending.
+        let second = await harness.service.refreshAll(reason: .test)
+        if case .success(let byKind, _) = second {
+            #expect((byKind[.frost] ?? 0) > 0, "kept frost warnings must be counted")
+        } else {
+            Issue.record("keep-path refresh must report .success, got \(second)")
+        }
+    }
+
+    // MARK: - Permission-regrant staleness bypass (producer)
+
+    @Test("denied→granted transition bypasses the 2h staleness gate; steady-state stays gated")
+    func permissionRegrantBypassesStalenessGate() async {
+        let harness = await Self.makeHarness()
+        harness.provider.setForecast(Self.benignForecast(start: Self.anchorNow))
+
+        // 1. Successful refresh while authorized — sets lastSuccessAt and
+        //    persists lastAuthStatusRaw = authorized.
+        _ = await harness.service.refreshAll(reason: .test)
+        #expect(harness.provider.recordedFetchCount == 1)
+
+        // 2. User denies notifications in iOS Settings; a refresh records
+        //    the denied status (and clears pending warnings).
+        harness.scheduler.setAuthorizationStatus(.denied)
+        let denied = await harness.service.refreshAll(reason: .manualRefresh)
+        guard case .permissionDenied = denied else {
+            Issue.record("expected .permissionDenied, got \(denied)")
+            return
+        }
+
+        // 3. User re-grants. A .foreground refresh lands inside the 2h
+        //    gate (FixedClock — zero seconds since lastSuccessAt); the
+        //    denied→authorized transition must bypass it.
+        harness.scheduler.setAuthorizationStatus(.authorized)
+        let outcome = await harness.service.refreshAllIfStale(reason: .foreground)
+        #expect(outcome != nil, "permission re-grant must bypass the staleness gate")
+        #expect(harness.provider.recordedFetchCount == 2, "the bypass refresh must actually run")
+
+        // 4. Steady state: persisted status is now authorized, so the
+        //    next foreground refresh inside the gate is suppressed again.
+        let suppressed = await harness.service.refreshAllIfStale(reason: .foreground)
+        #expect(suppressed == nil, "no transition → the 2h gate applies as before")
+        #expect(harness.provider.recordedFetchCount == 2)
+    }
+
     /// 4-day dome (96°F) starting the day after `start`, then mild days.
     private static func hotDomeForecast(start: Date) -> [DailyWeather] {
         var cal = Calendar(identifier: .gregorian)
