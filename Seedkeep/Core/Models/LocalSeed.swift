@@ -155,6 +155,7 @@ public struct GrowingInfoSnapshot: Codable, Sendable, Equatable {
     public var row_spacing_inches: Int?
     public var hardiness_zone_min: Int?
     public var hardiness_zone_max: Int?
+    public var viability_years: Int?
     public var instructions: String?
 
     public init(
@@ -174,6 +175,7 @@ public struct GrowingInfoSnapshot: Codable, Sendable, Equatable {
         row_spacing_inches: Int? = nil,
         hardiness_zone_min: Int? = nil,
         hardiness_zone_max: Int? = nil,
+        viability_years: Int? = nil,
         instructions: String? = nil
     ) {
         self.scientific_name = scientific_name
@@ -192,6 +194,7 @@ public struct GrowingInfoSnapshot: Codable, Sendable, Equatable {
         self.row_spacing_inches = row_spacing_inches
         self.hardiness_zone_min = hardiness_zone_min
         self.hardiness_zone_max = hardiness_zone_max
+        self.viability_years = viability_years
         self.instructions = instructions
     }
 
@@ -208,6 +211,62 @@ public struct GrowingInfoSnapshot: Codable, Sendable, Equatable {
             || plant_spacing_inches != nil
             || row_spacing_inches != nil
             || hardiness_zone_min != nil || hardiness_zone_max != nil
+            || viability_years != nil
             || (instructions?.isEmpty == false)
+    }
+
+    /// Applies a server-side catalog correction (`applied_patch`) to
+    /// this snapshot. Values arrive as strings (the audit log's
+    /// `new_value` text); numeric fields are parsed. Returns `false`
+    /// when the field isn't carried by the snapshot or the value
+    /// doesn't parse — callers leave the snapshot untouched then.
+    public mutating func applyCorrection(fieldName: String, rawValue: String) -> Bool {
+        switch fieldName {
+        case "scientific_name": scientific_name = rawValue
+        case "life_cycle": life_cycle = rawValue
+        case "sun_requirement": sun_requirement = rawValue
+        case "frost_tolerance": frost_tolerance = rawValue
+        case "sow_method": sow_method = rawValue
+        case "instructions": instructions = rawValue
+        case "seed_depth_inches":
+            guard let v = Double(rawValue) else { return false }
+            seed_depth_inches = v
+        case "days_to_germinate_min":
+            guard let v = Int(rawValue) else { return false }
+            days_to_germinate_min = v
+        case "days_to_germinate_max":
+            guard let v = Int(rawValue) else { return false }
+            days_to_germinate_max = v
+        case "days_to_maturity_min":
+            guard let v = Int(rawValue) else { return false }
+            days_to_maturity_min = v
+        case "days_to_maturity_max":
+            guard let v = Int(rawValue) else { return false }
+            days_to_maturity_max = v
+        case "soil_temp_min_f":
+            guard let v = Int(rawValue) else { return false }
+            soil_temp_min_f = v
+        case "soil_temp_max_f":
+            guard let v = Int(rawValue) else { return false }
+            soil_temp_max_f = v
+        case "plant_spacing_inches":
+            guard let v = Int(rawValue) else { return false }
+            plant_spacing_inches = v
+        case "row_spacing_inches":
+            guard let v = Int(rawValue) else { return false }
+            row_spacing_inches = v
+        case "hardiness_zone_min":
+            guard let v = Int(rawValue) else { return false }
+            hardiness_zone_min = v
+        case "hardiness_zone_max":
+            guard let v = Int(rawValue) else { return false }
+            hardiness_zone_max = v
+        case "viability_years":
+            guard let v = Int(rawValue) else { return false }
+            viability_years = v
+        default:
+            return false
+        }
+        return true
     }
 }

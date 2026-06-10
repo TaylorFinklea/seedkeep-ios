@@ -33,6 +33,25 @@ struct EnvelopeTests {
         case .failure(let err):
             #expect(err.code == "unauthorized")
             #expect(err.message.contains("authorization"))
+            #expect(err.retryAfterSeconds == nil)
+        }
+    }
+
+    @Test func decodesRateLimitedWithEnvelopeSiblingRetryAfter() throws {
+        // Real 429 wire shape: `retry_after_seconds` is a TOP-LEVEL
+        // sibling of `error` (not nested inside it) and the message
+        // carries no digits.
+        let json = #"""
+        { "ok": false, "error": { "code": "rate_limited", "message": "too many submissions in the last hour" }, "retry_after_seconds": 1800 }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<WireResponses.Me>.self, from: json)
+        switch env {
+        case .ok:
+            Issue.record("Expected failure")
+        case .failure(let err):
+            #expect(err.code == "rate_limited")
+            #expect(err.retryAfterSeconds == 1800)
         }
     }
 
@@ -369,6 +388,49 @@ struct EnvelopeTests {
             #expect(loc.usdaZone == "8a")
             #expect(loc.avgLastFrost == "03-15")
             #expect(loc.avgFirstFrost == "11-20")
+        case .failure(let err):
+            Issue.record("Expected success, got \(err)")
+        }
+    }
+
+    @Test func decodesCatalogCorrectionWithNullStructuredFields() throws {
+        // Real wire shape for the sheet's DEFAULT free-form mode and
+        // every legacy pre-4D feedback row: field_name / value_type /
+        // suggested_value are NULL (stabilization contract decision 1 —
+        // the server does NOT coalesce). This row must decode, or one
+        // "Something else" note wedges the whole corrections feed.
+        let json = #"""
+        {
+          "ok": true,
+          "data": {
+            "items": [
+              {
+                "id": "corr_ff", "catalog_seed_id": "cs_1", "catalog_seed_name": "Sungold",
+                "field_name": null, "value_type": null, "suggested_value": null,
+                "client_seen_value": null, "body": "Days to maturity looks wrong.",
+                "status": "open", "ai_review_score": null, "ai_notes": null,
+                "dismissed_reason": null, "conflict_with_id": null,
+                "user_acknowledged_bounds": false,
+                "created_at": 1716900000000, "reviewed_at": null, "applied_at": null,
+                "escalated_at": null, "updated_at": 1717000000000, "deleted_at": null
+              }
+            ],
+            "cursor": 1717000000000,
+            "has_more": false
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let env = try JSONDecoder().decode(Envelope<DeltaPage<CatalogCorrectionDTO>>.self, from: json)
+        switch env {
+        case .ok(let page, _):
+            #expect(page.items.count == 1)
+            let row = page.items[0]
+            #expect(row.field_name == nil)
+            #expect(row.value_type == nil)
+            #expect(row.suggested_value == nil)
+            #expect(row.body == "Days to maturity looks wrong.")
+            #expect(row.status == "open")
         case .failure(let err):
             Issue.record("Expected success, got \(err)")
         }

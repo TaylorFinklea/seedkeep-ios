@@ -153,7 +153,7 @@ struct YouView: View {
                     .font(HerbFont.bodyItalic(size: 11))
                     .foregroundStyle(HerbColor.inkFaint)
             }
-            Text("\(fieldLabel(row.fieldName)) → \(row.suggestedValue)")
+            Text(contributionSummary(row))
                 .font(HerbFont.body(size: 13))
                 .foregroundStyle(HerbColor.sepia)
                 .lineLimit(1)
@@ -173,6 +173,18 @@ struct YouView: View {
             for: Date(timeIntervalSince1970: TimeInterval(ms) / 1000),
             relativeTo: Date()
         )
+    }
+
+    /// One-line summary under the row title. Free-form rows (NULL
+    /// `field_name` on the wire) fall back to a "Something else" label.
+    private func contributionSummary(_ row: LocalCatalogCorrection) -> String {
+        guard let field = row.fieldName else {
+            return "Something else (free-form note)"
+        }
+        if let suggested = row.suggestedValue, !suggested.isEmpty {
+            return "\(fieldLabel(field)) → \(suggested)"
+        }
+        return fieldLabel(field)
     }
 
     private func fieldLabel(_ field: String) -> String {

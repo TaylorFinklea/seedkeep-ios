@@ -61,6 +61,17 @@ struct CatalogFeedbackSheet: View {
         self.catalogID = catalogID
         self.catalogName = catalogName
         self.currentValues = currentValues
+        // Draft key is scoped per catalog entry so a drafted "Why?" for
+        // seed A never bleeds into seed B's correction sheet.
+        _bodyText = SceneStorage(
+            wrappedValue: "",
+            Self.draftKey(catalogID: catalogID)
+        )
+    }
+
+    /// Per-catalog-entry `@SceneStorage` key for the drafted body text.
+    static func draftKey(catalogID: String) -> String {
+        "seedkeep.catalogFeedback.body.\(catalogID)"
     }
 
     @Environment(AppEnvironment.self) private var appEnv
@@ -83,8 +94,9 @@ struct CatalogFeedbackSheet: View {
 
     /// Free-form "Why?" body. Preserved across withdraw-and-replace via
     /// `@SceneStorage` so the user doesn't lose their drafted reasoning
-    /// when reconciling a pre-flight conflict.
-    @SceneStorage("seedkeep.catalogFeedback.body") private var bodyText: String = ""
+    /// when reconciling a pre-flight conflict. Keyed per catalog entry
+    /// (see `draftKey(catalogID:)`, assigned in `init`).
+    @SceneStorage private var bodyText: String
 
     /// Generated once at `.onAppear`. Sent as the `Idempotency-Key`
     /// header so the server's partial unique index on
@@ -420,7 +432,7 @@ struct CatalogFeedbackSheet: View {
                         .tracking(1.4)
                         .foregroundStyle(HerbColor.sepia)
                         .textCase(.uppercase)
-                    Text("submitted \(relativeTime(existing.createdAt)): \(existing.suggestedValue)")
+                    Text("submitted \(relativeTime(existing.createdAt)): \(existing.suggestedValue ?? "")")
                         .font(HerbFont.bodyItalic(size: 13))
                         .foregroundStyle(HerbColor.ink)
                     HStack(spacing: HerbSpace.sectionRhythm) {
@@ -584,6 +596,10 @@ struct CatalogFeedbackSheet: View {
                 catalogID: catalogID,
                 correctionID: existing.id
             )
+            // Close the local row immediately so the pre-flight banner
+            // clears and a second tap can't double-withdraw; the next
+            // sync confirms the terminal state from the feed.
+            Self.markWithdrawnLocally(existing)
             // Refresh idempotency so the replacement isn't a replay of
             // the withdrawn row.
             idempotencyKey = UUID().uuidString
@@ -613,6 +629,12 @@ struct CatalogFeedbackSheet: View {
                 catalogID: catalogID,
                 correctionID: conflict.id
             )
+            // If the conflicting row has already synced locally, close
+            // it too so YouView and the pre-flight banner don't keep
+            // presenting it as open.
+            if let local = allCorrections.first(where: { $0.id == conflict.id }) {
+                Self.markWithdrawnLocally(local)
+            }
             idempotencyKey = UUID().uuidString
             pendingError = nil
             serverConflict = nil
@@ -630,6 +652,17 @@ struct CatalogFeedbackSheet: View {
     }
 
     // MARK: - Helpers
+
+    /// Optimistically flips a local correction row to
+    /// `dismissed/user_withdrawn` after a successful server withdraw,
+    /// mirroring what the next sync will pull. Keeps the pre-flight
+    /// banner (driven by the local `@Query`) honest immediately.
+    static func markWithdrawnLocally(_ row: LocalCatalogCorrection) {
+        row.status = "dismissed"
+        row.dismissedReason = "user_withdrawn"
+        row.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
+        try? row.modelContext?.save()
+    }
 
     /// Translate a typed `SeedkeepError` into the structured
     /// `PendingError` shape the GroupBox renders against. Error code
@@ -649,10 +682,13 @@ struct CatalogFeedbackSheet: View {
                 message: err.message
             )
         case "rate_limited":
+            // `retry_after_seconds` rides as an envelope-level sibling
+            // of `error` and lands on the typed SeedkeepError — the
+            // server messages carry no digits to parse.
             return PendingError(
                 kind: .rateLimited,
                 message: err.message,
-                retryAfterSeconds: extractRetryAfterSeconds(from: err.message)
+                retryAfterSeconds: err.retryAfterSeconds
             )
         default:
             return PendingError(
@@ -670,18 +706,6 @@ struct CatalogFeedbackSheet: View {
         let after = message[message.index(after: colon)...]
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return after.isEmpty ? nil : after
-    }
-
-    /// Pull the first integer out of a 429 message — server messages
-    /// typically include the retry window in seconds. Returns nil when
-    /// no digits are present so bucket copy falls back to the generic
-    /// "in about an hour" form.
-    private func extractRetryAfterSeconds(from message: String) -> Int? {
-        let pattern = #"(\d+)"#
-        guard let range = message.range(of: pattern, options: .regularExpression) else {
-            return nil
-        }
-        return Int(message[range])
     }
 
     /// Bucket-aware retry-after copy (spec §7).
@@ -749,7 +773,7 @@ struct CatalogFeedbackSheet: View {
         case "hardiness_zone_min", "hardiness_zone_max":
             return Self.formatRange(snap.hardiness_zone_min, snap.hardiness_zone_max, unit: nil)
         case "viability_years":
-            return nil
+            return snap.viability_years.map { "\($0) years" }
         case "sun_requirement":
             return snap.sun_requirement.map { humanizeEnum($0) }
         case "frost_tolerance":
@@ -789,6 +813,7 @@ struct CatalogFeedbackSheet: View {
         case "row_spacing_inches":    return snap.row_spacing_inches.map(String.init)
         case "hardiness_zone_min":    return snap.hardiness_zone_min.map(String.init)
         case "hardiness_zone_max":    return snap.hardiness_zone_max.map(String.init)
+        case "viability_years":       return snap.viability_years.map(String.init)
         case "sun_requirement":       return snap.sun_requirement
         case "frost_tolerance":       return snap.frost_tolerance
         case "sow_method":            return snap.sow_method

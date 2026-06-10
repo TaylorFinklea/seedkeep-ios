@@ -14,15 +14,16 @@ import SeedkeepKit
 /// 1. Honors the `seedkeep.notif.catalog` UserDefaults toggle BEFORE
 ///    asking the system for authorization, so a disabled toggle never
 ///    prompts.
-/// 2. Calls `GET /api/catalog/corrections/:id/notified` — if this
-///    device's id is already in the ledger, skip. First writer wins.
+/// 2. Calls `GET /api/catalog/corrections/:id/notified` — if ANY
+///    device id is already in the ledger, skip (a sibling device on the
+///    same account already pinged the user). First writer wins.
 /// 3. Coalesces to a single roundup ping when a batch surfaces more
 ///    than 3 transitions; otherwise schedules per-correction pings.
 /// 4. `POST /api/catalog/corrections/:id/notified` before scheduling so
-///    a sibling device on the same account doesn't double-ping. Marking
-///    first wins races against a near-simultaneous sibling device — the
-///    schedule call's `ensureGranted()` can stall in fresh process
-///    environments, but the ledger write doesn't depend on it.
+///    a sibling device on the same account doesn't double-ping. The
+///    server reports `{ inserted: boolean }`; a ping is scheduled only
+///    when this device's POST actually claimed the slot
+///    (`inserted == true`) — losing the race means the winner pings.
 ///
 /// Spec: `.docs/ai/specs/2026-06-09-phase-4d-catalog-corrections-design.md`
 /// §4 (iOS Notifications block), §7 (notifications), §8 Act 4.
@@ -180,14 +181,14 @@ final class CatalogCorrectionNotifier {
                 // the new row in YouView.
                 continue
             }
-            if devices.contains(deviceID) { continue }
+            // ANY device in the ledger means the household member was
+            // already pinged for this correction — including a sibling
+            // device. Only an empty ledger leaves us eligible.
+            if !devices.isEmpty { continue }
             eligible.append((row, row.status))
         }
 
         guard !eligible.isEmpty else { return }
-
-        let appliedCount = eligible.filter { $0.status == "applied" }.count
-        let dismissedCount = eligible.filter { $0.status == "dismissed" }.count
 
         // Mark each eligible row in the ledger BEFORE scheduling so a
         // sibling device on the same account skips on its next sync.
@@ -196,28 +197,35 @@ final class CatalogCorrectionNotifier {
         // alternative ordering (mark after schedule) was an artifact of
         // the incorrect assumption that scheduling is cheap, but
         // `ensureGranted()` can stall on `requestAuthorization()` in
-        // fresh test/process environments. Best-effort: a failure here
-        // is logged silently — the worst outcome is a sibling device
-        // also pings the user.
+        // fresh test/process environments. The server reports whether
+        // OUR insert claimed the slot; only confirmed rows are
+        // scheduled — losing the race means the winning device pings.
+        var confirmed: [(row: LocalCatalogCorrection, status: String)] = []
         for entry in eligible {
             do {
-                try await client.markCatalogCorrectionNotified(
+                let inserted = try await client.markCatalogCorrectionNotified(
                     correctionID: entry.row.id,
                     deviceID: deviceID
                 )
+                if inserted { confirmed.append(entry) }
             } catch {
                 continue
             }
         }
 
-        if eligible.count > Self.roundupThreshold {
+        guard !confirmed.isEmpty else { return }
+
+        let appliedCount = confirmed.filter { $0.status == "applied" }.count
+        let dismissedCount = confirmed.filter { $0.status == "dismissed" }.count
+
+        if confirmed.count > Self.roundupThreshold {
             await NotificationsCenter.shared.scheduleCatalogCorrectionRoundup(
                 applied: appliedCount,
                 dismissed: dismissedCount,
-                ids: eligible.map { $0.row.id }
+                ids: confirmed.map { $0.row.id }
             )
         } else {
-            for entry in eligible {
+            for entry in confirmed {
                 let row = entry.row
                 let fieldLabel = Self.fieldLabel(for: row)
                 await NotificationsCenter.shared.scheduleCatalogCorrectionPing(
@@ -237,12 +245,14 @@ final class CatalogCorrectionNotifier {
     /// user's suggested value so the lock-screen copy still anchors
     /// what changed.
     private static func fieldLabel(for row: LocalCatalogCorrection) -> String {
-        let humanField = humanize(row.fieldName)
+        // Free-form rows (NULL field_name on the wire) anchor on "your
+        // note" — there's no structured field to name.
+        let humanField = row.fieldName.map(humanize) ?? "your note"
         let value: String?
         if row.status == "applied", let newValue = row.appliedNewValue, !newValue.isEmpty {
             value = newValue
-        } else if row.status == "dismissed" {
-            value = row.suggestedValue.isEmpty ? nil : row.suggestedValue
+        } else if row.status == "dismissed", let suggested = row.suggestedValue, !suggested.isEmpty {
+            value = suggested
         } else {
             value = nil
         }

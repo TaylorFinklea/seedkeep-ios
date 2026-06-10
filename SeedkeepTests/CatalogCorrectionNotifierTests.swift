@@ -165,6 +165,7 @@ struct CatalogCorrectionNotifierTests {
         _ = bootstrap
         CorrNotifMockURLProtocol.resetCapture()
         CorrNotifMockURLProtocol.setLedger([:])
+        CorrNotifMockURLProtocol.setInsertedFlags([:])
         CorrNotifMockURLProtocol.setExtraRoutes([:])
         UserDefaults.standard.set(toggle, forKey: userDefaultsKey)
     }
@@ -216,6 +217,55 @@ struct CatalogCorrectionNotifierTests {
             posts.contains(id1),
             "notifier should POST /notified for id1 (first writer); captured POSTs: \(posts)"
         )
+    }
+
+    // MARK: - Test 2b: cross-device dedup (skip when ANY device is in the ledger)
+
+    @Test("cross-device dedup: ledger GET returns ANOTHER device's id → notifier skips (no POST)")
+    func crossDeviceDedupSkipsWhenSiblingDeviceInLedger() async {
+        let id1 = "corr_dedup_sibling"
+        Self.resetStubAndDefaults(toggle: true)
+        // A SIBLING device (not ours) already claimed the ledger — the
+        // user was already pinged on that device.
+        CorrNotifMockURLProtocol.setLedger([id1: ["device-of-a-sibling"]])
+        Self.seedRow(id: id1, status: "applied")
+
+        NotificationCenter.default.post(
+            name: .catalogCorrectionsChanged,
+            object: nil,
+            userInfo: ["transitionedIDs": [id1]]
+        )
+
+        await Self.waitForFlush()
+
+        let posts = CorrNotifMockURLProtocol.capturedNotifiedPOSTs()
+        #expect(
+            posts.allSatisfy { $0 != id1 },
+            "any device id in the ledger must skip this device's POST + ping; got \(posts)"
+        )
+    }
+
+    // MARK: - Test 2c: POST /notified surfaces the server's inserted flag
+
+    @Test("markCatalogCorrectionNotified returns the server's inserted flag")
+    func markNotifiedReturnsInsertedFlag() async throws {
+        Self.resetStubAndDefaults(toggle: true)
+        CorrNotifMockURLProtocol.setInsertedFlags([
+            "corr_flag_lost": false,
+            "corr_flag_won": true,
+        ])
+
+        let lost = try await Self.bootstrap.client.markCatalogCorrectionNotified(
+            correctionID: "corr_flag_lost",
+            deviceID: "dev_x"
+        )
+        #expect(lost == false, "inserted:false (lost the race) must surface as false")
+
+        let won = try await Self.bootstrap.client.markCatalogCorrectionNotified(
+            correctionID: "corr_flag_won",
+            deviceID: "dev_x"
+        )
+        #expect(won == true, "inserted:true (claimed the slot) must surface as true")
     }
 
     // MARK: - Test 3: UserDefaults toggle-off short-circuits before ledger GET
@@ -381,6 +431,64 @@ struct CatalogCorrectionNotifierTests {
         #expect(dto.dismissed_reason == "user_escalated")
         #expect(dto.escalated_at == now)
     }
+
+    // MARK: - Test 8: PUT edit decodes the wrapped { correction } shape (incl. null field_name)
+
+    @Test("editOpenCorrection decodes the wrapped { correction } response — null field_name tolerated")
+    func editDecodesWrappedShapeWithNullFieldName() async throws {
+        Self.resetStubAndDefaults(toggle: true)
+
+        // Contract decision 2: PUT edit wraps as { correction: <dto> },
+        // and (decision 1) the dto's structured columns may be null —
+        // pin both on the same fixture.
+        let id1 = "corr_edit_wrapped"
+        let now: Int64 = 1_717_600_000_000
+        let editBody = """
+        {
+          "ok": true,
+          "data": {
+            "correction": {
+              "id": "\(id1)",
+              "catalog_seed_id": "cs_x",
+              "catalog_seed_name": "Sungold",
+              "field_name": null,
+              "value_type": null,
+              "suggested_value": null,
+              "client_seen_value": null,
+              "body": "updated free-form note",
+              "status": "open",
+              "ai_review_score": null,
+              "ai_notes": null,
+              "dismissed_reason": null,
+              "conflict_with_id": null,
+              "user_acknowledged_bounds": false,
+              "created_at": 1716900000000,
+              "reviewed_at": null,
+              "applied_at": null,
+              "escalated_at": null,
+              "updated_at": \(now),
+              "deleted_at": null
+            }
+          }
+        }
+        """
+        CorrNotifMockURLProtocol.setExtraRoutes([
+            "/api/catalog/cs_x/corrections/\(id1)": Data(editBody.utf8)
+        ])
+
+        let dto = try await Self.bootstrap.client.editOpenCorrection(
+            catalogID: "cs_x",
+            correctionID: id1,
+            body: "updated free-form note"
+        )
+
+        #expect(dto.id == id1)
+        #expect(dto.field_name == nil)
+        #expect(dto.value_type == nil)
+        #expect(dto.suggested_value == nil)
+        #expect(dto.body == "updated free-form note")
+        #expect(dto.updated_at == now)
+    }
 }
 
 // MARK: - URLProtocol stub specialized for the notifier's ledger paths
@@ -395,6 +503,10 @@ struct CatalogCorrectionNotifierTests {
 /// per-test without recreating the session.
 final class CorrNotifMockURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var ledgerDevices: [String: [String]] = [:]
+    /// Per-correction `inserted` flag for the POST /notified response.
+    /// Defaults to `true` (this device claimed the ledger slot) when an
+    /// id isn't present.
+    nonisolated(unsafe) static var insertedFlags: [String: Bool] = [:]
     nonisolated(unsafe) static var extraRoutes: [String: Data] = [:]
     nonisolated(unsafe) static var capturedRequests: [URLRequest] = []
     static let lock = NSLock()
@@ -417,6 +529,12 @@ final class CorrNotifMockURLProtocol: URLProtocol, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         Self.ledgerDevices = ledger
+    }
+
+    static func setInsertedFlags(_ flags: [String: Bool]) {
+        lock.lock()
+        defer { lock.unlock() }
+        Self.insertedFlags = flags
     }
 
     static func setExtraRoutes(_ routes: [String: Data]) {
@@ -486,7 +604,11 @@ final class CorrNotifMockURLProtocol: URLProtocol, @unchecked Sendable {
                 """
                 body = Data(bodyString.utf8)
             case "POST":
-                body = Data(#"{"ok":true,"data":{}}"#.utf8)
+                // Real wire shape (stabilization contract decision 5):
+                // the server reports whether THIS insert claimed the
+                // ledger slot.
+                let inserted = Self.insertedFlags[id] ?? true
+                body = Data(#"{"ok":true,"data":{"inserted":\#(inserted)}}"#.utf8)
             default:
                 body = Self.emptyEnvelope
             }

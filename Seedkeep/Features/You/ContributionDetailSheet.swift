@@ -120,7 +120,9 @@ struct ContributionDetailSheet: View {
     private func valuesSection(_ row: LocalCatalogCorrection) -> some View {
         Section {
             LabeledContent("Your suggestion") {
-                Text(row.suggestedValue)
+                // Free-form rows carry no structured suggested_value —
+                // the note itself lives in `body`.
+                Text(row.suggestedValue ?? row.body ?? "—")
                     .font(HerbFont.bodyEmph(size: 14))
             }
             if let seen = row.clientSeenValue, !seen.isEmpty {
@@ -314,7 +316,8 @@ struct ContributionDetailSheet: View {
 
     // MARK: - Copy helpers
 
-    private func fieldLabel(_ field: String) -> String {
+    private func fieldLabel(_ field: String?) -> String {
+        guard let field else { return "Something else (free-form note)" }
         switch field {
         case "days_to_germinate_min": return "days to germinate (min)"
         case "days_to_germinate_max": return "days to germinate (max)"
@@ -498,7 +501,7 @@ private struct DissentSheet: View {
         errorMessage = nil
         defer { submitting = false }
         let trimmed = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = "Re: correction \(correction.id) [\(correction.fieldName)] — "
+        let prefix = "Re: correction \(correction.id) [\(correction.fieldName ?? "other")] — "
         do {
             _ = try await appEnv.client.submitCatalogFeedback(
                 catalogID: catalogID,

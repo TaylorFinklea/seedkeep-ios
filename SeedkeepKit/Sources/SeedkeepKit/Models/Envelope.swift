@@ -11,7 +11,7 @@ public enum Envelope<T: Decodable & Sendable>: Decodable, Sendable {
     case ok(T, requestID: String?)
     case failure(SeedkeepError)
 
-    private enum Keys: String, CodingKey { case ok, data, error, request_id }
+    private enum Keys: String, CodingKey { case ok, data, error, request_id, retry_after_seconds }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
@@ -22,7 +22,15 @@ public enum Envelope<T: Decodable & Sendable>: Decodable, Sendable {
             self = .ok(data, requestID: requestID)
         } else {
             let err = try c.decode(SeedkeepError.Body.self, forKey: .error)
-            self = .failure(SeedkeepError(code: err.code, message: err.message, requestID: requestID))
+            // 429 responses carry `retry_after_seconds` as a top-level
+            // sibling of `error`, not inside it.
+            let retryAfter = try c.decodeIfPresent(Int.self, forKey: .retry_after_seconds)
+            self = .failure(SeedkeepError(
+                code: err.code,
+                message: err.message,
+                requestID: requestID,
+                retryAfterSeconds: retryAfter
+            ))
         }
     }
 }
@@ -33,11 +41,20 @@ public struct SeedkeepError: Error, Sendable, Equatable {
     public let code: String
     public let message: String
     public let requestID: String?
+    /// Populated from the envelope-level `retry_after_seconds` sibling
+    /// on rate-limited (429) responses; `nil` otherwise.
+    public let retryAfterSeconds: Int?
 
-    public init(code: String, message: String, requestID: String? = nil) {
+    public init(
+        code: String,
+        message: String,
+        requestID: String? = nil,
+        retryAfterSeconds: Int? = nil
+    ) {
         self.code = code
         self.message = message
         self.requestID = requestID
+        self.retryAfterSeconds = retryAfterSeconds
     }
 
     /// Wire shape of the inner `error` object.

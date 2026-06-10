@@ -64,6 +64,66 @@ struct WateringStateClientTests {
         }
     }
 
+    @Test("GET tolerates Postgres ::text timestamps (space separator, abbreviated +00 offset)")
+    func getParsesPostgresSpaceFormat() async {
+        // Real wire shape before the server's toISOString() fix:
+        // postgres.js returns the ::text rendering verbatim. The iOS
+        // parse stays tolerant (belt and braces) even though the server
+        // now serializes ISO-8601 T+Z.
+        let body = Data(#"""
+        {"ok":true,"data":{"last_watering_notification_at":"2026-06-09 18:25:43.511+00"}}
+        """#.utf8)
+        let client = Self.makeClient(responseBody: body)
+        let wsc = SystemWateringStateClient(client: client)
+        let result = await wsc.get(householdID: Self.householdID)
+        switch result {
+        case .success(let date):
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let expected = formatter.date(from: "2026-06-09T18:25:43.511Z")
+            #expect(date != nil, "Postgres-space timestamp must parse, not silently nil")
+            #expect(date == expected)
+        case .failure(let error):
+            Issue.record("expected success, got \(error)")
+        }
+    }
+
+    @Test("GET tolerates Postgres ::text timestamps without fractional seconds")
+    func getParsesPostgresSpaceFormatNoFraction() async {
+        let body = Data(#"""
+        {"ok":true,"data":{"last_watering_notification_at":"2026-06-09 18:25:43+00"}}
+        """#.utf8)
+        let client = Self.makeClient(responseBody: body)
+        let wsc = SystemWateringStateClient(client: client)
+        let result = await wsc.get(householdID: Self.householdID)
+        switch result {
+        case .success(let date):
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            #expect(date == formatter.date(from: "2026-06-09T18:25:43Z"))
+        case .failure(let error):
+            Issue.record("expected success, got \(error)")
+        }
+    }
+
+    @Test("GET parses non-fractional ISO-8601 T+Z (server toISOString without millis)")
+    func getParsesPlainISOWithoutFraction() async {
+        let body = Data(#"""
+        {"ok":true,"data":{"last_watering_notification_at":"2026-06-15T13:30:00Z"}}
+        """#.utf8)
+        let client = Self.makeClient(responseBody: body)
+        let wsc = SystemWateringStateClient(client: client)
+        let result = await wsc.get(householdID: Self.householdID)
+        switch result {
+        case .success(let date):
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            #expect(date == formatter.date(from: "2026-06-15T13:30:00Z"))
+        case .failure(let error):
+            Issue.record("expected success, got \(error)")
+        }
+    }
+
     @Test("GET success with null payload → .success(nil)")
     func getReturnsNilForNullPayload() async {
         let body = Data(#"""

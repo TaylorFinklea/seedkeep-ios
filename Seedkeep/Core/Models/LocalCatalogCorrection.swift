@@ -54,19 +54,23 @@ public final class LocalCatalogCorrection {
 
     /// Which `catalog_seeds` column the correction targets. Must be a
     /// member of `CatalogFieldBounds.correctableFields`; the server
-    /// enforces this in the migration 0020 CHECK constraint.
-    public var fieldName: String
+    /// enforces this in the migration 0020 CHECK constraint. `nil` for
+    /// free-form ("Something else") submissions and legacy pre-4D
+    /// feedback rows — UI surfaces those with a "Something else"
+    /// fallback label.
+    public var fieldName: String?
 
     /// One of `integer`, `numeric`, `enum`, `text`, `free_form`. Mirrors
     /// the server's `value_type` column. iOS uses this to pick the right
     /// editor shape (stepper, picker, single-line, multi-line) when
     /// surfacing the row in `ContributionDetailSheet` and the legacy
-    /// `CatalogFeedbackSheet`.
-    public var valueType: String
+    /// `CatalogFeedbackSheet`. `nil` for free-form / legacy rows.
+    public var valueType: String?
 
     /// The value the user proposed, as a string. The server stores the
     /// post-validation normalized form; iOS displays this verbatim.
-    public var suggestedValue: String
+    /// `nil` for free-form / legacy rows (the note lives in `body`).
+    public var suggestedValue: String?
 
     /// The value the user *believed* was current at submission time —
     /// drives the optimistic-concurrency check in `decideCorrectionOutcome`.
@@ -161,9 +165,9 @@ public final class LocalCatalogCorrection {
         id: String,
         catalogSeedID: String? = nil,
         catalogSeedName: String? = nil,
-        fieldName: String,
-        valueType: String,
-        suggestedValue: String,
+        fieldName: String? = nil,
+        valueType: String? = nil,
+        suggestedValue: String? = nil,
         clientSeenValue: String? = nil,
         body: String? = nil,
         status: String,

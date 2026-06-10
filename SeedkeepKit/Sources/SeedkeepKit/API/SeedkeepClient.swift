@@ -99,19 +99,42 @@ public actor SeedkeepClient {
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             if let s = try c.decodeIfPresent(String.self, forKey: .lastWateringNotificationAt) {
-                let f = ISO8601DateFormatter()
-                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let date = f.date(from: s) {
-                    self.lastWateringNotificationAt = date
-                } else {
-                    // Server sometimes omits fractional seconds. Retry without.
-                    let fallback = ISO8601DateFormatter()
-                    fallback.formatOptions = [.withInternetDateTime]
-                    self.lastWateringNotificationAt = fallback.date(from: s)
-                }
+                self.lastWateringNotificationAt = Self.parseTimestamp(s)
             } else {
                 self.lastWateringNotificationAt = nil
             }
+        }
+
+        /// Parses the wire timestamp. Primary shape is ISO-8601 `T`+`Z`
+        /// (`2026-06-15T13:30:00.000Z`, with or without fractional
+        /// seconds). Also tolerates Postgres `::text` renderings —
+        /// space separator and abbreviated offset, e.g.
+        /// `2026-06-09 18:25:43.511+00` — so a server-side
+        /// serialization regression can't silently null the household
+        /// watering ledger again.
+        static func parseTimestamp(_ s: String) -> Date? {
+            let withFractional = ISO8601DateFormatter()
+            withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let plain = ISO8601DateFormatter()
+            plain.formatOptions = [.withInternetDateTime]
+            if let date = withFractional.date(from: s) ?? plain.date(from: s) {
+                return date
+            }
+            // Postgres text fallback: normalize into strict ISO-8601
+            // and retry.
+            var normalized = s
+            if let spaceIdx = normalized.firstIndex(of: " ") {
+                normalized.replaceSubrange(spaceIdx...spaceIdx, with: "T")
+            }
+            if normalized.range(of: #"[+-]\d{2}$"#, options: .regularExpression) != nil {
+                // Abbreviated two-digit offset ("+00") → "+00:00".
+                normalized += ":00"
+            } else if normalized.range(of: #"[+-]\d{2}:\d{2}$"#, options: .regularExpression) == nil,
+                      !normalized.hasSuffix("Z") {
+                // No offset at all — treat as UTC.
+                normalized += "Z"
+            }
+            return withFractional.date(from: normalized) ?? plain.date(from: normalized)
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -905,19 +928,24 @@ public actor SeedkeepClient {
 
         let (data, _) = try await configuration.session.data(for: req)
 
-        // Happy path: ok=true envelope with { id, status, replay? }.
+        // Happy path: ok=true envelope with data: { id, status }. On an
+        // idempotency replay the server sets `replay: true` as a
+        // top-level SIBLING of `data` — probe the envelope level for it.
         struct OkBody: Decodable, Sendable {
             let id: String
             let status: String
+        }
+        struct ReplayProbe: Decodable, Sendable {
             let replay: Bool?
         }
         if let env = try? JSONDecoder().decode(Envelope<OkBody>.self, from: data) {
             switch env {
             case .ok(let value, _):
+                let replayFlag = (try? JSONDecoder().decode(ReplayProbe.self, from: data))?.replay ?? false
                 return SubmitFeedbackResponse(
                     id: value.id,
                     status: value.status,
-                    replay: value.replay ?? false,
+                    replay: replayFlag,
                     existingDTO: nil
                 )
             case .failure(let err):
@@ -1071,18 +1099,21 @@ public actor SeedkeepClient {
     }
 
     /// Phase 4 D · cross-device dedup ledger writer. Records that this
-    /// device has scheduled a notification for the given correction. First
-    /// writer wins; subsequent POSTs are no-ops on the server side.
+    /// device has scheduled a notification for the given correction.
+    /// First writer wins: the server returns `{ inserted: true }` only
+    /// for the row that actually claimed the ledger slot — callers
+    /// schedule the user-facing ping only when `inserted == true`.
     public func markCatalogCorrectionNotified(
         correctionID: String,
         deviceID: String
-    ) async throws {
+    ) async throws -> Bool {
         struct Input: Encodable, Sendable { let device_id: String }
-        struct Empty: Decodable, Sendable {}
-        let _: Empty = try await postJSON(
+        struct Resp: Decodable, Sendable { let inserted: Bool }
+        let res: Resp = try await postJSON(
             path: "/api/catalog/corrections/\(correctionID)/notified",
             body: Input(device_id: deviceID)
         )
+        return res.inserted
     }
 
     // MARK: - MCP tokens (Phase 4 E)
@@ -1636,6 +1667,11 @@ private extension Data {
 /// is denormalized at submit time so offline notifications can name the
 /// seed even after deletion.
 ///
+/// `field_name` / `value_type` / `suggested_value` are nullable on the
+/// wire: free-form ("Something else") submissions and legacy pre-4D
+/// feedback rows store NULL for all three. The server passes the nulls
+/// through verbatim (stabilization contract decision 1 — no coalescing).
+///
 /// `applied_patch` accompanies rows transitioning to `applied`: the iOS
 /// sync engine uses it to invalidate the cached `CatalogSeedDTO`
 /// in-place, so SeedDetail shows the new value without an extra round
@@ -1644,9 +1680,9 @@ public struct CatalogCorrectionDTO: Codable, Sendable, Equatable {
     public let id: String
     public let catalog_seed_id: String?
     public let catalog_seed_name: String?
-    public let field_name: String
-    public let value_type: String
-    public let suggested_value: String
+    public let field_name: String?
+    public let value_type: String?
+    public let suggested_value: String?
     public let client_seen_value: String?
     public let body: String?
     public let status: String           // "open" | "reviewed" | "applied" | "dismissed"
@@ -1680,9 +1716,9 @@ public struct CatalogCorrectionDTO: Codable, Sendable, Equatable {
         id: String,
         catalog_seed_id: String?,
         catalog_seed_name: String?,
-        field_name: String,
-        value_type: String,
-        suggested_value: String,
+        field_name: String?,
+        value_type: String?,
+        suggested_value: String?,
         client_seen_value: String?,
         body: String?,
         status: String,

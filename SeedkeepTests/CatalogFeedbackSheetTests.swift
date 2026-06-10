@@ -161,6 +161,7 @@ struct CatalogFeedbackSheetTests {
             row_spacing_inches: 36,
             hardiness_zone_min: 5,
             hardiness_zone_max: 9,
+            viability_years: 4,
             instructions: "Direct-sow after last frost."
         )
         // Numeric ranges flow into "Currently: X–Y" copy via the
@@ -175,6 +176,10 @@ struct CatalogFeedbackSheetTests {
         #expect(snap.row_spacing_inches == 36)
         #expect(snap.hardiness_zone_min == 5)
         #expect(snap.hardiness_zone_max == 9)
+        // viability_years is an AUTO_APPLY field — without it in the
+        // snapshot, client_seen_value is always null and the server's
+        // OCC gate can never auto-apply a viability correction.
+        #expect(snap.viability_years == 4)
         // Enums flow through verbatim — the sheet's humanizeEnum maps
         // these to title-case for display, but the raw value is what
         // the picker uses to drive the initial selection.
@@ -330,26 +335,67 @@ struct CatalogFeedbackSheetTests {
                 "pre-flight filter must skip soft-deleted rows")
     }
 
-    // MARK: - Test 6: @SceneStorage key stability for body preservation
+    // MARK: - Test 6: @SceneStorage key is scoped per catalog entry
 
-    @Test("body draft @SceneStorage key matches spec contract for withdraw-and-replace")
+    @Test("body draft @SceneStorage key is scoped per catalog entry — no cross-seed draft bleed")
     func sceneStorageKeyContract() {
-        // The sheet uses @SceneStorage("seedkeep.catalogFeedback.body").
-        // Withdraw-and-replace relies on this exact key staying byte-
-        // identical so a drafted "Why?" body survives the round-trip
-        // through the URL bar of UIKit scene restoration.
-        //
-        // @SceneStorage's key is a literal string at decoration time —
-        // there's no public read API at runtime. We sanity-check the
-        // string shape (the spec contract) so any drift in the sheet
-        // surface fails this test alongside the sheet's own grep
-        // contract — the namespace must stay in `seedkeep.*` (other
-        // dotfile-style namespaces would clash) and start with the
-        // surface name `catalogFeedback`.
-        let key = "seedkeep.catalogFeedback.body"
-        #expect(key.hasPrefix("seedkeep."), "scene storage key must live in the seedkeep.* namespace")
-        #expect(key.contains("catalogFeedback"), "scene storage key must reference the catalogFeedback surface")
-        #expect(key.hasSuffix(".body"), "scene storage key must terminate at .body so withdraw-and-replace preserves the drafted Why? body")
+        // The sheet keys its drafted body per catalog entry so a
+        // drafted "Why?" for seed A never pre-fills seed B's correction
+        // sheet (it used to be one app-wide key). Withdraw-and-replace
+        // still works because the SAME catalog entry resolves the SAME
+        // key.
+        let keyA = CatalogFeedbackSheet.draftKey(catalogID: "cs_a")
+        let keyB = CatalogFeedbackSheet.draftKey(catalogID: "cs_b")
+        #expect(keyA != keyB, "different catalog entries must use different draft keys")
+        #expect(keyA == CatalogFeedbackSheet.draftKey(catalogID: "cs_a"),
+                "the same catalog entry must resolve a stable key across sheet instances")
+        #expect(keyA.hasPrefix("seedkeep.catalogFeedback.body."),
+                "scene storage key must stay in the seedkeep.catalogFeedback.body.* namespace")
+        #expect(keyA.hasSuffix("cs_a"), "key must embed the catalog id")
+    }
+
+    // MARK: - Test 6b: withdraw-and-replace closes the local row immediately
+
+    @Test("markWithdrawnLocally flips the local row to dismissed/user_withdrawn so the pre-flight banner clears")
+    func markWithdrawnLocallyClosesRow() throws {
+        let schema = Schema([LocalCatalogCorrection.self])
+        let config = ModelConfiguration(
+            "catalogFeedbackSheetTests_withdraw",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: config)
+        let context = ModelContext(container)
+
+        let row = LocalCatalogCorrection(
+            id: "corr_withdraw",
+            catalogSeedID: "cs_target",
+            catalogSeedName: "Sungold",
+            fieldName: "days_to_maturity_min",
+            valueType: "integer",
+            suggestedValue: "70",
+            status: "open",
+            createdAt: 1_716_900_000_000,
+            updatedAt: 1_716_900_000_000
+        )
+        context.insert(row)
+        try context.save()
+
+        CatalogFeedbackSheet.markWithdrawnLocally(row)
+
+        #expect(row.status == "dismissed")
+        #expect(row.dismissedReason == "user_withdrawn")
+
+        // The pre-flight banner filter must no longer match.
+        let all = try context.fetch(FetchDescriptor<LocalCatalogCorrection>())
+        let stillOpen = all.first { r in
+            r.catalogSeedID == "cs_target"
+                && r.fieldName == "days_to_maturity_min"
+                && r.status == "open"
+                && r.deletedAt == nil
+        }
+        #expect(stillOpen == nil,
+                "withdrawn row must not keep driving the pre-flight banner")
     }
 
     // MARK: - Test 7: "File anyway" sets user_acknowledged_bounds=true on the wire
@@ -444,6 +490,87 @@ struct CatalogFeedbackSheetTests {
         )
     }
 
+    // MARK: - Test 7b: idempotency replay flag is an envelope sibling of `data`
+
+    @Test("submit replay: `replay: true` rides beside `data`, not inside it — response.replay is true")
+    func replayFlagDecodedFromEnvelopeSibling() async throws {
+        FeedbackSubmitMockURLProtocol.resetCapture()
+        // Real wire shape on an Idempotency-Key replay: the flag is a
+        // TOP-LEVEL sibling of `data`.
+        FeedbackSubmitMockURLProtocol.responseBody = Data(
+            #"{"ok":true,"data":{"id":"corr_replayed","status":"applied"},"replay":true}"#.utf8
+        )
+        let session = FeedbackSubmitMockURLProtocol.makeSession()
+        let client = SeedkeepClient(
+            configuration: .init(
+                baseURL: URL(string: "https://test.local")!,
+                session: session
+            ),
+            bearerToken: "test_token"
+        )
+
+        let res = try await client.submitCatalogFeedback(
+            catalogID: "cs_x",
+            body: "65 not 60",
+            fieldName: "days_to_maturity_min",
+            suggestedValue: "65",
+            idempotencyKey: "fixed-key"
+        )
+        #expect(res.id == "corr_replayed")
+        #expect(res.status == "applied")
+        #expect(res.replay == true, "replay must be read from the envelope level")
+
+        // Fresh submit (no replay sibling) → false.
+        FeedbackSubmitMockURLProtocol.responseBody = Data(
+            #"{"ok":true,"data":{"id":"corr_fresh","status":"open"}}"#.utf8
+        )
+        let fresh = try await client.submitCatalogFeedback(
+            catalogID: "cs_x",
+            body: "65 not 60",
+            fieldName: "days_to_maturity_min",
+            suggestedValue: "65",
+            idempotencyKey: UUID().uuidString
+        )
+        #expect(fresh.replay == false)
+    }
+
+    // MARK: - Test 7c: 429 retry_after_seconds is an envelope sibling of `error`
+
+    @Test("429: retry_after_seconds rides beside `error` and lands on SeedkeepError")
+    func retryAfterSecondsDecodedFromEnvelopeSibling() async throws {
+        FeedbackSubmitMockURLProtocol.resetCapture()
+        // Real wire shape for the daily bucket: message carries NO
+        // digits; the window is the envelope-level sibling.
+        FeedbackSubmitMockURLProtocol.responseBody = Data(
+            #"{"ok":false,"error":{"code":"rate_limited","message":"too many submissions today"},"retry_after_seconds":21600}"#.utf8
+        )
+        FeedbackSubmitMockURLProtocol.responseStatus = 429
+        defer { FeedbackSubmitMockURLProtocol.responseStatus = 200 }
+        let session = FeedbackSubmitMockURLProtocol.makeSession()
+        let client = SeedkeepClient(
+            configuration: .init(
+                baseURL: URL(string: "https://test.local")!,
+                session: session
+            ),
+            bearerToken: "test_token"
+        )
+
+        do {
+            _ = try await client.submitCatalogFeedback(
+                catalogID: "cs_x",
+                body: "65 not 60",
+                fieldName: "days_to_maturity_min",
+                suggestedValue: "65",
+                idempotencyKey: UUID().uuidString
+            )
+            Issue.record("expected a rate_limited SeedkeepError")
+        } catch let err as SeedkeepError {
+            #expect(err.code == "rate_limited")
+            #expect(err.retryAfterSeconds == 21_600,
+                    "retry_after_seconds must come from the envelope sibling; got \(String(describing: err.retryAfterSeconds))")
+        }
+    }
+
     // MARK: - Test 8: 429 retry copy adapts to retry_after_seconds buckets
 
     @Test("retry-after copy buckets — < 60s / < 5min / < 30min / else (5-min rounding)")
@@ -500,6 +627,7 @@ struct CatalogFeedbackSheetTests {
 /// assert what the SeedkeepClient actually puts on the wire.
 final class FeedbackSubmitMockURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var responseBody: Data = Data()
+    nonisolated(unsafe) static var responseStatus: Int = 200
     nonisolated(unsafe) static var lastBody: Data?
     static let lock = NSLock()
 
@@ -513,6 +641,7 @@ final class FeedbackSubmitMockURLProtocol: URLProtocol, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         Self.lastBody = nil
+        Self.responseStatus = 200
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -543,12 +672,13 @@ final class FeedbackSubmitMockURLProtocol: URLProtocol, @unchecked Sendable {
             Self.lastBody = collected
         }
         let body = Self.responseBody
+        let status = Self.responseStatus
         Self.lock.unlock()
 
         let url = request.url ?? URL(string: "https://test.local")!
         let response = HTTPURLResponse(
             url: url,
-            statusCode: 200,
+            statusCode: status,
             httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": "application/json"]
         )!
