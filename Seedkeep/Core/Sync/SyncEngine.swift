@@ -350,7 +350,9 @@ public final class SyncEngine {
         switch (write.entityType, write.operation) {
         case ("location", "create"):
             let body = try JSONDecoder().decode(LocationCreate.self, from: Data(write.payloadJSON.utf8))
-            let dto = try await client.createLocation(name: body.name, sortOrder: body.sort_order ?? 0)
+            let dto = try await client.createLocation(id: body.id, name: body.name, sortOrder: body.sort_order ?? 0)
+            // No-op when the server honored the client id (decision 7);
+            // swaps the temp row only against a legacy server.
             try replaceLocalLocation(oldID: write.entityID, with: dto)
 
         case ("location", "update"):
@@ -363,7 +365,7 @@ public final class SyncEngine {
 
         case ("tag", "create"):
             let body = try JSONDecoder().decode(TagCreate.self, from: Data(write.payloadJSON.utf8))
-            let dto = try await client.createTag(name: body.name, color: body.color)
+            let dto = try await client.createTag(id: body.id, name: body.name, color: body.color)
             try replaceLocalTag(oldID: write.entityID, with: dto)
 
         case ("tag", "update"):
@@ -422,10 +424,13 @@ public final class SyncEngine {
     // MARK: - Optimistic write entrypoints (called by views)
 
     public func enqueueCreateLocation(name: String, sortOrder: Int = 0, householdID: String) throws -> LocalLocation {
+        // The local id rides the create payload (contract decision 7,
+        // seeds pattern) so the server stores it verbatim and queued
+        // child payloads referencing it stay valid after the sync.
         let id = "loc_local_\(UUID().uuidString)"
         let now = Self.nowMs()
         let local = LocalLocation(id: id, householdID: householdID, name: name, sortOrder: sortOrder, createdAt: now, updatedAt: now)
-        let payload = try JSONEncoder().encode(LocationCreate(name: name, sort_order: sortOrder))
+        let payload = try JSONEncoder().encode(LocationCreate(id: id, name: name, sort_order: sortOrder))
         let pending = LocalPendingWrite(
             id: "pw_\(UUID().uuidString)",
             entityType: "location", entityID: id, operation: "create",
@@ -477,7 +482,7 @@ public final class SyncEngine {
         let id = "tag_local_\(UUID().uuidString)"
         let now = Self.nowMs()
         let local = LocalTag(id: id, householdID: householdID, name: name, color: color, createdAt: now, updatedAt: now)
-        let payload = try JSONEncoder().encode(TagCreate(name: name, color: color))
+        let payload = try JSONEncoder().encode(TagCreate(id: id, name: name, color: color))
         let pending = LocalPendingWrite(
             id: "pw_\(UUID().uuidString)",
             entityType: "tag", entityID: id, operation: "create",
@@ -638,7 +643,11 @@ public final class SyncEngine {
     // MARK: - Beds (Phase 2)
 
     public func enqueueCreateBed(_ input: SeedkeepClient.CreateBedInput, householdID: String) throws -> LocalBed {
-        let id = "bed_local_\(UUID().uuidString)"
+        // Send the local row's id with the create (contract decision 7,
+        // seeds pattern) so the id is stable across the sync.
+        let id = input.id ?? "bed_local_\(UUID().uuidString)"
+        var input = input
+        input.id = id
         let now = Self.nowMs()
         let local = LocalBed(
             id: id,
@@ -729,7 +738,13 @@ public final class SyncEngine {
     }
 
     public func enqueueCreatePlantingEvent(_ input: SeedkeepClient.CreatePlantingEventInput, householdID: String) throws -> LocalPlantingEvent {
-        let id = "pe_local_\(UUID().uuidString)"
+        // Send the local row's id with the create (contract decision 7).
+        // Keeping the id stable means the "planned for today" reminder
+        // scheduled below keeps a valid identifier after the create
+        // syncs — completing or deleting the event can still cancel it.
+        let id = input.id ?? "pe_local_\(UUID().uuidString)"
+        var input = input
+        input.id = id
         let now = Self.nowMs()
         let local = LocalPlantingEvent(
             id: id,
@@ -1380,6 +1395,19 @@ public final class SyncEngine {
             context.delete(stale)
         }
         try upsertPlantingEvents([dto])
+        // Defensive path for a legacy server that ignored the client-
+        // supplied id (decision 7): the pending reminder is keyed by the
+        // OLD id — re-key it under the server id, otherwise complete /
+        // delete can never cancel it and a stale "Planned for today"
+        // fires for a finished event.
+        if oldID != dto.id {
+            Task { @MainActor in
+                NotificationsCenter.shared.cancelPlantingEventReminder(eventID: oldID)
+            }
+            if let local = try fetchPlantingEvent(id: dto.id, in: context) {
+                scheduleEventReminder(local)
+            }
+        }
     }
 
     static func nowMs() -> Int64 {
@@ -1390,6 +1418,9 @@ public final class SyncEngine {
 // MARK: - Pending-write payload shapes
 
 private struct LocationCreate: Codable, Sendable {
+    /// Client-supplied row id (contract decision 7) — the server stores
+    /// it verbatim so the local optimistic row's id survives the sync.
+    let id: String?
     let name: String
     let sort_order: Int?
 }
@@ -1400,6 +1431,8 @@ private struct LocationUpdate: Codable, Sendable {
 }
 
 private struct TagCreate: Codable, Sendable {
+    /// Client-supplied row id (contract decision 7).
+    let id: String?
     let name: String
     let color: String?
 }
