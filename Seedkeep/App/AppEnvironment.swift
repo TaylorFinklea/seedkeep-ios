@@ -178,7 +178,13 @@ public final class AppEnvironment {
     /// Phase 5.1.4 (the side-effect helper has the hook points stubbed).
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
-            await sync.syncAll(householdID: household.id)
+            let ran = await sync.syncAll(householdID: household.id)
+            // Skipped (another sync already in flight): lastError still
+            // holds the PREVIOUS pass's outcome — re-presenting it here
+            // shows a phantom banner — and the post-sync orchestration
+            // below would run against a mid-sweep store. The in-flight
+            // caller does all of it when its pass finishes.
+            guard ran else { return }
             // Mirror SyncEngine.lastError into the user-facing banner.
             // SyncEngine isn't @Observable, so SwiftUI can't react to it
             // directly — we surface here instead, on the boundary that

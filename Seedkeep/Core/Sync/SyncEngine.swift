@@ -44,8 +44,14 @@ public final class SyncEngine {
 
     // MARK: - Pull
 
-    public func syncAll(householdID: String) async {
-        guard !isSyncing else { return }
+    /// Returns `true` when a sync pass actually ran, `false` when it was
+    /// skipped because another pass is already in flight. Callers doing
+    /// post-sync orchestration (banner mirror, pet ticks, weather
+    /// refresh) must skip it on `false` — `lastError` still holds the
+    /// PREVIOUS pass's outcome and the data is mid-sweep.
+    @discardableResult
+    public func syncAll(householdID: String) async -> Bool {
+        guard !isSyncing else { return false }
         isSyncing = true
         defer { isSyncing = false }
 
@@ -75,6 +81,7 @@ public final class SyncEngine {
         do { try await flushPending() } catch { record("push", error) }
 
         lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
+        return true
     }
 
     private func pullLocations(householdID: String) async throws {
@@ -1003,18 +1010,34 @@ public final class SyncEngine {
         try context.save()
     }
 
+    /// Ids of entities with a queued local delete, per entity type. An
+    /// incoming upsert must not resurrect such a row (pull runs before
+    /// push, so the server still reports it live mid-sync): the local
+    /// tombstone wins until the delete flushes.
+    private func pendingDeleteIDs(entityType: String, in context: ModelContext) -> Set<String> {
+        let typeMatch = entityType
+        let descriptor = FetchDescriptor<LocalPendingWrite>(
+            predicate: #Predicate { $0.entityType == typeMatch && $0.operation == "delete" }
+        )
+        let rows = (try? context.fetch(descriptor)) ?? []
+        return Set(rows.map(\.entityID))
+    }
+
     private func upsertLocations(_ items: [LocationDTO]) throws {
         let context = ModelContext(container)
+        let pendingDeletes = pendingDeleteIDs(entityType: "location", in: context)
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalLocation>(predicate: #Predicate { $0.id == id })
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
                     context.delete(existing)
+                } else if pendingDeletes.contains(id) {
+                    // Queued local delete — don't resurrect.
                 } else {
                     dto.apply(to: existing)
                 }
-            } else if dto.deleted_at == nil {
+            } else if dto.deleted_at == nil, !pendingDeletes.contains(id) {
                 context.insert(dto.makeLocal())
             }
         }
@@ -1023,16 +1046,19 @@ public final class SyncEngine {
 
     private func upsertTags(_ items: [TagDTO]) throws {
         let context = ModelContext(container)
+        let pendingDeletes = pendingDeleteIDs(entityType: "tag", in: context)
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalTag>(predicate: #Predicate { $0.id == id })
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
                     context.delete(existing)
+                } else if pendingDeletes.contains(id) {
+                    // Queued local delete — don't resurrect.
                 } else {
                     dto.apply(to: existing)
                 }
-            } else if dto.deleted_at == nil {
+            } else if dto.deleted_at == nil, !pendingDeletes.contains(id) {
                 context.insert(dto.makeLocal())
             }
         }
@@ -1041,16 +1067,19 @@ public final class SyncEngine {
 
     private func upsertBeds(_ items: [BedDTO]) throws {
         let context = ModelContext(container)
+        let pendingDeletes = pendingDeleteIDs(entityType: "bed", in: context)
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalBed>(predicate: #Predicate { $0.id == id })
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
                     context.delete(existing)
+                } else if pendingDeletes.contains(id) {
+                    // Queued local delete — don't resurrect.
                 } else {
                     dto.apply(to: existing)
                 }
-            } else if dto.deleted_at == nil {
+            } else if dto.deleted_at == nil, !pendingDeletes.contains(id) {
                 context.insert(dto.makeLocal())
             }
         }
@@ -1065,6 +1094,7 @@ public final class SyncEngine {
         // cross-device delete or "mark done" leaves a stale notification
         // queued on the local device.
         var idsToCancelReminder: [String] = []
+        let pendingDeletes = pendingDeleteIDs(entityType: "planting_event", in: context)
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id })
@@ -1078,6 +1108,8 @@ public final class SyncEngine {
                     // ON DELETE CASCADE so the cascade mirrors exactly.
                     cleanupPlantingEventChildren(eventID: id, context: context)
                     context.delete(existing)
+                } else if pendingDeletes.contains(id) {
+                    // Queued local delete — don't resurrect.
                 } else {
                     let wasCompleted = existing.completedAt != nil
                     dto.apply(to: existing)
@@ -1085,7 +1117,7 @@ public final class SyncEngine {
                         idsToCancelReminder.append(id)
                     }
                 }
-            } else if dto.deleted_at == nil {
+            } else if dto.deleted_at == nil, !pendingDeletes.contains(id) {
                 context.insert(dto.makeLocal())
             }
         }
@@ -1446,16 +1478,23 @@ public final class SyncEngine {
 
     private func upsertSeeds(_ items: [SeedDTO]) throws {
         let context = ModelContext(container)
+        let pendingDeletes = pendingDeleteIDs(entityType: "seed", in: context)
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == id })
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
                     context.delete(existing)
+                } else if pendingDeletes.contains(id) {
+                    // A locally soft-deleted row with its delete still in
+                    // the queue: the server hasn't seen the delete yet
+                    // (pull runs before push), so its upsert would clear
+                    // deletedAt and visibly resurrect the seed for a full
+                    // sync cycle. The local tombstone wins.
                 } else {
                     dto.apply(to: existing)
                 }
-            } else if dto.deleted_at == nil {
+            } else if dto.deleted_at == nil, !pendingDeletes.contains(id) {
                 context.insert(dto.makeLocal())
             }
         }
