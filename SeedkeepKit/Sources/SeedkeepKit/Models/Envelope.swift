@@ -44,17 +44,38 @@ public struct SeedkeepError: Error, Sendable, Equatable {
     /// Populated from the envelope-level `retry_after_seconds` sibling
     /// on rate-limited (429) responses; `nil` otherwise.
     public let retryAfterSeconds: Int?
+    /// HTTP status code of the response this error was decoded from.
+    /// `nil` for errors minted locally (bad URL, non-HTTP response).
+    /// Lets callers classify transport-shaped failures (5xx / 429 are
+    /// retryable; definitive 4xx rejections are not) without parsing
+    /// machine strings.
+    public let httpStatus: Int?
 
     public init(
         code: String,
         message: String,
         requestID: String? = nil,
-        retryAfterSeconds: Int? = nil
+        retryAfterSeconds: Int? = nil,
+        httpStatus: Int? = nil
     ) {
         self.code = code
         self.message = message
         self.requestID = requestID
         self.retryAfterSeconds = retryAfterSeconds
+        self.httpStatus = httpStatus
+    }
+
+    /// Copy of this error with the HTTP status attached. Used by the
+    /// client's `perform` so envelope-decoded failures carry the status
+    /// of the response they rode in on.
+    func attaching(httpStatus: Int) -> SeedkeepError {
+        SeedkeepError(
+            code: code,
+            message: message,
+            requestID: requestID,
+            retryAfterSeconds: retryAfterSeconds,
+            httpStatus: httpStatus
+        )
     }
 
     /// Wire shape of the inner `error` object.
@@ -62,4 +83,13 @@ public struct SeedkeepError: Error, Sendable, Equatable {
         let code: String
         let message: String
     }
+}
+
+/// `error.localizedDescription` on a bridged Swift error without
+/// `LocalizedError` yields the useless NSError placeholder ("The
+/// operation couldn't be completed…"). Route it through `humanizeError`
+/// so every view-level `catch { … error.localizedDescription … }` site
+/// shows the same user-readable copy as the banner path.
+extension SeedkeepError: LocalizedError {
+    public var errorDescription: String? { humanizeError(self) }
 }

@@ -414,10 +414,24 @@ public enum PlantingEventKind: String, Codable, Sendable, CaseIterable, Identifi
 }
 
 /// Generic delta-sync response: `{ items: [T], cursor: <ms>, has_more: bool }`.
+///
+/// `cursor_id` (stabilization contract decision 9) is the id of the last
+/// item on the page — the tiebreaker the client echoes back as `since_id`
+/// so rows sharing one `updated_at` millisecond can't be skipped across
+/// page boundaries. Optional: servers that don't emit it yet decode to
+/// `nil` and the client falls back to the legacy cursor-only behavior.
 public struct DeltaPage<Item: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
     public let items: [Item]
     public let cursor: Int64
     public let has_more: Bool
+    public let cursor_id: String?
+
+    public init(items: [Item], cursor: Int64, has_more: Bool, cursor_id: String? = nil) {
+        self.items = items
+        self.cursor = cursor
+        self.has_more = has_more
+        self.cursor_id = cursor_id
+    }
 }
 
 /// Response payloads used by typed `SeedkeepClient` calls.
