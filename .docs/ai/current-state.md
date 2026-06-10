@@ -8,6 +8,14 @@
 
 ## Last Session Summary
 
+**Date**: 2026-06-10 — Stabilization sprint B1+B2+B3 → TestFlight 0.4.0 build 44 (umbrella repo owns the full narrative: `seedkeep/.docs/ai/`)
+
+- B1 `f634a10`+`5f6fe47`: critical fix — optional CatalogCorrectionDTO fields (null field_name no longer wedges sync); per-feed isolation in syncAll (flushPending always runs); applied_patch consumption into GrowingInfoSnapshot; cross-device notification dedup; first-sync ping suppression.
+- B2 `44e284e..a49ae63`: `SeedkeepSchema.all` single schema source (prod + all test containers) + registration guardrail test; watering/heat-dome warnings survive refreshes until delivery; TZ-change clear-after-fetch; refresh coalescing honors state-changing reasons; DST-safe 7am reminders; notifier auth gate before ledger claim.
+- B3 `06538bd..2a5b35d`: sign-out wipes store/queue/cursors/notifications; cached-identity offline launch; unauthorized-only token clear; transport/5xx/429 don't strike dead-letter; client-supplied create ids (temp-id class killed); flush reentrancy guard + keystroke coalescing; explicit-null patches (seed clears + mark-incomplete); pull resurrection guard; SeedkeepError is LocalizedError + humanized banner.
+- B4 `265e4a6`: release.sh dirty-tree + test gates (--skip-tests escape).
+- Suites: 272 app + 51 kit, build clean. Build 44 tolerates the pre-B1 server on every changed seam. Device-verify checklist: `seedkeep/.docs/ai/device-verify.md` (verify-latest-only).
+
 **Date**: 2026-06-02 — Fixed assistant-threads URL encoding bug (Sync now → 404)
 
 - User reported `not_found: Route not found` on Sync now after installing build 33. Server-side static analysis ruled out any missing routes — every endpoint the sync engine touches responded 401 (= registered) on prod.
