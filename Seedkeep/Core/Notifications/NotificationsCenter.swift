@@ -56,6 +56,16 @@ final class NotificationsCenter {
         await center.notificationSettings().authorizationStatus
     }
 
+    /// Sign-out / identity-switch cleanup: drop every pending AND
+    /// delivered notification. Every notification in this center belongs
+    /// to the app, and all of them reference the outgoing account's data
+    /// (event reminders, pet pings, correction outcomes, weather
+    /// warnings) — none may survive into the next account's session.
+    func removeAllAppNotifications() {
+        center.removeAllPendingNotificationRequests()
+        center.removeAllDeliveredNotifications()
+    }
+
     // MARK: - Planting-event reminders
 
     /// Schedule a 7am reminder on the planned date of a planting event.

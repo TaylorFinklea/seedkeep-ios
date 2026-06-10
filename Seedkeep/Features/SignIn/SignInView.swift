@@ -67,6 +67,16 @@ struct SignInView: View {
                         .foregroundStyle(HerbColor.rose)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
+                } else if case .failed(let reason) = auth.state {
+                    // Session-restore failure (e.g. token rejected, or
+                    // offline with nothing cached). Without this the user
+                    // lands here with zero explanation — the reason is
+                    // already humanized by AuthController.
+                    Text(reason)
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.rose)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                 }
 
                 Spacer().frame(height: 32)

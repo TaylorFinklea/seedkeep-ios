@@ -48,6 +48,33 @@ public final class SyncEngine {
         self.container = container
     }
 
+    // MARK: - Local store wipe (Stabilization B3)
+
+    /// Deletes every row of every `@Model` in the app schema. Generic
+    /// over `SeedkeepSchema.all` — the authoritative model list — so a
+    /// future model is automatically covered without touching this
+    /// function. The list includes `LocalPendingWrite` (queued writes
+    /// must never flush into another account's household) and
+    /// `LocalSyncCursor` (cursors are per-user for some feeds, e.g.
+    /// catalog corrections — a second household member must not inherit
+    /// the first's watermark). Called on sign-out and on sign-in to a
+    /// different user/household than the one that owns the store.
+    public func eraseAllLocalData() throws {
+        let context = ModelContext(container)
+        for model in SeedkeepSchema.all {
+            try eraseAllRows(of: model, in: context)
+        }
+        try context.save()
+    }
+
+    /// Fetch-and-delete (not `context.delete(model:)`) so in-memory test
+    /// containers and live stores behave identically.
+    private func eraseAllRows<T: PersistentModel>(of type: T.Type, in context: ModelContext) throws {
+        for row in try context.fetch(FetchDescriptor<T>()) {
+            context.delete(row)
+        }
+    }
+
     // MARK: - Pull
 
     /// Returns `true` when a sync pass actually ran, `false` when it was

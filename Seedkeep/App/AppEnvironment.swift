@@ -58,6 +58,20 @@ public final class AppEnvironment {
         let auth = AuthController(client: client, tokenStore: store)
         let container = Self.makeModelContainer()
         let sync = SyncEngine(client: client, container: container)
+        // Stabilization B3 — sign-out / identity-switch wipe. The auth
+        // controller is built before the container exists, so the wipe
+        // is injected here: erase every model (generic over
+        // SeedkeepSchema.all — includes the pending-write queue and sync
+        // cursors) and drop pending + delivered notifications.
+        auth.wireLocalDataEraser { [sync] in
+            do {
+                try sync.eraseAllLocalData()
+            } catch {
+                // Best effort — a wipe failure must not block sign-out.
+                // The keychain token is already gone at this point.
+            }
+            NotificationsCenter.shared.removeAllAppNotifications()
+        }
         let recommendations = RecommendationStore(client: client, container: container)
         let journal = JournalStore(client: client, container: container)
         let assistant = AIAssistantCoordinator(client: client, container: container)
