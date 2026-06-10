@@ -10,9 +10,11 @@ import SwiftData
 /// weather-warning persistence silently failed on device) is exactly the
 /// drift this constant exists to prevent.
 ///
-/// When adding a new `@Model`, add it here and nowhere else.
-/// `SchemaRegistrationTests` walks the app image at runtime and fails if
-/// any `PersistentModel` class is absent from this list.
+/// When adding a new `@Model`, add it here and nowhere else — and name it
+/// with the house `Local` prefix: `SchemaRegistrationTests` walks the app
+/// image at runtime and only considers classes named `Local*` when checking
+/// that every `PersistentModel` is present in this list. A model named
+/// outside that convention would escape the guardrail.
 enum SeedkeepSchema {
     static let all: [any PersistentModel.Type] = [
         LocalLocation.self,
