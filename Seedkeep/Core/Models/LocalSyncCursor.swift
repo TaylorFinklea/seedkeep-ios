@@ -10,18 +10,26 @@ public final class LocalSyncCursor {
     public var householdID: String
     public var kind: String                     // "locations" | "tags" | "seeds"
     public var cursor: Int64                    // updated_at watermark
+    /// Tiebreaker id of the last item at the watermark (stabilization
+    /// contract decision 9). Echoed back as `since_id` so rows sharing
+    /// one `updated_at` millisecond can't be skipped across pages.
+    /// `nil` for legacy servers that don't emit `cursor_id` — the pull
+    /// then falls back to the strict `updated_at > since` behavior.
+    public var cursorID: String?
     public var lastSyncedAt: Int64
 
     public init(
         householdID: String,
         kind: String,
         cursor: Int64,
+        cursorID: String? = nil,
         lastSyncedAt: Int64
     ) {
         self.id = "\(householdID):\(kind)"
         self.householdID = householdID
         self.kind = kind
         self.cursor = cursor
+        self.cursorID = cursorID
         self.lastSyncedAt = lastSyncedAt
     }
 

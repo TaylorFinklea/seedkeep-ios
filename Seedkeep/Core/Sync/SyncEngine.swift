@@ -125,61 +125,61 @@ public final class SyncEngine {
     }
 
     private func pullLocations(householdID: String) async throws {
-        let cursor = currentCursor(householdID: householdID, kind: "locations")
-        var since = cursor
+        var (since, sinceID) = currentCursorPair(householdID: householdID, kind: "locations")
         repeat {
-            let page = try await client.locations(since: since)
+            let page = try await client.locations(since: since, sinceID: sinceID)
             try upsertLocations(page.items)
             since = page.cursor
-            try saveCursor(householdID: householdID, kind: "locations", cursor: since)
+            sinceID = page.cursor_id
+            try saveCursor(householdID: householdID, kind: "locations", cursor: since, cursorID: sinceID)
             if !page.has_more { break }
         } while true
     }
 
     private func pullTags(householdID: String) async throws {
-        let cursor = currentCursor(householdID: householdID, kind: "tags")
-        var since = cursor
+        var (since, sinceID) = currentCursorPair(householdID: householdID, kind: "tags")
         repeat {
-            let page = try await client.tags(since: since)
+            let page = try await client.tags(since: since, sinceID: sinceID)
             try upsertTags(page.items)
             since = page.cursor
-            try saveCursor(householdID: householdID, kind: "tags", cursor: since)
+            sinceID = page.cursor_id
+            try saveCursor(householdID: householdID, kind: "tags", cursor: since, cursorID: sinceID)
             if !page.has_more { break }
         } while true
     }
 
     private func pullSeeds(householdID: String) async throws {
-        let cursor = currentCursor(householdID: householdID, kind: "seeds")
-        var since = cursor
+        var (since, sinceID) = currentCursorPair(householdID: householdID, kind: "seeds")
         repeat {
-            let page = try await client.seeds(since: since)
+            let page = try await client.seeds(since: since, sinceID: sinceID)
             try upsertSeeds(page.items)
             since = page.cursor
-            try saveCursor(householdID: householdID, kind: "seeds", cursor: since)
+            sinceID = page.cursor_id
+            try saveCursor(householdID: householdID, kind: "seeds", cursor: since, cursorID: sinceID)
             if !page.has_more { break }
         } while true
     }
 
     private func pullBeds(householdID: String) async throws {
-        let cursor = currentCursor(householdID: householdID, kind: "beds")
-        var since = cursor
+        var (since, sinceID) = currentCursorPair(householdID: householdID, kind: "beds")
         repeat {
-            let page = try await client.beds(since: since)
+            let page = try await client.beds(since: since, sinceID: sinceID)
             try upsertBeds(page.items)
             since = page.cursor
-            try saveCursor(householdID: householdID, kind: "beds", cursor: since)
+            sinceID = page.cursor_id
+            try saveCursor(householdID: householdID, kind: "beds", cursor: since, cursorID: sinceID)
             if !page.has_more { break }
         } while true
     }
 
     private func pullPlantingEvents(householdID: String) async throws {
-        let cursor = currentCursor(householdID: householdID, kind: "planting_events")
-        var since = cursor
+        var (since, sinceID) = currentCursorPair(householdID: householdID, kind: "planting_events")
         repeat {
-            let page = try await client.plantingEvents(since: since)
+            let page = try await client.plantingEvents(since: since, sinceID: sinceID)
             try upsertPlantingEvents(page.items)
             since = page.cursor
-            try saveCursor(householdID: householdID, kind: "planting_events", cursor: since)
+            sinceID = page.cursor_id
+            try saveCursor(householdID: householdID, kind: "planting_events", cursor: since, cursorID: sinceID)
             if !page.has_more { break }
         } while true
     }
@@ -191,32 +191,33 @@ public final class SyncEngine {
     /// same channel; `upsertPetDepartures` hard-deletes locally on a
     /// `deleted_at != nil` payload.
     private func pullPetDepartures(householdID: String) async throws {
-        let cursor = currentCursor(
+        var (since, sinceID) = currentCursorPair(
             householdID: householdID,
             kind: Self.petDeparturesKind
         )
-        var since = cursor
         repeat {
-            let page = try await client.petDepartures(since: since)
+            let page = try await client.petDepartures(since: since, sinceID: sinceID)
             try upsertPetDepartures(page.items)
             since = page.cursor
+            sinceID = page.cursor_id
             try saveCursor(
                 householdID: householdID,
                 kind: Self.petDeparturesKind,
-                cursor: since
+                cursor: since,
+                cursorID: sinceID
             )
             if !page.has_more { break }
         } while true
     }
 
     private func pullJournalEntries(householdID: String) async throws {
-        let cursor = currentCursor(householdID: householdID, kind: "journal_entries")
-        var since = cursor
+        var (since, sinceID) = currentCursorPair(householdID: householdID, kind: "journal_entries")
         repeat {
-            let page = try await client.journalFeed(since: since)
+            let page = try await client.journalFeed(since: since, sinceID: sinceID)
             try upsertJournalEntries(page.items)
             since = page.cursor
-            try saveCursor(householdID: householdID, kind: "journal_entries", cursor: since)
+            sinceID = page.cursor_id
+            try saveCursor(householdID: householdID, kind: "journal_entries", cursor: since, cursorID: sinceID)
             if !page.has_more { break }
         } while true
     }
@@ -228,7 +229,7 @@ public final class SyncEngine {
     /// `pullPetDepartures` — same delta-page envelope, same
     /// tombstone-on-the-same-channel shape.
     private func pullCatalogCorrections(householdID: String) async throws {
-        let cursor = currentCursor(
+        var (since, sinceID) = currentCursorPair(
             householdID: householdID,
             kind: Self.catalogCorrectionsKind
         )
@@ -237,29 +238,30 @@ public final class SyncEngine {
         // correction history, so first-sight terminal rows are ingested
         // without being treated as fresh transitions (no notification
         // pings for months-old outcomes).
-        let isInitialSync = cursor == 0
-        var since = cursor
+        let isInitialSync = since == 0
         repeat {
-            let page = try await client.catalogCorrectionsMine(since: since)
+            let page = try await client.catalogCorrectionsMine(since: since, sinceID: sinceID)
             try upsertCatalogCorrections(page.items, isInitialSync: isInitialSync)
             since = page.cursor
+            sinceID = page.cursor_id
             try saveCursor(
                 householdID: householdID,
                 kind: Self.catalogCorrectionsKind,
-                cursor: since
+                cursor: since,
+                cursorID: sinceID
             )
             if !page.has_more { break }
         } while true
     }
 
     private func pullAssistantThreads(householdID: String) async throws {
-        let cursor = currentCursor(householdID: householdID, kind: "assistant_threads")
-        var since = cursor
+        var (since, sinceID) = currentCursorPair(householdID: householdID, kind: "assistant_threads")
         repeat {
-            let page = try await client.assistantThreads(since: since)
+            let page = try await client.assistantThreads(since: since, sinceID: sinceID)
             try upsertAssistantThreads(page.items)
             since = page.cursor
-            try saveCursor(householdID: householdID, kind: "assistant_threads", cursor: since)
+            sinceID = page.cursor_id
+            try saveCursor(householdID: householdID, kind: "assistant_threads", cursor: since, cursorID: sinceID)
             if !page.has_more { break }
         } while true
     }
@@ -1025,25 +1027,33 @@ public final class SyncEngine {
 
     // MARK: - SwiftData helpers
 
-    private func currentCursor(householdID: String, kind: String) -> Int64 {
+    /// Watermark pair for a feed: the `updated_at` cursor plus the
+    /// `cursor_id` tiebreaker (contract decision 9). The id is `nil`
+    /// until a decision-9 server emits one.
+    private func currentCursorPair(householdID: String, kind: String) -> (cursor: Int64, cursorID: String?) {
         let context = ModelContext(container)
         let key = LocalSyncCursor.key(householdID: householdID, kind: kind)
         let descriptor = FetchDescriptor<LocalSyncCursor>(predicate: #Predicate { $0.id == key })
-        return (try? context.fetch(descriptor).first?.cursor) ?? 0
+        guard let row = try? context.fetch(descriptor).first else { return (0, nil) }
+        return (row.cursor, row.cursorID)
     }
 
-    private func saveCursor(householdID: String, kind: String, cursor: Int64) throws {
+    private func saveCursor(householdID: String, kind: String, cursor: Int64, cursorID: String? = nil) throws {
         let context = ModelContext(container)
         let key = LocalSyncCursor.key(householdID: householdID, kind: kind)
         let descriptor = FetchDescriptor<LocalSyncCursor>(predicate: #Predicate { $0.id == key })
         if let existing = try context.fetch(descriptor).first {
             existing.cursor = cursor
+            // Overwrite (including nil → legacy server) so a stale id
+            // can't pair with a newer watermark.
+            existing.cursorID = cursorID
             existing.lastSyncedAt = Self.nowMs()
         } else {
             context.insert(LocalSyncCursor(
                 householdID: householdID,
                 kind: kind,
                 cursor: cursor,
+                cursorID: cursorID,
                 lastSyncedAt: Self.nowMs()
             ))
         }
