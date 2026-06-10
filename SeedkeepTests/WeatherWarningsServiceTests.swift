@@ -69,7 +69,10 @@ struct WeatherWarningsServiceTests {
         coords: (lat: Double?, lon: Double?) = (39.0997, -94.5786),
         toggles: (frost: Bool, heat: Bool, water: Bool) = (true, true, true),
         householdID: String? = householdID,
-        activeCount: Int = 1
+        activeCount: Int = 1,
+        /// Override for tests that mutate toggles mid-refresh; defaults
+        /// to a constant closure over `toggles`.
+        togglesProvider: (@MainActor () -> (frost: Bool, heat: Bool, water: Bool))? = nil
     ) -> Harness {
         let container = makeContainer()
         let provider = MockWeatherProvider()
@@ -89,7 +92,7 @@ struct WeatherWarningsServiceTests {
             thresholds: .kc,
             householdIDProvider: { householdID },
             preferencesProvider: { coords },
-            togglesProvider: { toggles }
+            togglesProvider: togglesProvider ?? { toggles }
         )
         return Harness(
             service: service,
@@ -651,6 +654,144 @@ struct WeatherWarningsServiceTests {
 
         let after = harness.scheduler.pendingSnapshot.map(\.identifier)
         #expect(after.contains(identifier), "pre-fire-buffer refresh must not cancel the pending frost warning")
+    }
+
+    // MARK: - TZ-change clear deferred until a usable forecast (never clear on failure)
+
+    /// Seed the singleton snapshot row so the next refresh detects a
+    /// timezone change (persisted TZ ≠ device TZ). `sawClockAt` is set to
+    /// `now` so the clock-skew detector stays quiet.
+    @MainActor
+    private static func seedSnapshotRow(
+        in container: ModelContainer,
+        sawTimeZoneIdentifier: String,
+        sawClockAt: Date
+    ) {
+        let context = ModelContext(container)
+        let row = LocalForecastSnapshot()
+        row.sawTimeZoneIdentifier = sawTimeZoneIdentifier
+        row.sawClockAt = sawClockAt
+        context.insert(row)
+        try? context.save()
+    }
+
+    @Test("TZ change + failed fetch leaves pending warnings untouched (clear only after success)")
+    func tzChangeFailedFetchPreservesPending() async {
+        let harness = await Self.makeHarness()
+        await Self.seedSnapshotRow(
+            in: harness.container,
+            sawTimeZoneIdentifier: "Pacific/Honolulu",
+            sawClockAt: Self.anchorNow
+        )
+        harness.provider.setFetchResult(.failed(message: "airplane mode", isUnauthorized: false))
+        let req = UNNotificationRequest(
+            identifier: "seedkeep.notif.frost.2026-07-20",
+            content: UNMutableNotificationContent(),
+            trigger: nil
+        )
+        harness.scheduler.seedPending([req])
+
+        let outcome = await harness.service.refreshAll(reason: .timeZoneChange)
+
+        if case .weatherKitFailed = outcome {
+            // OK
+        } else {
+            Issue.record("expected .weatherKitFailed, got \(outcome)")
+        }
+        #expect(
+            harness.scheduler.pendingSnapshot.count == 1,
+            "TZ-change refresh must NOT clear pending warnings when the fetch fails"
+        )
+    }
+
+    @Test("TZ change + successful fetch rebuilds: stale pending cleared, fresh warnings scheduled")
+    func tzChangeSuccessfulFetchRebuilds() async {
+        let harness = await Self.makeHarness()
+        await Self.seedSnapshotRow(
+            in: harness.container,
+            sawTimeZoneIdentifier: "Pacific/Honolulu",
+            sawClockAt: Self.anchorNow
+        )
+        harness.provider.setForecast(Self.coldForecast(start: Self.anchorNow))
+        // A stale id the new plan won't contain — the rebuild must sweep it.
+        let stale = UNNotificationRequest(
+            identifier: "seedkeep.notif.frost.2026-02-15",
+            content: UNMutableNotificationContent(),
+            trigger: nil
+        )
+        harness.scheduler.seedPending([stale])
+
+        _ = await harness.service.refreshAll(reason: .timeZoneChange)
+
+        let ids = harness.scheduler.pendingSnapshot.map(\.identifier)
+        #expect(!ids.contains("seedkeep.notif.frost.2026-02-15"), "stale pre-TZ-change id must be swept")
+        #expect(ids.contains { $0.hasPrefix("seedkeep.notif.frost.") }, "fresh warnings must be scheduled")
+    }
+
+    @Test("stale-forecast path persists the DEVICE timezone, not the cached forecast's old TZ")
+    func stalePathPersistsDeviceTZ() async {
+        let harness = await Self.makeHarness()
+        await Self.seedSnapshotRow(
+            in: harness.container,
+            sawTimeZoneIdentifier: "Pacific/Honolulu",
+            sawClockAt: Self.anchorNow
+        )
+        // Cached snapshot still carries the OLD timezone. Persisting it
+        // re-armed tzChanged on every refresh — each one clearing and
+        // re-adding the pending set until a fresh fetch landed.
+        harness.provider.setFetchResult(.stale(
+            forecast: Self.benignForecast(start: Self.anchorNow),
+            observed: [],
+            homeTimeZone: TimeZone(identifier: "Pacific/Honolulu")!,
+            ageSeconds: 4 * 3_600
+        ))
+
+        _ = await harness.service.refreshAll(reason: .timeZoneChange)
+
+        let container = harness.container
+        let persistedTZ = await MainActor.run { () -> String? in
+            let context = ModelContext(container)
+            let descriptor = FetchDescriptor<LocalForecastSnapshot>()
+            return (try? context.fetch(descriptor))?.first?.sawTimeZoneIdentifier
+        }
+        #expect(
+            persistedTZ == TimeZone.current.identifier,
+            "persisted TZ must be the device's, else tzChanged re-arms every refresh"
+        )
+    }
+
+    // MARK: - State-changing refresh reasons must not coalesce into stale in-flight refresh
+
+    @MainActor
+    private final class TogglesBox {
+        var value: (frost: Bool, heat: Bool, water: Bool)
+        init(_ value: (frost: Bool, heat: Bool, water: Bool)) {
+            self.value = value
+        }
+    }
+
+    @Test("toggle-enable refresh re-runs after the in-flight refresh instead of absorbing its stale result")
+    func stateChangingReasonRerunsAfterInFlight() async {
+        let box = await MainActor.run { TogglesBox((frost: false, heat: true, water: false)) }
+        let harness = await Self.makeHarness(togglesProvider: { box.value })
+        harness.provider.setForecast(Self.coldForecast(start: Self.anchorNow))
+        harness.provider.setFetchDelay(nanoseconds: 300_000_000)
+
+        // Refresh A starts with frost OFF and stalls in the fetch.
+        let first = Task { await harness.service.refreshAll(reason: .test) }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // User flips frost ON mid-flight; the toggle-enable refresh must
+        // NOT return refresh A's outcome (computed with frost off).
+        await MainActor.run { box.value = (frost: true, heat: true, water: false) }
+        harness.provider.setFetchDelay(nanoseconds: 0)
+        _ = await harness.service.refreshAll(reason: .toggleEnable(.frost))
+        _ = await first.value
+
+        #expect(harness.provider.recordedFetchCount == 2, "state-changing reason must run a fresh refresh")
+        let frostAdds = harness.scheduler.recordedAdds
+            .filter { $0.identifier.hasPrefix("seedkeep.notif.frost.") }
+        #expect(!frostAdds.isEmpty, "the re-run refresh must see the newly enabled frost toggle")
     }
 
     /// 4-day dome (96°F) starting the day after `start`, then mild days.

@@ -22,6 +22,7 @@ final class MockWeatherProvider: WeatherProvider, @unchecked Sendable {
         var homeTimeZoneFixture: TimeZone = TimeZone(identifier: "America/Chicago")!
         var fetchResultFixture: ForecastResult?
         var cachedSnapshotFixture: ForecastSnapshot?
+        var fetchDelayNanoseconds: UInt64 = 0
         var recordedFetchCount: Int = 0
         var recordedBumpGenerations: [Int] = []
         var recordedFetchCalls: [FetchCall] = []
@@ -57,6 +58,13 @@ final class MockWeatherProvider: WeatherProvider, @unchecked Sendable {
         state.withLock { $0.cachedSnapshotFixture = snapshot }
     }
 
+    /// Simulate a slow WeatherKit call — `fetch` sleeps this long before
+    /// returning. Used by the coalescing tests to hold a refresh in
+    /// flight while a state-changing caller arrives.
+    func setFetchDelay(nanoseconds: UInt64) {
+        state.withLock { $0.fetchDelayNanoseconds = nanoseconds }
+    }
+
     // MARK: - Recorded state
 
     var recordedFetchCount: Int {
@@ -78,14 +86,17 @@ final class MockWeatherProvider: WeatherProvider, @unchecked Sendable {
         longitude: Double,
         generation: Int
     ) async -> ForecastResult {
-        let snapshot = state.withLock { (s: inout State) -> (ForecastResult?, [DailyWeather], [ObservedDay], TimeZone) in
+        let snapshot = state.withLock { (s: inout State) -> (ForecastResult?, [DailyWeather], [ObservedDay], TimeZone, UInt64) in
             s.recordedFetchCount += 1
             s.recordedFetchCalls.append(FetchCall(
                 latitude: latitude,
                 longitude: longitude,
                 generation: generation
             ))
-            return (s.fetchResultFixture, s.forecastFixture, s.observedFixture, s.homeTimeZoneFixture)
+            return (s.fetchResultFixture, s.forecastFixture, s.observedFixture, s.homeTimeZoneFixture, s.fetchDelayNanoseconds)
+        }
+        if snapshot.4 > 0 {
+            try? await Task.sleep(nanoseconds: snapshot.4)
         }
         if let result = snapshot.0 {
             return result

@@ -252,11 +252,25 @@ actor WeatherWarningsService {
 
     /// Primary entry. Concurrent callers coalesce into the in-flight
     /// Task so exactly one WeatherKit fetch happens per refresh cycle.
+    ///
+    /// EXCEPT for state-changing reasons: a refresh kicked by a toggle
+    /// flip / location change / TZ change / plantings change snapshots
+    /// its prereqs at start, so absorbing such a caller into an OLDER
+    /// in-flight refresh would silently discard the change (the toggle
+    /// looks enabled but nothing scheduled until the next trigger).
+    /// Those callers await the stale refresh, then run a fresh one.
     @discardableResult
     func refreshAll(reason: RefreshReason) async -> RefreshOutcome {
         // a. Coalesce — if a refresh is already in flight, wait for it.
-        if let inFlight {
-            return await inFlight.value
+        let stateChanging = Self.isStateChangingReason(reason)
+        while let running = inFlight {
+            let outcome = await running.value
+            if !stateChanging {
+                return outcome
+            }
+            // Let the creator's continuation clear `inFlight` before
+            // re-checking, so this loop can't spin on a completed task.
+            await Task.yield()
         }
         let task = Task<RefreshOutcome, Never> { [weak self] in
             guard let self else {
@@ -270,6 +284,18 @@ actor WeatherWarningsService {
         // see a fresh slot.
         inFlight = nil
         return outcome
+    }
+
+    /// Reasons that carry a state change the in-flight refresh cannot
+    /// have seen (its prereq snapshot predates the change).
+    private static func isStateChangingReason(_ reason: RefreshReason) -> Bool {
+        switch reason {
+        case .toggleEnable, .locationChange, .timeZoneChange,
+             .activePlantingsChanged, .permissionRegranted:
+            return true
+        case .manualRefresh, .foreground, .test:
+            return false
+        }
     }
 
     /// Foreground-only staleness gate. Bypassed for every other reason.
@@ -328,6 +354,11 @@ actor WeatherWarningsService {
                 householdID: householdIDProvider()
             )
         }
+        // Capture the coord generation alongside the prereq snapshot —
+        // reading the live actor value at fetch time let a mid-flight
+        // `invalidateLocation()` bump tag an OLD location's forecast
+        // with the NEW generation, defeating the stale-cache check.
+        let generationAtSnapshot = coordGeneration
         let activeCount = await planting.activeCount()
         let authStatus = await scheduler.authorizationStatus()
 
@@ -396,9 +427,6 @@ actor WeatherWarningsService {
         } else {
             tzChanged = false
         }
-        if tzChanged {
-            await clearAllOurPrefixes()
-        }
 
         // Clock-skew: > 24h backward OR > 14d forward.
         let now = clock.now
@@ -409,9 +437,15 @@ actor WeatherWarningsService {
                 clockSkewSeconds = delta
             }
         }
-        if clockSkewSeconds != nil {
-            await clearAllOurPrefixes()
-        }
+
+        // TZ-change / clock-skew rebuild is DEFERRED until a usable
+        // forecast is in hand (below). Clearing here, before the fetch,
+        // violated the "never clear pending on failure" rule: a failed
+        // fetch returned early with zero warnings left — exactly the
+        // airplane-mode-while-traveling case. The cleared notifications
+        // carry home-TZ-anchored DateComponents and fire at the correct
+        // wall-clock regardless, so holding them through a failed
+        // refresh is safe.
 
         // f. Per-day fetch cap — home TZ YMD. We don't have the home TZ
         //    yet (provider returns it), so use TimeZone.current as the
@@ -442,7 +476,7 @@ actor WeatherWarningsService {
                 await self.provider.fetch(
                     latitude: lat,
                     longitude: lon,
-                    generation: self.coordGeneration
+                    generation: generationAtSnapshot
                 )
             }
         }
@@ -495,6 +529,13 @@ actor WeatherWarningsService {
         // i. homeTimeZone already sourced from provider.
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = homeTimeZone
+
+        // d/e (deferred): rebuild on TZ change or clock skew now that a
+        // usable forecast arrived — everything re-plans below against an
+        // empty pending set.
+        if tzChanged || clockSkewSeconds != nil {
+            await clearAllOurPrefixes()
+        }
 
         // j. Server-coordinated watering ledger.
         let householdLastWaterAt: Date?
@@ -783,11 +824,15 @@ actor WeatherWarningsService {
         }
 
         // s. Persist snapshot (final fields the service owns).
+        //    sawTimeZoneIdentifier records the DEVICE's current TZ, not
+        //    the forecast's — a stale (cached) forecast carries the OLD
+        //    TZ, and persisting that re-armed the TZ-change clear on
+        //    every subsequent refresh until a fresh fetch landed.
         await persistSnapshot(
             outcome: outcome,
             authStatus: postAuthStatus,
             now: now,
-            homeTimeZoneIdentifier: homeTimeZone.identifier,
+            homeTimeZoneIdentifier: TimeZone.current.identifier,
             lastWaterFireDate: confirmedWaterFireDate ?? priorState.lastWaterFireDate,
             lastHeatDomeFireDate: nextHeatDomeFireDate,
             lastHeatEventDate: nextHeatEventDate,
