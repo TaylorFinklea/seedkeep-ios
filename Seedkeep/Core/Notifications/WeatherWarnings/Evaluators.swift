@@ -192,7 +192,14 @@ enum HeatEvaluator {
         now: Date,
         calendar: Calendar,
         homeTimeZone: TimeZone,
-        fireBufferSeconds: TimeInterval = 15 * 60
+        fireBufferSeconds: TimeInterval = 15 * 60,
+        /// Fire dates of OUR still-pending notification requests, keyed by
+        /// identifier. The dome dedup must never drop a hit whose
+        /// notification is still pending — `lastHeatDomeFireDate` is
+        /// recorded at SCHEDULE time, so without this exemption the very
+        /// hit that was just scheduled reads as "already acknowledged" on
+        /// the next refresh and the diff cancels it before it ever fires.
+        pendingFireDates: [String: Date] = [:]
     ) -> [Hit] {
         // ── Pass 1: find heat-dome runs and emit one hit per run. ───────
         var domeHits: [Hit] = []
@@ -278,15 +285,23 @@ enum HeatEvaluator {
             )
         }
 
-        // ── Heat-dome dedup: if the dome's heatDate is within 7d of the
-        //    last dome fire, drop it. (Applies only to dome-variant hits.) ─
+        // ── Heat-dome dedup: drop a dome-variant hit that fires within 7d
+        //    AFTER the last dome fire. (Applies only to dome-variant hits.)
+        //    Two deliberate choices:
+        //      1. A hit whose notification is still pending is exempt —
+        //         it IS the recorded fire (recorded at schedule time);
+        //         dropping it would cancel the warning before delivery.
+        //      2. Compare fire dates to fire dates. The previous
+        //         `abs(heatDate − lastDome)` conflated the hot day's
+        //         midnight with a 7pm fire time across two date domains. ─
         if let lastDome = lastHeatDomeFireDate {
             hits.removeAll { hit in
                 guard hit.variant == .heatDomeStarting || hit.variant == .firstOfSeason else {
                     return false
                 }
-                let delta = hit.heatDate.timeIntervalSince(lastDome)
-                return abs(delta) < 7 * 86_400
+                if pendingFireDates[hit.identifier] != nil { return false }
+                let delta = hit.fireDate.timeIntervalSince(lastDome)
+                return delta >= 0 && delta < 7 * 86_400
             }
         }
 

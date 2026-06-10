@@ -41,27 +41,9 @@ struct WeatherWarningsServiceTests {
 
     @MainActor
     private static func makeContainer() -> ModelContainer {
-        let schema = Schema([
-            LocalForecastSnapshot.self,
-            LocalPlantingEvent.self,
-            LocalPetMoodSnapshot.self,
-            LocalPetDeparture.self,
-            LocalJournalEntry.self,
-            LocalJournalChecklistItem.self,
-            LocalJournalEntryPhoto.self,
-            LocalSeed.self,
-            LocalBed.self,
-            LocalLocation.self,
-            LocalTag.self,
-            LocalSeedPhoto.self,
-            LocalPendingWrite.self,
-            LocalSyncCursor.self,
-            LocalRecommendation.self,
-            LocalAssistantThread.self,
-            LocalAssistantMessage.self,
-            LocalAssistantToolCall.self,
-            LocalAssistantKeyStatus.self,
-        ])
+        // Production model list — a test-only schema once masked the
+        // LocalForecastSnapshot registration gap (see SeedkeepSchema).
+        let schema = Schema(SeedkeepSchema.all)
         let config = ModelConfiguration(
             "weatherWarningsServiceTests-\(UUID().uuidString)",
             schema: schema,
@@ -496,6 +478,86 @@ struct WeatherWarningsServiceTests {
         let waterAdds = harness.scheduler.recordedAdds
             .filter { $0.identifier.hasPrefix("seedkeep.notif.water.") }
         #expect(!waterAdds.isEmpty, "fallback should still schedule water; outcome=\(outcome)")
+    }
+
+    // MARK: - Heat-dome cancel-before-fire pair (activated by schema fix)
+
+    @Test("heat-dome warning survives a second refresh — schedule-time dedup must not cancel the pending notification")
+    func heatDomePendingSurvivesSecondRefresh() async {
+        let harness = await Self.makeHarness(toggles: (false, true, false))
+        harness.provider.setForecast(Self.hotDomeForecast(start: Self.anchorNow))
+
+        _ = await harness.service.refreshAll(reason: .test)
+        let heatIDs = harness.scheduler.pendingSnapshot
+            .map(\.identifier)
+            .filter { $0.hasPrefix("seedkeep.notif.heat.") }
+        #expect(!heatIDs.isEmpty, "first refresh must schedule a dome warning")
+
+        // The schema fix activates this persistence — the dedup input
+        // must round-trip through the (production) schema, which is
+        // exactly what re-arms the masked cancel bug on refresh 2.
+        let container = harness.container
+        let persistedDomeFire = await MainActor.run { () -> Date? in
+            let context = ModelContext(container)
+            let descriptor = FetchDescriptor<LocalForecastSnapshot>()
+            return (try? context.fetch(descriptor))?.first?.lastHeatDomeFireDate
+        }
+        #expect(persistedDomeFire != nil, "lastHeatDomeFireDate must persist after the scheduling refresh")
+
+        // Second refresh, unchanged forecast. THE regression: the
+        // evaluator used to drop the just-scheduled hit as "already
+        // acknowledged" and the diff cancelled the pending notification.
+        _ = await harness.service.refreshAll(reason: .test)
+        let after = Set(
+            harness.scheduler.pendingSnapshot
+                .map(\.identifier)
+                .filter { $0.hasPrefix("seedkeep.notif.heat.") }
+        )
+        for id in heatIDs {
+            #expect(after.contains(id), "pending heat warning \(id) was cancelled by the follow-up refresh")
+        }
+    }
+
+    @Test("weather-warning state persists through the production schema (LocalForecastSnapshot registered)")
+    func snapshotPersistsThroughSharedSchema() async {
+        let harness = await Self.makeHarness()
+        harness.provider.setForecast(Self.benignForecast(start: Self.anchorNow))
+        _ = await harness.service.refreshAll(reason: .test)
+        let container = harness.container
+        let row = await MainActor.run { () -> (tz: String?, clock: Date?, outcome: String?)? in
+            let context = ModelContext(container)
+            let descriptor = FetchDescriptor<LocalForecastSnapshot>()
+            guard let row = (try? context.fetch(descriptor))?.first else { return nil }
+            return (row.sawTimeZoneIdentifier, row.sawClockAt, row.outcomeRaw)
+        }
+        #expect(row != nil, "refresh must create the singleton LocalForecastSnapshot row")
+        #expect(row?.clock != nil)
+        #expect(row?.outcome != nil)
+    }
+
+    /// 4-day dome (96°F) starting the day after `start`, then mild days.
+    private static func hotDomeForecast(start: Date) -> [DailyWeather] {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = homeTimeZone
+        var forecast: [DailyWeather] = []
+        for offset in 1...10 {
+            guard let d = cal.date(byAdding: .day, value: offset, to: start) else {
+                continue
+            }
+            let hot = offset <= 4
+            forecast.append(DailyWeather(
+                date: d,
+                lowF: hot ? 78 : 60,
+                highF: hot ? 96 : 78,
+                precipMM: 0,
+                rainMM: 0,
+                apparentHighF: hot ? 96 : 78,
+                precipitationChance: 0,
+                humidity: 0,
+                windMPH: 0
+            ))
+        }
+        return forecast
     }
 
     // MARK: - Dry warm fixtures (used by watering tests above)

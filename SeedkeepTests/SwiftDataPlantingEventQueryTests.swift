@@ -19,27 +19,7 @@ struct SwiftDataPlantingEventQueryTests {
     private static let householdID = "hh_pq_test"
 
     private static func makeContainer() -> ModelContainer {
-        let schema = Schema([
-            LocalForecastSnapshot.self,
-            LocalPlantingEvent.self,
-            LocalPetMoodSnapshot.self,
-            LocalPetDeparture.self,
-            LocalJournalEntry.self,
-            LocalJournalChecklistItem.self,
-            LocalJournalEntryPhoto.self,
-            LocalSeed.self,
-            LocalBed.self,
-            LocalLocation.self,
-            LocalTag.self,
-            LocalSeedPhoto.self,
-            LocalPendingWrite.self,
-            LocalSyncCursor.self,
-            LocalRecommendation.self,
-            LocalAssistantThread.self,
-            LocalAssistantMessage.self,
-            LocalAssistantToolCall.self,
-            LocalAssistantKeyStatus.self,
-        ])
+        let schema = Schema(SeedkeepSchema.all)
         let config = ModelConfiguration(
             "swiftDataPlantingEventQueryTests-\(UUID().uuidString)",
             schema: schema,

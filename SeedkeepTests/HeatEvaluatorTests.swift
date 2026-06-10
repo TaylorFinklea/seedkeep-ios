@@ -213,6 +213,126 @@ struct HeatEvaluatorTests {
         #expect(hits.isEmpty)
     }
 
+    @Test("dome dedup: a hit whose notification is still pending is exempt (cancel-before-fire guard)")
+    func domeDedupExemptsPendingHit() {
+        let now = FixedClock(now: Self.midnight("2026-07-01")).now
+        let forecast = [
+            Self.day("2026-07-05", highF: 96),
+            Self.day("2026-07-06", highF: 96),
+            Self.day("2026-07-07", highF: 96),
+            Self.day("2026-07-08", highF: 96),
+        ]
+        // Schedule-time recording: lastHeatDomeFireDate == this very
+        // hit's fire date (2026-07-04 19:00). Without the pending
+        // exemption the evaluator drops its own just-scheduled hit and
+        // the diff cancels the pending notification before delivery.
+        guard let fire = Self.calendar.date(
+            bySettingHour: 19, minute: 0, second: 0,
+            of: Self.midnight("2026-07-04"),
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        ) else {
+            Issue.record("calendar.date failure")
+            return
+        }
+        let identifier = "seedkeep.notif.heat.2026-07-05"
+        let hits = HeatEvaluator.evaluate(
+            forecast: forecast,
+            thresholds: .kc,
+            lastHeatDomeFireDate: fire,
+            lastHeatEventDate: fire,
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone,
+            pendingFireDates: [identifier: fire]
+        )
+        #expect(hits.count == 1, "pending hit must survive the dome dedup")
+        #expect(hits.first?.identifier == identifier)
+    }
+
+    @Test("dome dedup: same state but NO pending notification → hit dropped (post-delivery dedup intact)")
+    func domeDedupDropsWhenNotPending() {
+        let now = FixedClock(now: Self.midnight("2026-07-01")).now
+        let forecast = [
+            Self.day("2026-07-05", highF: 96),
+            Self.day("2026-07-06", highF: 96),
+            Self.day("2026-07-07", highF: 96),
+            Self.day("2026-07-08", highF: 96),
+        ]
+        guard let fire = Self.calendar.date(
+            bySettingHour: 19, minute: 0, second: 0,
+            of: Self.midnight("2026-07-04"),
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        ) else {
+            Issue.record("calendar.date failure")
+            return
+        }
+        let hits = HeatEvaluator.evaluate(
+            forecast: forecast,
+            thresholds: .kc,
+            lastHeatDomeFireDate: fire,
+            lastHeatEventDate: fire,
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone,
+            pendingFireDates: [:]
+        )
+        #expect(hits.isEmpty, "delivered (no-longer-pending) dome hit must stay deduped")
+    }
+
+    @Test("dome dedup compares fire dates, not heatDate-vs-fireDate with abs()")
+    func domeDedupUsesFireDateDomain() {
+        let now = FixedClock(now: Self.midnight("2026-07-01")).now
+        let forecast = [
+            Self.day("2026-07-05", highF: 96),
+            Self.day("2026-07-06", highF: 96),
+            Self.day("2026-07-07", highF: 96),
+            Self.day("2026-07-08", highF: 96),
+        ]
+        // lastDome AFTER this hit's fire date. The old abs(heatDate −
+        // lastDome) treated this as inside the window and dropped the
+        // hit; a fire-date-domain compare keeps it (negative delta —
+        // this hit fires BEFORE the recorded dome, so it can't be a
+        // duplicate of it).
+        let lastDome = Self.midnight("2026-07-09")
+        let hits = HeatEvaluator.evaluate(
+            forecast: forecast,
+            thresholds: .kc,
+            lastHeatDomeFireDate: lastDome,
+            lastHeatEventDate: lastDome,
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone
+        )
+        #expect(hits.count == 1, "hit firing before the recorded dome fire must not dedup")
+    }
+
+    @Test("dome dedup: fire 7+ days after the last dome fire is kept")
+    func domeDedupExpiresAfter7Days() {
+        let now = FixedClock(now: Self.midnight("2026-07-01")).now
+        let forecast = [
+            Self.day("2026-07-05", highF: 96),
+            Self.day("2026-07-06", highF: 96),
+            Self.day("2026-07-07", highF: 96),
+            Self.day("2026-07-08", highF: 96),
+        ]
+        // Hit fires 2026-07-04 19:00; last dome fire 8+ days earlier.
+        let lastDome = Self.midnight("2026-06-26")
+        let hits = HeatEvaluator.evaluate(
+            forecast: forecast,
+            thresholds: .kc,
+            lastHeatDomeFireDate: lastDome,
+            lastHeatEventDate: lastDome,
+            now: now,
+            calendar: Self.calendar,
+            homeTimeZone: Self.homeTimeZone
+        )
+        #expect(hits.count == 1)
+    }
+
     // MARK: - Fire time (7pm evening BEFORE)
 
     @Test("fire time is 7pm home-TZ on prior calendar day")

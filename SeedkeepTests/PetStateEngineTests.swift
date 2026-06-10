@@ -24,26 +24,7 @@ struct PetStateEngineTests {
     // MARK: - Test fixture
 
     private static func makeContainer() -> ModelContainer {
-        let schema = Schema([
-            LocalPlantingEvent.self,
-            LocalPetMoodSnapshot.self,
-            LocalPetDeparture.self,
-            LocalJournalEntry.self,
-            LocalJournalChecklistItem.self,
-            LocalJournalEntryPhoto.self,
-            LocalSeed.self,
-            LocalBed.self,
-            LocalLocation.self,
-            LocalTag.self,
-            LocalSeedPhoto.self,
-            LocalPendingWrite.self,
-            LocalSyncCursor.self,
-            LocalRecommendation.self,
-            LocalAssistantThread.self,
-            LocalAssistantMessage.self,
-            LocalAssistantToolCall.self,
-            LocalAssistantKeyStatus.self,
-        ])
+        let schema = Schema(SeedkeepSchema.all)
         let config = ModelConfiguration(
             "petStateEngineTests",
             schema: schema,

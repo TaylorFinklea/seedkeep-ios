@@ -509,6 +509,27 @@ actor WeatherWarningsService {
             householdLastWaterAt = nil
         }
 
+        // Read the pending set ONCE, before the evaluators run. The
+        // evaluators consult it (a hit whose notification is still
+        // pending must stay planned — see the cancel-before-fire
+        // findings) and the diff below reuses the same snapshot.
+        let pending = await scheduler.pendingNotificationRequests()
+        let ourPrefixes = [IdPrefix.frost, IdPrefix.heat, IdPrefix.water]
+        let ourPending: [UNNotificationRequest] = pending.filter { req in
+            ourPrefixes.contains { req.identifier.hasPrefix($0) }
+        }
+        // Reconstruct each pending request's fire date from its trigger
+        // components (NOT `nextTriggerDate()`, which consults the real
+        // wall clock and returns nil for non-repeating past dates —
+        // useless under the test suite's FixedClock).
+        var pendingFireDates: [String: Date] = [:]
+        for req in ourPending {
+            guard let trigger = req.trigger as? UNCalendarNotificationTrigger,
+                  let fire = Calendar.current.date(from: trigger.dateComponents)
+            else { continue }
+            pendingFireDates[req.identifier] = fire
+        }
+
         // k. Run evaluators (pure, no I/O).
         let frostHits: [FrostEvaluator.Hit]
         if prereqs.toggles.frost {
@@ -532,7 +553,8 @@ actor WeatherWarningsService {
                 lastHeatEventDate: priorState.lastHeatEventDate,
                 now: now,
                 calendar: calendar,
-                homeTimeZone: homeTimeZone
+                homeTimeZone: homeTimeZone,
+                pendingFireDates: pendingFireDates
             )
         } else {
             heatHits = []
@@ -592,12 +614,7 @@ actor WeatherWarningsService {
             planned = Array(planned.prefix(thresholds.queueBudget))
         }
 
-        // n. Diff against pending.
-        let pending = await scheduler.pendingNotificationRequests()
-        let ourPrefixes = [IdPrefix.frost, IdPrefix.heat, IdPrefix.water]
-        let ourPending: [UNNotificationRequest] = pending.filter { req in
-            ourPrefixes.contains { req.identifier.hasPrefix($0) }
-        }
+        // n. Diff against pending (snapshot read above, pre-evaluators).
         let ourPendingByID = Dictionary(
             uniqueKeysWithValues: ourPending.map { ($0.identifier, $0) }
         )

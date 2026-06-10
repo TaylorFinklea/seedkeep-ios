@@ -84,27 +84,7 @@ struct CatalogCorrectionNotifierTests {
         }
 
         static func makeContainer() -> ModelContainer {
-            let schema = Schema([
-                LocalLocation.self,
-                LocalTag.self,
-                LocalSeed.self,
-                LocalSeedPhoto.self,
-                LocalBed.self,
-                LocalPlantingEvent.self,
-                LocalSyncCursor.self,
-                LocalPendingWrite.self,
-                LocalRecommendation.self,
-                LocalJournalEntry.self,
-                LocalJournalEntryPhoto.self,
-                LocalJournalChecklistItem.self,
-                LocalAssistantThread.self,
-                LocalAssistantMessage.self,
-                LocalAssistantToolCall.self,
-                LocalAssistantKeyStatus.self,
-                LocalPetMoodSnapshot.self,
-                LocalPetDeparture.self,
-                LocalCatalogCorrection.self,
-            ])
+            let schema = Schema(SeedkeepSchema.all)
             let config = ModelConfiguration(
                 "catalogCorrectionNotifierTests",
                 schema: schema,

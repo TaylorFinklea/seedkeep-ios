@@ -289,27 +289,11 @@ public final class AppEnvironment {
     }
 
     private static func makeModelContainer() -> ModelContainer {
-        let schema = Schema([
-            LocalLocation.self,
-            LocalTag.self,
-            LocalSeed.self,
-            LocalSeedPhoto.self,
-            LocalBed.self,
-            LocalPlantingEvent.self,
-            LocalSyncCursor.self,
-            LocalPendingWrite.self,
-            LocalRecommendation.self,
-            LocalJournalEntry.self,
-            LocalJournalEntryPhoto.self,
-            LocalJournalChecklistItem.self,
-            LocalAssistantThread.self,
-            LocalAssistantMessage.self,
-            LocalAssistantToolCall.self,
-            LocalAssistantKeyStatus.self,
-            LocalPetMoodSnapshot.self,
-            LocalPetDeparture.self,
-            LocalCatalogCorrection.self,
-        ])
+        // Shared model list — see `SeedkeepSchema`. Hand-typed lists here
+        // and in test containers diverged once (LocalForecastSnapshot was
+        // registered only in tests, silently breaking all weather-warning
+        // persistence in production); the shared constant prevents a repeat.
+        let schema = Schema(SeedkeepSchema.all)
         let config = ModelConfiguration("seedkeep", schema: schema)
         do {
             return try ModelContainer(for: schema, configurations: config)

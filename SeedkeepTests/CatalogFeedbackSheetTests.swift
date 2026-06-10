@@ -234,27 +234,7 @@ struct CatalogFeedbackSheetTests {
 
     @Test("pre-flight: an open LocalCatalogCorrection with matching (seed, field) surfaces via SwiftData query")
     func preflightQuerySurfacesExistingOpenRow() throws {
-        let schema = Schema([
-            LocalLocation.self,
-            LocalTag.self,
-            LocalSeed.self,
-            LocalSeedPhoto.self,
-            LocalBed.self,
-            LocalPlantingEvent.self,
-            LocalSyncCursor.self,
-            LocalPendingWrite.self,
-            LocalRecommendation.self,
-            LocalJournalEntry.self,
-            LocalJournalEntryPhoto.self,
-            LocalJournalChecklistItem.self,
-            LocalAssistantThread.self,
-            LocalAssistantMessage.self,
-            LocalAssistantToolCall.self,
-            LocalAssistantKeyStatus.self,
-            LocalPetMoodSnapshot.self,
-            LocalPetDeparture.self,
-            LocalCatalogCorrection.self,
-        ])
+        let schema = Schema(SeedkeepSchema.all)
         let config = ModelConfiguration(
             "catalogFeedbackSheetTests_preflight",
             schema: schema,
@@ -358,7 +338,7 @@ struct CatalogFeedbackSheetTests {
 
     @Test("markWithdrawnLocally flips the local row to dismissed/user_withdrawn so the pre-flight banner clears")
     func markWithdrawnLocallyClosesRow() throws {
-        let schema = Schema([LocalCatalogCorrection.self])
+        let schema = Schema(SeedkeepSchema.all)
         let config = ModelConfiguration(
             "catalogFeedbackSheetTests_withdraw",
             schema: schema,
