@@ -35,7 +35,13 @@ public final class SyncEngine {
     private let client: SeedkeepClient
     private let container: ModelContainer
     public private(set) var isSyncing: Bool = false
+    /// Machine-shaped error mirror (feed: code: message | …). For
+    /// diagnostics surfaces (Settings → sync row). NOT for the banner —
+    /// use `lastHumanizedError` there.
     public private(set) var lastError: String?
+    /// User-readable rendering of the first failure from the last sync
+    /// pass, via `humanizeError`. `nil` after a clean pass.
+    public private(set) var lastHumanizedError: String?
 
     public init(client: SeedkeepClient, container: ModelContainer) {
         self.client = client
@@ -61,7 +67,9 @@ public final class SyncEngine {
         // queue never starves behind a broken pull. Feed errors are
         // aggregated into `lastError`.
         var errors: [String] = []
+        var firstError: Error?
         func record(_ feed: String, _ error: Error) {
+            if firstError == nil { firstError = error }
             if let err = error as? SeedkeepError {
                 errors.append("\(feed): \(err.code): \(err.message)")
             } else {
@@ -81,6 +89,11 @@ public final class SyncEngine {
         do { try await flushPending() } catch { record("push", error) }
 
         lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
+        // Banner copy: the first failure is representative (an offline
+        // sweep fails every feed with the same URLError) and humanized so
+        // raw HTTP statuses / decode internals / body excerpts never
+        // reach the top-of-screen banner.
+        lastHumanizedError = firstError.map { humanizeError($0) }
         return true
     }
 

@@ -136,6 +136,12 @@ public final class AppEnvironment {
             client: client,
             container: container
         )
+        // Stabilization B3 — journal feed refresh failures were recorded
+        // into JournalStore.lastError and never displayed. Route them
+        // through the same banner mount every other surfaced error uses.
+        journal.wireErrorSink { [weak self] error in
+            self?.surfaceError(error)
+        }
     }
 
     /// Surfaces an error to the user via `bannerError`. Replaces silent
@@ -185,12 +191,15 @@ public final class AppEnvironment {
             // below would run against a mid-sweep store. The in-flight
             // caller does all of it when its pass finishes.
             guard ran else { return }
-            // Mirror SyncEngine.lastError into the user-facing banner.
+            // Mirror the sync outcome into the user-facing banner.
             // SyncEngine isn't @Observable, so SwiftUI can't react to it
             // directly — we surface here instead, on the boundary that
-            // every sync flows through. Debounce inside presentBanner
-            // keeps repeated identical errors from strobing the UI.
-            if let syncError = sync.lastError {
+            // every sync flows through. `lastHumanizedError` is the
+            // humanizeError rendering (raw codes/statuses/body excerpts
+            // stay in `lastError` for the Settings diagnostics row).
+            // Debounce inside presentBanner keeps repeated identical
+            // errors from strobing the UI.
+            if let syncError = sync.lastHumanizedError {
                 presentBanner(syncError)
             }
             let transitions = PetStateEngine.tickAll(

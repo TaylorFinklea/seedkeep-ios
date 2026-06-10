@@ -15,9 +15,20 @@ final class JournalStore {
     private(set) var isLoading = false
     private(set) var lastError: String?
 
+    /// Forwards refresh failures to the app-root error mount
+    /// (`AppEnvironment.surfaceError` → banner). Without this,
+    /// `lastError` dead-ends: no view reads it, so a failing scoped
+    /// refresh (seed/bed/planting journal sections) shows silently
+    /// stale or empty data.
+    @ObservationIgnored private var errorSink: (@MainActor (Error) -> Void)?
+
     init(client: SeedkeepClient, container: ModelContainer) {
         self.client = client
         self.container = container
+    }
+
+    func wireErrorSink(_ sink: @escaping @MainActor (Error) -> Void) {
+        errorSink = sink
     }
 
     /// Fetch the latest server feed and merge into the local store. Views
@@ -55,6 +66,7 @@ final class JournalStore {
             lastError = nil
         } catch {
             lastError = error.localizedDescription
+            errorSink?(error)
         }
     }
 
