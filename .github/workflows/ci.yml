@@ -1,0 +1,71 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Xcode 16.x: ships Swift 6 + iOS 18.x simulator runtime.
+      # macos-latest on GitHub Actions is macOS 15, which includes Xcode 16.2
+      # by default; pinning here makes the version explicit and stable.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.2"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Install xcpretty
+        run: gem install xcpretty --no-document
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # Fast host-side package tests (no simulator spin-up required).
+      # SeedkeepKit declares .macOS(.v14) for exactly this path.
+      - name: swift test (SeedkeepKit, host)
+        run: swift test --package-path SeedkeepKit
+
+      # Discover an available iPhone simulator at runtime so the workflow
+      # stays correct as the hosted image's device roster drifts between
+      # runner updates.
+      - name: Pick simulator
+        id: pick_sim
+        run: |
+          SIM_NAME=$(xcrun simctl list devices available | grep -E "^\s+iPhone" | head -1 | sed 's/ *(.*//;s/^[[:space:]]*//')
+          if [[ -z "$SIM_NAME" ]]; then
+            echo "ERROR: no available iPhone simulator found" >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "SIM_NAME=$SIM_NAME" >> "$GITHUB_OUTPUT"
+          echo "Selected simulator: $SIM_NAME"
+
+      # Full iOS Simulator test run against the Seedkeep scheme.
+      # CODE_SIGNING_ALLOWED/REQUIRED=NO: simulator tests need no signing identity.
+      # set -o pipefail ensures xcodebuild's non-zero exit propagates through
+      # the xcpretty pipe — xcpretty itself always exits 0, so pipefail is the
+      # only guard that matters here.
+      - name: xcodebuild test (iOS Simulator)
+        env:
+          SIM_NAME: ${{ steps.pick_sim.outputs.SIM_NAME }}
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Seedkeep.xcodeproj \
+            -scheme Seedkeep \
+            -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            2>&1 | xcpretty
