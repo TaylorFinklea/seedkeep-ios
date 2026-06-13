@@ -17,13 +17,7 @@ struct ClientSuppliedCreateIDTests {
     private static let householdID = "hh_create_id"
 
     private static func makeContainer() -> ModelContainer {
-        let schema = Schema(SeedkeepSchema.all)
-        let config = ModelConfiguration(
-            "clientSuppliedCreateIDTests",
-            schema: schema,
-            isStoredInMemoryOnly: true
-        )
-        return try! ModelContainer(for: schema, configurations: config)
+        makeTestContainer(name: "clientSuppliedCreateIDTests")
     }
 
     private static func makeClient() -> SeedkeepClient {

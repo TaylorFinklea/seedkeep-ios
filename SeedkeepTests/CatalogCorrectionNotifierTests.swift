@@ -85,14 +85,7 @@ struct CatalogCorrectionNotifierTests {
         }
 
         static func makeContainer() -> ModelContainer {
-            let schema = Schema(SeedkeepSchema.all)
-            let config = ModelConfiguration(
-                "catalogCorrectionNotifierTests",
-                schema: schema,
-                isStoredInMemoryOnly: true
-            )
-            // swiftlint:disable:next force_try
-            return try! ModelContainer(for: schema, configurations: config)
+            makeTestContainer(name: "catalogCorrectionNotifierTests")
         }
     }
 

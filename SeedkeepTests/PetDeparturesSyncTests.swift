@@ -27,13 +27,7 @@ struct PetDeparturesSyncTests {
     private static let householdID = "hh_sync"
 
     private static func makeContainer() -> ModelContainer {
-        let schema = Schema(SeedkeepSchema.all)
-        let config = ModelConfiguration(
-            "petDeparturesSyncTests",
-            schema: schema,
-            isStoredInMemoryOnly: true
-        )
-        return try! ModelContainer(for: schema, configurations: config)
+        makeTestContainer(name: "petDeparturesSyncTests")
     }
 
     /// Standard `{ ok: true, data: { items: [], cursor: 0, has_more: false } }`
@@ -43,13 +37,14 @@ struct PetDeparturesSyncTests {
         #"{"ok":true,"data":{"items":[],"cursor":0,"has_more":false}}"#.utf8
     )
 
-    /// Build a `RouterMockURLProtocol`-backed client. The router lets each
-    /// test return route-specific JSON without re-stubbing the whole API
-    /// surface — every unhandled route just gets the empty-page envelope.
+    /// Build a `PetRouterMockURLProtocol`-backed client. The router lets
+    /// each test return route-specific JSON without re-stubbing the whole
+    /// API surface — every unhandled route just gets the empty-page
+    /// envelope.
     private static func makeRoutedClient(
         routes: [String: Data] = [:]
     ) -> SeedkeepClient {
-        let session = RouterMockURLProtocol.makeSession(
+        let session = PetRouterMockURLProtocol.makeSession(
             routes: routes,
             fallbackBody: emptyEnvelope,
             fallbackStatus: 200
@@ -71,10 +66,10 @@ struct PetDeparturesSyncTests {
         let client = Self.makeRoutedClient()
         let engine = SyncEngine(client: client, container: container)
 
-        RouterMockURLProtocol.resetCapture()
+        PetRouterMockURLProtocol.resetCapture()
         await engine.syncAll(householdID: Self.householdID)
 
-        let captured = RouterMockURLProtocol.capturedPaths()
+        let captured = PetRouterMockURLProtocol.capturedPaths()
         let plantingIdx = captured.firstIndex(where: {
             $0 == "/api/planting-events"
         })
@@ -307,12 +302,11 @@ struct PetDeparturesSyncTests {
 
 // MARK: - Path-aware URLProtocol stub
 //
-// Mirrors the `MockURLProtocol` shape from `PetStateEngineTests` but
-// dispatches by request path instead of a single canned body. Tests
-// register `/api/<path>` → response Data; unmatched paths fall back to
-// the empty-page envelope so the rest of `syncAll`'s sweep doesn't blow
-// up looking for endpoints we don't care about in the test.
-final class RouterMockURLProtocol: URLProtocol, @unchecked Sendable {
+// Suite-local (runs concurrently with other suites; a shared class would
+// corrupt inter-suite static state). Dispatches by request path; unmatched
+// paths return the empty-page fallback so syncAll's full sweep doesn't blow
+// up on endpoints this suite doesn't care about.
+final class PetRouterMockURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var routes: [String: Data] = [:]
     nonisolated(unsafe) static var fallbackBody: Data = Data()
     nonisolated(unsafe) static var fallbackStatus: Int = 200
@@ -331,7 +325,7 @@ final class RouterMockURLProtocol: URLProtocol, @unchecked Sendable {
         Self.fallbackStatus = fallbackStatus
         Self.capturedRequests = []
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [RouterMockURLProtocol.self]
+        config.protocolClasses = [PetRouterMockURLProtocol.self]
         return URLSession(configuration: config)
     }
 

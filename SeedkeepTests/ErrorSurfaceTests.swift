@@ -19,9 +19,7 @@ struct ErrorSurfaceTests {
     private static let householdID = "hh_errors"
 
     private static func makeContainer(_ name: String) -> ModelContainer {
-        let schema = Schema(SeedkeepSchema.all)
-        let config = ModelConfiguration(name, schema: schema, isStoredInMemoryOnly: true)
-        return try! ModelContainer(for: schema, configurations: config)
+        makeTestContainer(name: name)
     }
 
     private static func makeClient() -> SeedkeepClient {
