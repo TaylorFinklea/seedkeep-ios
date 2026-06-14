@@ -37,35 +37,49 @@ jobs:
       - name: swift test (SeedkeepKit, host)
         run: swift test --package-path SeedkeepKit
 
-      # Discover an available iPhone simulator at runtime so the workflow
-      # stays correct as the hosted image's device roster drifts between
-      # runner updates.
-      - name: Pick simulator
+      # Discover an available iPhone simulator at runtime (robust to the hosted
+      # image's device-roster drift) and select it by UDID, then pre-boot it so
+      # destination resolution can't be the failure point.
+      - name: Pick + boot simulator
         id: pick_sim
         run: |
-          SIM_NAME=$(xcrun simctl list devices available | grep -E "^\s+iPhone" | head -1 | sed 's/ *(.*//;s/^[[:space:]]*//')
-          if [[ -z "$SIM_NAME" ]]; then
+          set -euo pipefail
+          LINE=$(xcrun simctl list devices available | grep -E "iPhone" | head -1)
+          UDID=$(echo "$LINE" | grep -oE "[0-9A-Fa-f]{8}-[0-9A-Fa-f-]{27}")
+          if [[ -z "$UDID" ]]; then
             echo "ERROR: no available iPhone simulator found" >&2
             xcrun simctl list devices available >&2
             exit 1
           fi
-          echo "SIM_NAME=$SIM_NAME" >> "$GITHUB_OUTPUT"
-          echo "Selected simulator: $SIM_NAME"
+          echo "Selected simulator: $LINE"
+          xcrun simctl boot "$UDID" || true
+          echo "SIM_UDID=$UDID" >> "$GITHUB_OUTPUT"
 
-      # Full iOS Simulator test run against the Seedkeep scheme.
+      # Diagnostic: print the destinations xcodebuild actually recognizes for the
+      # scheme. Never fails the job — purely informational for log triage.
+      - name: Show test destinations (diagnostic)
+        run: |
+          xcodebuild test -project Seedkeep.xcodeproj -scheme Seedkeep -showdestinations 2>&1 | tail -40 || true
+
+      # Full iOS Simulator test run against the Seedkeep scheme, addressed by UDID.
       # CODE_SIGNING_ALLOWED/REQUIRED=NO: simulator tests need no signing identity.
-      # set -o pipefail ensures xcodebuild's non-zero exit propagates through
-      # the xcpretty pipe — xcpretty itself always exits 0, so pipefail is the
-      # only guard that matters here.
+      # Raw output is tee'd to a file (pretty-printed on success); on ANY failure
+      # the next step dumps the raw tail so xcpretty can never hide the error.
       - name: xcodebuild test (iOS Simulator)
         env:
-          SIM_NAME: ${{ steps.pick_sim.outputs.SIM_NAME }}
+          SIM_UDID: ${{ steps.pick_sim.outputs.SIM_UDID }}
         run: |
           set -o pipefail
-          xcodebuild test \
+          NSUnbufferedIO=YES xcodebuild test \
             -project Seedkeep.xcodeproj \
             -scheme Seedkeep \
-            -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            2>&1 | xcpretty
+            2>&1 | tee xcodebuild-raw.log | xcpretty
+
+      - name: Dump raw xcodebuild log on failure
+        if: failure()
+        run: |
+          echo "=== last 150 lines of raw xcodebuild output ==="
+          tail -150 xcodebuild-raw.log 2>/dev/null || echo "(no raw log captured)"
