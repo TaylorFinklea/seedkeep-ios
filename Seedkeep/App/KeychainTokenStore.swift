@@ -1,6 +1,18 @@
 import Foundation
 import Security
 
+/// Abstraction over the bearer-token store so `AuthController` can be
+/// unit-tested without the real Keychain. The unit-test host bundle lacks
+/// the keychain-access-group entitlement that newer iOS simulators require,
+/// so `SecItemAdd` fails with `errSecMissingEntitlement` and writes are
+/// silently lost — making restore tests collapse to `.signedOut`. Production
+/// uses `KeychainTokenStore`; tests inject an in-memory conformer.
+public protocol TokenStoring: Sendable {
+    func load() -> String?
+    func save(_ token: String)
+    func clear()
+}
+
 /// Minimal Keychain-backed token store. Items are device-local —
 /// `kSecAttrSynchronizable` is not set, so the token does not sync
 /// to iCloud Keychain. Items survive app reinstall on iOS by default
@@ -8,7 +20,7 @@ import Security
 /// matches the "stay signed in across reinstalls on the same device"
 /// expectation for Sign in with Apple. No `kSecAttrAccessGroup`, so
 /// the item stays bound to this app's bundle id.
-public struct KeychainTokenStore: Sendable {
+public struct KeychainTokenStore: TokenStoring, Sendable {
     public let service: String
     public let account: String
 

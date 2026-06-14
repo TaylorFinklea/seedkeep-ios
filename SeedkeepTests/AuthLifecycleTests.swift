@@ -30,10 +30,13 @@ struct AuthLifecycleTests {
         return defaults
     }
 
-    private static func makeTokenStore(_ name: String) -> KeychainTokenStore {
-        let store = KeychainTokenStore(service: "AuthLifecycleTests.\(name)")
-        store.clear()
-        return store
+    // In-memory token store: the real KeychainTokenStore silently loses
+    // writes in the unit-test host (no keychain-access-group entitlement on
+    // the sim → SecItemAdd returns errSecMissingEntitlement), which made every
+    // restore test collapse to .signedOut. Reference type so the controller's
+    // own clear()/save() are observable by the test's post-restore assertions.
+    private static func makeTokenStore(_ name: String) -> InMemoryTokenStore {
+        InMemoryTokenStore()
     }
 
     private static func makeClient() -> SeedkeepClient {

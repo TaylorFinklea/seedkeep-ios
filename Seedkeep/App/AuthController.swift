@@ -50,7 +50,7 @@ public final class AuthController {
     public private(set) var state: State = .signedOut
 
     private let client: SeedkeepClient
-    private let tokenStore: KeychainTokenStore
+    private let tokenStore: any TokenStoring
     private let defaults: UserDefaults
 
     /// Wipes the local SwiftData store, pending-write queue, cursors,
@@ -60,7 +60,7 @@ public final class AuthController {
 
     public init(
         client: SeedkeepClient,
-        tokenStore: KeychainTokenStore,
+        tokenStore: any TokenStoring,
         defaults: UserDefaults = .standard
     ) {
         self.client = client

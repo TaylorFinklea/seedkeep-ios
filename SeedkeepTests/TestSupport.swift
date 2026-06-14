@@ -14,6 +14,26 @@ func makeTestContainer(name: String) -> ModelContainer {
     return try! ModelContainer(for: schema, configurations: config)
 }
 
+// MARK: - In-memory token store
+
+/// `TokenStoring` test double. The real `KeychainTokenStore` silently loses
+/// writes in the unit-test host (the sim bundle lacks the keychain-access-group
+/// entitlement → `SecItemAdd` returns `errSecMissingEntitlement`), so any
+/// `AuthController` restore test that relies on a saved token collapses to
+/// `.signedOut`. Reference type so a controller's internal `clear()`/`save()`
+/// is observable by the constructing test's later assertions — matching the
+/// shared-global behavior the real keychain provides in production.
+final class InMemoryTokenStore: TokenStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var token: String?
+
+    init(_ initial: String? = nil) { token = initial }
+
+    func load() -> String? { lock.withLock { token } }
+    func save(_ token: String) { lock.withLock { self.token = token } }
+    func clear() { lock.withLock { token = nil } }
+}
+
 // MARK: - Shared routable URL protocol stub
 
 /// Route-dispatching URLProtocol used across sync-engine test suites.
