@@ -6,7 +6,10 @@ import SeedkeepKit
 /// sign out. Locations, tags, and household-invite flow live in Settings.
 struct YouView: View {
     @Environment(AuthController.self) private var auth
+    @Environment(AppEnvironment.self) private var appEnv
     @State private var showSignOutConfirm = false
+    @State private var showDeleteAccountConfirm = false
+    @State private var deleteAccountError: String?
     @State private var selectedContribution: ContributionSelection?
 
     /// Phase 4D · the user's catalog corrections — newest first, capped
@@ -50,6 +53,11 @@ struct YouView: View {
                         } label: {
                             Text("Sign out")
                         }
+                        Button(role: .destructive) {
+                            showDeleteAccountConfirm = true
+                        } label: {
+                            Text("Delete account")
+                        }
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -64,6 +72,33 @@ struct YouView: View {
                     Button("Cancel", role: .cancel) { }
                 } message: {
                     Text("You'll need to sign in again to sync your library.")
+                }
+                .confirmationDialog(
+                    "Delete your account?",
+                    isPresented: $showDeleteAccountConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete Account", role: .destructive) {
+                        Task {
+                            do {
+                                _ = try await appEnv.client.deleteAccount()
+                                await auth.signOut()
+                            } catch {
+                                deleteAccountError = error.localizedDescription
+                            }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("This permanently deletes your account and all of your household's library, garden, and journal data. This can't be undone.")
+                }
+                .alert("Delete account failed", isPresented: Binding(
+                    get: { deleteAccountError != nil },
+                    set: { if !$0 { deleteAccountError = nil } }
+                )) {
+                    Button("OK", role: .cancel) { deleteAccountError = nil }
+                } message: {
+                    Text(deleteAccountError ?? "")
                 }
                 .sheet(item: $selectedContribution) { selection in
                     ContributionDetailSheet(correctionID: selection.id)

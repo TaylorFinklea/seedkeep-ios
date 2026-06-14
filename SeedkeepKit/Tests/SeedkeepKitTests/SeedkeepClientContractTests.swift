@@ -368,6 +368,21 @@ struct SeedkeepClientContractTests {
         #expect(!path.contains("?"), "raw '?' must not appear in path: \(path)")
     }
 
+    // MARK: - Account deletion
+
+    @Test("deleteAccount: DELETE /api/me, no %3F in path")
+    func deleteAccount() async throws {
+        let responseBody = Data(#"""
+        {"ok":true,"data":{"deleted":true}}
+        """#.utf8)
+        let client = makeClient(responseBody: responseBody)
+        _ = try? await client.deleteAccount()
+        try assertRequest(
+            method: "DELETE",
+            path: "/api/me"
+        )
+    }
+
     // MARK: - Parametric path cleanness
 
     @Test("assistantThread detail GET: path has no %3F, id in path not in query")

@@ -55,6 +55,17 @@ public actor SeedkeepClient {
         try await getJSON(path: "/api/me")
     }
 
+    /// `DELETE /api/me` — permanently deletes the authenticated user and
+    /// (if sole member) their household. Returns `true` when the server
+    /// confirms the deletion. Callers should follow up with `signOut()` to
+    /// clear the local token and cached identity.
+    @discardableResult
+    public func deleteAccount() async throws -> Bool {
+        struct DeletedResult: Decodable, Sendable { let deleted: Bool }
+        let result: DeletedResult = try await deleteJSON(path: "/api/me")
+        return result.deleted
+    }
+
     // MARK: - Households
 
     public func createOrFetchHousehold(name: String? = nil) async throws -> WireResponses.CreateOrFetchHousehold {
