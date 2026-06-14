@@ -151,6 +151,15 @@ struct CatalogCorrectionNotifierTests {
         CatalogCorrectionNotifier.shared.authorizationStatusOverrideForTesting = {
             authStatus
         }
+        // AND inject the same status into NotificationsCenter so the
+        // SCHEDULING path's `ensureGranted()` doesn't fall through to a
+        // real `requestAuthorization()` — on a pristine CI simulator the
+        // real status is `.notDetermined`, and that live prompt hangs the
+        // suite ~25s before failing. Locally it passes only because the
+        // dev sim already has a determined status.
+        NotificationsCenter.shared.authorizationStatusOverrideForTesting = {
+            authStatus
+        }
     }
 
     // MARK: - Test 1: cross-device dedup (skip when our device is in the ledger)

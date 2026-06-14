@@ -38,6 +38,14 @@ final class NotificationsCenter {
 
     private let center = UNUserNotificationCenter.current()
 
+    /// Test seam: when set, `authorizationStatus()` returns this instead of
+    /// querying the real `UNUserNotificationCenter`, so `ensureGranted()`
+    /// never falls through to a real `requestAuthorization()` prompt. On a
+    /// pristine simulator the real status is `.notDetermined`, and the live
+    /// prompt blocks the unit-test process (~25s, observed as a CI-only hang
+    /// while local sims already have a determined status). nil in production.
+    var authorizationStatusOverrideForTesting: (() async -> UNAuthorizationStatus)?
+
     // MARK: - Permission
 
     /// Request notification permission (alert + sound). Returns true if
@@ -53,7 +61,10 @@ final class NotificationsCenter {
     /// Current authorization status. Useful for showing "enable in
     /// Settings" guidance when the user has previously denied.
     func authorizationStatus() async -> UNAuthorizationStatus {
-        await center.notificationSettings().authorizationStatus
+        if let override = authorizationStatusOverrideForTesting {
+            return await override()
+        }
+        return await center.notificationSettings().authorizationStatus
     }
 
     /// Sign-out / identity-switch cleanup: drop every pending AND
