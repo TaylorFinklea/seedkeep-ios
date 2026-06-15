@@ -66,6 +66,13 @@ jobs:
 
       # Full iOS Simulator test run against the Seedkeep scheme, addressed by UDID.
       # CODE_SIGNING_ALLOWED/REQUIRED=NO: simulator tests need no signing identity.
+      # -parallel-testing-enabled NO: several Swift Testing suites share process
+      # globals (CatalogCorrectionNotifier.shared, NotificationCenter.default).
+      # Default cross-suite parallelism let e.g. CatalogCorrectionSyncTests post
+      # .catalogCorrectionsChanged while CatalogCorrectionNotifierTests had the
+      # shared observer registered — flaking captured-request assertions on CI
+      # only. Serializing the run makes that contamination structurally
+      # impossible (green locally + in CI; ~2x the small test time).
       # Raw output is tee'd to a file (pretty-printed on success); on ANY failure
       # the next step dumps the raw tail so xcpretty can never hide the error.
       - name: xcodebuild test (iOS Simulator)
@@ -77,6 +84,7 @@ jobs:
             -project Seedkeep.xcodeproj \
             -scheme Seedkeep \
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             2>&1 | tee xcodebuild-raw.log | xcpretty
