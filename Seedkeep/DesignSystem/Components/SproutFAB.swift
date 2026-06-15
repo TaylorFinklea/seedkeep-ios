@@ -62,10 +62,9 @@ struct SproutFAB: View {
         working = true
         defer { working = false }
         if !appEnv.assistant.keyConfigured {
-            // Route to Settings so the user can configure their key. The
-            // Sprout tab's empty state would also tell them, but landing
-            // them directly on Settings is faster.
-            appEnv.requestedTab = .settings
+            // Route to You so the user can navigate to Settings → AI assistant
+            // key. Settings now lives under You rather than as a standalone tab.
+            appEnv.requestedTab = .you
             return
         }
         do {

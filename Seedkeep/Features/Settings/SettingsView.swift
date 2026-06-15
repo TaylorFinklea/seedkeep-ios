@@ -1,13 +1,13 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Root Settings tab — restyled as "The Order".
+/// Stack-less content view for Settings — "The Order". Designed to be
+/// embedded inside an existing `NavigationStack` (e.g. `YouView`). All
+/// `NavigationLink`s push onto the host's stack; no inner stack is created.
 ///
-/// Hosts inventory, garden, sprout, backend, household, and sync
-/// subsections, all rendered in the herbarium aesthetic: vellum
-/// background, scholarly italic title, Rubric-styled section headers
-/// with Roman numerals.
-struct SettingsView: View {
+/// `SettingsView` below is a thin standalone wrapper that adds its own
+/// `NavigationStack` for any remaining direct-navigation uses.
+struct SettingsContent: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(AuthController.self) private var auth
 
@@ -21,199 +21,197 @@ struct SettingsView: View {
     @AppStorage("seedkeep.sparkleOnEveryPage") private var sparkleOnEveryPage: Bool = true
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                VellumBackground()
-                Form {
-                    Section {
-                        herbHero
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                    }
+        ZStack {
+            VellumBackground()
+            Form {
+                Section {
+                    herbHero
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                }
 
-                    Section {
-                        NavigationLink {
-                            LocationsView()
-                        } label: {
-                            Label("Locations", systemImage: "tray")
-                        }
-                        NavigationLink {
-                            TagsView()
-                        } label: {
-                            Label("Tags", systemImage: "tag")
-                        }
-                    } header: {
-                        Rubric(text: "inventory")
+                Section {
+                    NavigationLink {
+                        LocationsView()
+                    } label: {
+                        Label("Locations", systemImage: "tray")
                     }
+                    NavigationLink {
+                        TagsView()
+                    } label: {
+                        Label("Tags", systemImage: "tag")
+                    }
+                } header: {
+                    Rubric(text: "inventory")
+                }
 
-                    Section {
+                Section {
+                    NavigationLink {
+                        HomeLocationSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Home location", systemImage: "location")
+                            Text(homeLocationSummary)
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    NavigationLink {
+                        NotificationsSettingsView()
+                    } label: {
+                        Label("Notifications", systemImage: "bell")
+                    }
+                } header: {
+                    Rubric(text: "garden")
+                }
+
+                Section {
+                    NavigationLink {
+                        AssistantKeySettingsView()
+                    } label: {
+                        Label("AI assistant key", systemImage: "sparkles")
+                    }
+                    NavigationLink {
+                        MCPSettingsView()
+                    } label: {
+                        Label("Connect Claude / MCP", systemImage: "link")
+                    }
+                    Toggle(isOn: $sparkleOnEveryPage) {
+                        Label("Sparkle on every page", systemImage: "wand.and.stars")
+                    }
+                } header: {
+                    Rubric(text: "sprout · the scribe")
+                } footer: {
+                    Text("When on, a sparkle button sits in the bottom-right of every primary page and opens Sprout with the current page's context attached.")
+                        .font(HerbFont.bodyItalic(size: 11))
+                        .foregroundStyle(HerbColor.inkSoft)
+                }
+
+                Section {
+                    NavigationLink {
+                        ServerSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Server", systemImage: "server.rack")
+                            Text(appEnv.preferences.effectiveServerURL.absoluteString)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(HerbColor.inkSoft)
+                                .lineLimit(1)
+                        }
+                    }
+                    NavigationLink {
+                        AIProviderSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("AI provider", systemImage: "sparkles")
+                            Text(appEnv.preferences.aiProvider.displayName)
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    NavigationLink {
+                        APIKeysSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("API keys", systemImage: "key.fill")
+                            Text(apiKeysStatusText)
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                    if AppPreferences.isHostedTierEnabled {
                         NavigationLink {
-                            HomeLocationSettingsView()
+                            SubscriptionSettingsView()
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
-                                Label("Home location", systemImage: "location")
-                                Text(homeLocationSummary)
+                                Label("Subscription", systemImage: "creditcard")
+                                Text(subscriptionStatusText)
                                     .font(HerbFont.bodyItalic(size: 12))
                                     .foregroundStyle(HerbColor.inkSoft)
                             }
                         }
-                        NavigationLink {
-                            NotificationsSettingsView()
-                        } label: {
-                            Label("Notifications", systemImage: "bell")
+                    }
+                } header: {
+                    Rubric(text: "backend")
+                }
+
+                if case .signedIn(_, let household) = auth.state {
+                    Section {
+                        LabeledContent("Name", value: household.name)
+                        LabeledContent("ID") {
+                            Text(household.id)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(HerbColor.inkSoft)
                         }
                     } header: {
-                        Rubric(text: "garden")
+                        Rubric(text: "household")
                     }
-
                     Section {
-                        NavigationLink {
-                            AssistantKeySettingsView()
-                        } label: {
-                            Label("AI assistant key", systemImage: "sparkles")
-                        }
-                        NavigationLink {
-                            MCPSettingsView()
-                        } label: {
-                            Label("Connect Claude / MCP", systemImage: "link")
-                        }
-                        Toggle(isOn: $sparkleOnEveryPage) {
-                            Label("Sparkle on every page", systemImage: "wand.and.stars")
-                        }
-                    } header: {
-                        Rubric(text: "sprout · the scribe")
-                    } footer: {
-                        Text("When on, a sparkle button sits in the bottom-right of every primary page and opens Sprout with the current page's context attached.")
-                            .font(HerbFont.bodyItalic(size: 11))
-                            .foregroundStyle(HerbColor.inkSoft)
-                    }
-
-                    Section {
-                        NavigationLink {
-                            ServerSettingsView()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Server", systemImage: "server.rack")
-                                Text(appEnv.preferences.effectiveServerURL.absoluteString)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(HerbColor.inkSoft)
-                                    .lineLimit(1)
+                        if let code = inviteCode {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Share this code")
+                                    .font(HerbFont.smallCaps(size: 10))
+                                    .tracking(1.5)
+                                    .foregroundStyle(HerbColor.sepia)
+                                Text(code)
+                                    .font(.title3.monospaced())
+                                    .textSelection(.enabled)
                             }
-                        }
-                        NavigationLink {
-                            AIProviderSettingsView()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("AI provider", systemImage: "sparkles")
-                                Text(appEnv.preferences.aiProvider.displayName)
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
-                            }
-                        }
-                        NavigationLink {
-                            APIKeysSettingsView()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("API keys", systemImage: "key.fill")
-                                Text(apiKeysStatusText)
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
-                            }
-                        }
-                        if AppPreferences.isHostedTierEnabled {
-                            NavigationLink {
-                                SubscriptionSettingsView()
+                        } else {
+                            Button {
+                                Task { await createInvite() }
                             } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Label("Subscription", systemImage: "creditcard")
-                                    Text(subscriptionStatusText)
-                                        .font(HerbFont.bodyItalic(size: 12))
-                                        .foregroundStyle(HerbColor.inkSoft)
+                                HStack {
+                                    Text("Create invite link")
+                                    if isCreatingInvite { ProgressView().controlSize(.small).herbProgressStyle() }
                                 }
                             }
+                            .disabled(isCreatingInvite)
                         }
-                    } header: {
-                        Rubric(text: "backend")
-                    }
-
-                    if case .signedIn(_, let household) = auth.state {
-                        Section {
-                            LabeledContent("Name", value: household.name)
-                            LabeledContent("ID") {
-                                Text(household.id)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(HerbColor.inkSoft)
-                            }
-                        } header: {
-                            Rubric(text: "household")
-                        }
-                        Section {
-                            if let code = inviteCode {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Share this code")
-                                        .font(HerbFont.smallCaps(size: 10))
-                                        .tracking(1.5)
-                                        .foregroundStyle(HerbColor.sepia)
-                                    Text(code)
-                                        .font(.title3.monospaced())
-                                        .textSelection(.enabled)
-                                }
-                            } else {
-                                Button {
-                                    Task { await createInvite() }
-                                } label: {
-                                    HStack {
-                                        Text("Create invite link")
-                                        if isCreatingInvite { ProgressView().controlSize(.small).herbProgressStyle() }
-                                    }
-                                }
-                                .disabled(isCreatingInvite)
-                            }
-                            if let inviteError {
-                                Text(inviteError)
-                                    .font(.footnote)
-                                    .foregroundStyle(HerbColor.rose)
-                            }
-                        } header: {
-                            Rubric(text: "invite")
-                        }
-                    }
-
-                    Section {
-                        Button {
-                            Task { await appEnv.syncIfPossible() }
-                        } label: {
-                            Label("Sync now", systemImage: "arrow.clockwise")
-                        }
-                        if let err = appEnv.sync.lastError {
-                            Text(err)
+                        if let inviteError {
+                            Text(inviteError)
                                 .font(.footnote)
                                 .foregroundStyle(HerbColor.rose)
                         }
-                        NavigationLink {
-                            PendingWritesView()
-                        } label: {
-                            Label("Pending writes", systemImage: "tray.full")
-                        }
                     } header: {
-                        Rubric(text: "sync")
-                    }
-
-                    Section {
-                        Text("SEEDKEEP · BUILD \(buildRoman) · ANNO MMXXVI")
-                            .font(HerbFont.smallCaps(size: 8))
-                            .tracking(1.5)
-                            .foregroundStyle(HerbColor.inkFaint)
-                            .frame(maxWidth: .infinity)
-                            .listRowBackground(Color.clear)
+                        Rubric(text: "invite")
                     }
                 }
-                .scrollContentBackground(.hidden)
+
+                Section {
+                    Button {
+                        Task { await appEnv.syncIfPossible() }
+                    } label: {
+                        Label("Sync now", systemImage: "arrow.clockwise")
+                    }
+                    if let err = appEnv.sync.lastError {
+                        Text(err)
+                            .font(.footnote)
+                            .foregroundStyle(HerbColor.rose)
+                    }
+                    NavigationLink {
+                        PendingWritesView()
+                    } label: {
+                        Label("Pending writes", systemImage: "tray.full")
+                    }
+                } header: {
+                    Rubric(text: "sync")
+                }
+
+                Section {
+                    Text("SEEDKEEP · BUILD \(buildRoman) · ANNO MMXXVI")
+                        .font(HerbFont.smallCaps(size: 8))
+                        .tracking(1.5)
+                        .foregroundStyle(HerbColor.inkFaint)
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                }
             }
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
+            .scrollContentBackground(.hidden)
         }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Build stamp
@@ -290,6 +288,18 @@ struct SettingsView: View {
             inviteError = "\(err.code): \(err.message)"
         } catch {
             inviteError = error.localizedDescription
+        }
+    }
+}
+
+/// Thin standalone wrapper — adds a `NavigationStack` around `SettingsContent`
+/// for any direct-navigation use (e.g. previews, deep-link entry points).
+/// When `SettingsContent` is embedded in `YouView`'s existing stack, use
+/// `SettingsContent` directly to avoid a double navigation bar.
+struct SettingsView: View {
+    var body: some View {
+        NavigationStack {
+            SettingsContent()
         }
     }
 }

@@ -1,12 +1,11 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Seven-tab root: Today / Library / Garden / Journal / Sprout / Settings
-/// / You. Today (Diurnalis) is the default landing — a daily dashboard
-/// with sun arc + sowing queue + recent journal margin note. Sprout (the
-/// BYOK AI assistant) lives here as a tab for browsing past conversations
-/// AND as a bottom-right FAB on every page that opens a context-aware
-/// popup sheet. Random pick lives in Library's toolbar.
+/// Five-tab root: Today / Library / Garden / Journal / You. Today (Diurnalis)
+/// is the default landing — a daily dashboard with sun arc + sowing queue +
+/// recent journal margin note. Sprout (the BYOK AI assistant) is reachable
+/// via the bottom-right FAB (new thread) or You → Sprout (past conversations).
+/// Settings lives under You → Settings.
 struct MainTabView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @State private var selection: AppEnvironment.AppTab = .today
@@ -32,14 +31,6 @@ struct MainTabView: View {
             JournalView()
                 .tag(AppEnvironment.AppTab.journal)
                 .tabItem { Label("Journal", systemImage: "book") }
-
-            AssistantView()
-                .tag(AppEnvironment.AppTab.assistant)
-                .tabItem { Label("Sprout", systemImage: "sparkles") }
-
-            SettingsView()
-                .tag(AppEnvironment.AppTab.settings)
-                .tabItem { Label("Settings", systemImage: "gearshape") }
 
             YouView()
                 .tag(AppEnvironment.AppTab.you)

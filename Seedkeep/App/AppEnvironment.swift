@@ -45,7 +45,7 @@ public final class AppEnvironment {
     @ObservationIgnored private var lastBannerTime: Date?
 
     public enum AppTab: Hashable {
-        case today, library, garden, journal, random, assistant, settings, you
+        case today, library, garden, journal, you
     }
 
     public static func live() -> AppEnvironment {

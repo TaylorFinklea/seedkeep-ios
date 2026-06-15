@@ -24,7 +24,7 @@ struct SproutAssistantSheetView: View {
                     ContentUnavailableView(
                         "Sprout's offline",
                         systemImage: "sparkles",
-                        description: Text("Couldn't open a conversation. Try again from the Sprout tab.")
+                        description: Text("Couldn't open a conversation. Try again from the sparkle button.")
                     )
                 }
             }

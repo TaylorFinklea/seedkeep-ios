@@ -46,6 +46,20 @@ struct YouView: View {
                             Rubric(text: "house")
                         }
                     }
+                    Section {
+                        NavigationLink {
+                            SettingsContent()
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                        NavigationLink {
+                            AssistantView()
+                        } label: {
+                            Label("Sprout · past conversations", systemImage: "sparkles")
+                        }
+                    } header: {
+                        Rubric(text: "the order")
+                    }
                     contributionsSection
                     Section {
                         Button(role: .destructive) {
