@@ -48,7 +48,8 @@ struct AssistantThreadView: View {
                                     },
                                     onCancelTool: { id in
                                         Task { await cancel(toolCallID: id) }
-                                    }
+                                    },
+                                    isStreamInFlight: isStreaming
                                 )
                                 .id(message.id)
                             }

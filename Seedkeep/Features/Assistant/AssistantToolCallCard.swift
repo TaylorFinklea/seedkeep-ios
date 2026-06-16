@@ -11,10 +11,14 @@ struct AssistantToolCallCard: View {
     let toolCall: LocalAssistantToolCall
     let onConfirm: () -> Void
     let onCancel: () -> Void
+    /// True while a stream is already in flight — disables Confirm/Cancel to
+    /// prevent a double-send race on the proposed-change card.
+    var isStreamInFlight: Bool = false
 
     var body: some View {
         if toolCall.status == "proposed" {
-            ProposedChangeCard(toolCall: toolCall, onConfirm: onConfirm, onCancel: onCancel)
+            ProposedChangeCard(toolCall: toolCall, onConfirm: onConfirm, onCancel: onCancel,
+                               isStreamInFlight: isStreamInFlight)
         } else {
             HStack(alignment: .center, spacing: 10) {
                 statusGlyph
@@ -140,6 +144,7 @@ struct ProposedChangeCard: View {
     let toolCall: LocalAssistantToolCall
     let onConfirm: () -> Void
     let onCancel: () -> Void
+    var isStreamInFlight: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -172,6 +177,7 @@ struct ProposedChangeCard: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .disabled(isStreamInFlight)
 
                 Button(role: confirmRole) {
                     onConfirm()
@@ -181,6 +187,7 @@ struct ProposedChangeCard: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HerbColor.sage)
+                .disabled(isStreamInFlight)
             }
         }
         .padding(12)

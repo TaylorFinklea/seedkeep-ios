@@ -505,37 +505,53 @@ struct SeedDetailView: View {
                     // Local-only field — write straight through the sync
                     // engine's local helper rather than the server patch
                     // queue. Server sync lands in a Phase 2 follow-up.
-                    try? appEnv.sync.setLocalCustomType(seedID: seed.id, type: new)
+                    do {
+                        try appEnv.sync.setLocalCustomType(seedID: seed.id, type: new)
+                    } catch {
+                        appEnv.surfaceError(error)
+                    }
                 }
             TextField("Name (e.g. Cherokee Purple)", text: $nameDraft)
                 .textInputAutocapitalization(.words)
                 .onChange(of: nameDraft) { _, new in
                     guard identityHydrated else { return }
                     let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
-                    try? appEnv.sync.enqueueUpdateSeed(
-                        id: seed.id,
-                        .init(custom_name: trimmed.isEmpty ? nil : trimmed)
-                    )
+                    do {
+                        try appEnv.sync.enqueueUpdateSeed(
+                            id: seed.id,
+                            .init(custom_name: trimmed.isEmpty ? nil : trimmed)
+                        )
+                    } catch {
+                        appEnv.surfaceError(error)
+                    }
                 }
             TextField("Variety (optional)", text: $varietyDraft)
                 .textInputAutocapitalization(.words)
                 .onChange(of: varietyDraft) { _, new in
                     guard identityHydrated else { return }
                     let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
-                    try? appEnv.sync.enqueueUpdateSeed(
-                        id: seed.id,
-                        .init(custom_variety: trimmed.isEmpty ? nil : trimmed)
-                    )
+                    do {
+                        try appEnv.sync.enqueueUpdateSeed(
+                            id: seed.id,
+                            .init(custom_variety: trimmed.isEmpty ? nil : trimmed)
+                        )
+                    } catch {
+                        appEnv.surfaceError(error)
+                    }
                 }
             TextField("Company (e.g. Baker Creek)", text: $companyDraft)
                 .textInputAutocapitalization(.words)
                 .onChange(of: companyDraft) { _, new in
                     guard identityHydrated else { return }
                     let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
-                    try? appEnv.sync.enqueueUpdateSeed(
-                        id: seed.id,
-                        .init(custom_company: trimmed.isEmpty ? nil : trimmed)
-                    )
+                    do {
+                        try appEnv.sync.enqueueUpdateSeed(
+                            id: seed.id,
+                            .init(custom_company: trimmed.isEmpty ? nil : trimmed)
+                        )
+                    } catch {
+                        appEnv.surfaceError(error)
+                    }
                 }
         } header: {
             Rubric(text: "identity")
@@ -562,8 +578,12 @@ struct SeedDetailView: View {
                 selection: Binding(
                     get: { seed.state },
                     set: { newState in
-                        try? appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(state: newState))
-                        Task { try? await appEnv.sync.flushPending() }
+                        do {
+                            try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(state: newState))
+                            Task { try? await appEnv.sync.flushPending() }
+                        } catch {
+                            appEnv.surfaceError(error)
+                        }
                     }
                 )
             ) {
@@ -585,8 +605,12 @@ struct SeedDetailView: View {
                 value: Binding(
                     get: { seed.packetCount },
                     set: { newCount in
-                        try? appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(packet_count: newCount))
-                        Task { try? await appEnv.sync.flushPending() }
+                        do {
+                            try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(packet_count: newCount))
+                            Task { try? await appEnv.sync.flushPending() }
+                        } catch {
+                            appEnv.surfaceError(error)
+                        }
                     }
                 ),
                 in: 0...100
@@ -604,8 +628,12 @@ struct SeedDetailView: View {
                 selection: Binding(
                     get: { seed.locationID },
                     set: { newID in
-                        try? appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(location_id: newID))
-                        Task { try? await appEnv.sync.flushPending() }
+                        do {
+                            try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(location_id: newID))
+                            Task { try? await appEnv.sync.flushPending() }
+                        } catch {
+                            appEnv.surfaceError(error)
+                        }
                     }
                 )
             ) {
@@ -619,8 +647,12 @@ struct SeedDetailView: View {
                 let selection = Binding<Set<String>>(
                     get: { Set(seed.tagIDs) },
                     set: { newSet in
-                        try? appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(tag_ids: Array(newSet)))
-                        Task { try? await appEnv.sync.flushPending() }
+                        do {
+                            try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(tag_ids: Array(newSet)))
+                            Task { try? await appEnv.sync.flushPending() }
+                        } catch {
+                            appEnv.surfaceError(error)
+                        }
                     }
                 )
                 NavigationLink {
@@ -647,8 +679,12 @@ struct SeedDetailView: View {
                 selection: Binding(
                     get: { seed.source },
                     set: { newSource in
-                        try? appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(source: newSource))
-                        Task { try? await appEnv.sync.flushPending() }
+                        do {
+                            try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(source: newSource))
+                            Task { try? await appEnv.sync.flushPending() }
+                        } catch {
+                            appEnv.surfaceError(error)
+                        }
                     }
                 )
             ) {
@@ -662,8 +698,12 @@ struct SeedDetailView: View {
                 year: Binding(
                     get: { seed.yearPacked },
                     set: { newYear in
-                        try? appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(year_packed: newYear))
-                        Task { try? await appEnv.sync.flushPending() }
+                        do {
+                            try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(year_packed: newYear))
+                            Task { try? await appEnv.sync.flushPending() }
+                        } catch {
+                            appEnv.surfaceError(error)
+                        }
                     }
                 )
             )
@@ -680,12 +720,16 @@ struct SeedDetailView: View {
                 text: Binding(
                     get: { seed.notes ?? "" },
                     set: { newNotes in
-                        try? appEnv.sync.enqueueUpdateSeed(
-                            id: seed.id,
-                            .init(notes: newNotes.isEmpty ? nil : newNotes)
-                        )
-                        // Throttle: don't push every keystroke. Push once when
-                        // the user navigates away — handled by .onDisappear.
+                        do {
+                            try appEnv.sync.enqueueUpdateSeed(
+                                id: seed.id,
+                                .init(notes: newNotes.isEmpty ? nil : newNotes)
+                            )
+                            // Throttle: don't push every keystroke. Push once when
+                            // the user navigates away — handled by .onDisappear.
+                        } catch {
+                            appEnv.surfaceError(error)
+                        }
                     }
                 ),
                 axis: .vertical
@@ -739,9 +783,13 @@ struct SeedDetailView: View {
         }
         .confirmationDialog("Delete this seed?", isPresented: $pendingDelete) {
             Button("Delete", role: .destructive) {
-                try? appEnv.sync.enqueueDeleteSeed(id: seed.id)
-                Task { try? await appEnv.sync.flushPending() }
-                dismiss()
+                do {
+                    try appEnv.sync.enqueueDeleteSeed(id: seed.id)
+                    Task { try? await appEnv.sync.flushPending() }
+                    dismiss()
+                } catch {
+                    appEnv.surfaceError(error)
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {

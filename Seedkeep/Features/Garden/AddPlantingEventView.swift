@@ -112,9 +112,9 @@ struct AddPlantingEventView: View {
     ///   - the recommendation has no outdoor window (`rangeStart`/`rangeEnd` nil),
     ///   - or `plannedFor` is inside `[rangeStart, rangeEnd]` (strict, inclusive).
     ///
-    /// `rangeStart`/`rangeEnd` are YYYY-MM-DD strings at UTC midnight; compare
-    /// at day granularity in UTC so a date picker showing "Apr 15" matches
-    /// rangeStart="2026-04-15" regardless of local timezone offset.
+    /// `rangeStart`/`rangeEnd` are YYYY-MM-DD strings parsed to local midnight
+    /// (matching `parseYYYYMMDD` and `yyyymmdd(_:)`); comparison is at local
+    /// day granularity so the window check agrees with what the DatePicker saves.
     private var outOfWindowMessage: String? {
         guard let rec = localRecommendation,
               let startStr = rec.rangeStart,
@@ -124,7 +124,7 @@ struct AddPlantingEventView: View {
             return nil
         }
         var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC")!
+        cal.timeZone = .current
         let chosen = cal.startOfDay(for: plannedFor)
         let startDay = cal.startOfDay(for: start)
         let endDay = cal.startOfDay(for: end)
@@ -139,13 +139,13 @@ struct AddPlantingEventView: View {
         return "Window closed \(formattedDate(end))"
     }
 
-    /// "Apr 15"-style formatter for date captions. Treats `date` as UTC midnight
-    /// so it matches how `rangeStart`/`rangeEnd` were parsed.
+    /// "Apr 15"-style formatter for date captions. Uses local timezone
+    /// to match how `rangeStart`/`rangeEnd` are parsed by `parseYYYYMMDD`.
     private func formattedDate(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "MMM d"
         f.locale = .current
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f.string(from: date)
     }
 
@@ -368,13 +368,15 @@ struct AddPlantingEventView: View {
 
     // MARK: - Date helpers
 
-    /// Parses a "YYYY-MM-DD" string to a `Date` (UTC midnight), used for
-    /// "Use recommended date" so the DatePicker gets set to the window start.
+    /// Parses a "YYYY-MM-DD" string to a `Date` at local midnight.
+    /// Uses `TimeZone.current` so the resulting `Date` round-trips through
+    /// `yyyymmdd(_:)` (which also uses `.current`) without an off-by-one
+    /// day for UTC-negative users.
     private func parseYYYYMMDD(_ s: String) -> Date? {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f.date(from: s)
     }
 }

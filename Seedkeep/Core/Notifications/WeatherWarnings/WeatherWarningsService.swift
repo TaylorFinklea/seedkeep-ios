@@ -1166,20 +1166,50 @@ actor WeatherWarningsService {
     /// Run `body` with a hard timeout. On timeout, return a synthetic
     /// `.failed(message: "timeout")` so the caller can unblock
     /// `inFlight` and Settings can render an actionable error.
-    private func withTimeoutOrFailed(
+    ///
+    /// Uses a pure unstructured-Task race: `fetchTask` runs `body` and
+    /// `timeoutTask` sleeps for `seconds`, each racing to resume the
+    /// continuation first. The loser's Task is cancelled and its reference
+    /// is abandoned — the caller returns immediately without waiting for
+    /// a non-cooperative fetch to finish (which `withTaskGroup` would
+    /// require, stalling the caller for the full WeatherKit timeout).
+    ///
+    /// `timeoutSeconds` is injectable for tests — pass a small value
+    /// (e.g. 0.2) so the timeout path is verified without real delays.
+    func withTimeoutOrFailed(
         seconds: TimeInterval,
         _ body: @Sendable @escaping () async -> ForecastResult
     ) async -> ForecastResult {
-        await withTaskGroup(of: ForecastResult.self) { group in
-            group.addTask { await body() }
-            group.addTask {
-                let nanos = UInt64(seconds * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanos)
-                return .failed(message: "timeout", isUnauthorized: false)
+        // Shared mutable state guarded by NSLock (available without os import).
+        // `resumed` prevents double-resume if both tasks finish nearly simultaneously.
+        final class RaceState: @unchecked Sendable {
+            let lock = NSLock()
+            var resumed = false
+            var fetchTask: Task<Void, Never>?
+            var timeoutTask: Task<Void, Never>?
+        }
+        let state = RaceState()
+
+        return await withCheckedContinuation { (continuation: CheckedContinuation<ForecastResult, Never>) in
+            func resume(with result: ForecastResult) {
+                state.lock.lock()
+                let shouldResume = !state.resumed
+                state.resumed = true
+                state.lock.unlock()
+                if shouldResume { continuation.resume(returning: result) }
             }
-            let first = await group.next() ?? .failed(message: "timeout", isUnauthorized: false)
-            group.cancelAll()
-            return first
+
+            state.fetchTask = Task<Void, Never> {
+                let result = await body()
+                state.timeoutTask?.cancel()
+                resume(with: result)
+            }
+            let nanos = UInt64(seconds * 1_000_000_000)
+            state.timeoutTask = Task<Void, Never> {
+                try? await Task.sleep(nanoseconds: nanos)
+                state.fetchTask?.cancel()
+                resume(with: .failed(message: "timeout", isUnauthorized: false))
+            }
         }
     }
 }

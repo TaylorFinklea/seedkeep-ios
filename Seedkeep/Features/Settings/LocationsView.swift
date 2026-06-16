@@ -105,15 +105,23 @@ struct LocationsView: View {
     private func saveRename() {
         let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let id = renamingID else { return }
-        try? appEnv.sync.enqueueUpdateLocation(id: id, name: trimmed, sortOrder: nil)
-        Task { try? await appEnv.sync.flushPending() }
+        do {
+            try appEnv.sync.enqueueUpdateLocation(id: id, name: trimmed, sortOrder: nil)
+            Task { try? await appEnv.sync.flushPending() }
+        } catch {
+            appEnv.surfaceError(error)
+        }
         renamingID = nil
     }
 
     private func delete(at offsets: IndexSet) {
         for index in offsets {
             let loc = locations[index]
-            try? appEnv.sync.enqueueDeleteLocation(id: loc.id)
+            do {
+                try appEnv.sync.enqueueDeleteLocation(id: loc.id)
+            } catch {
+                appEnv.surfaceError(error)
+            }
         }
         Task { try? await appEnv.sync.flushPending() }
     }

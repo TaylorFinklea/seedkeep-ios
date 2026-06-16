@@ -8,7 +8,90 @@ import SeedkeepKit
 /// scholarly format, a daylight arc with sunrise/sunset, the queue of
 /// planting events due today (or overdue), and a Caveat-handwritten
 /// margin note pulling the latest journal entry from the last 48h.
+///
+/// `todayString` / `yesterdayString` are held as `@State` here and
+/// refreshed on `NSCalendarDayChanged` + foreground. The date-dependent
+/// `@Query` predicates live in `TodayQueryView` (a child that takes the
+/// strings as init params) so SwiftData rebuilds them when the dates
+/// roll over — the parent can't re-init its own `@Query` without a re-init.
 struct TodayView: View {
+    @Environment(AppEnvironment.self) private var appEnv
+
+    /// Drives the "Set home location" sheet from the sun-arc empty state.
+    @State private var showHomeLocationSheet: Bool = false
+
+    /// Date strings used as @Query predicate keys. Refreshed at midnight
+    /// (NSCalendarDayChanged) and on foreground resume so the due-events
+    /// list stays current without restarting the app.
+    @State private var todayString: String = Self.currentTodayString()
+    @State private var yesterdayString: String = Self.currentYesterdayString()
+
+    private static func makeDateFormatter() -> DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }
+
+    static func currentTodayString() -> String {
+        makeDateFormatter().string(from: Date())
+    }
+
+    static func currentYesterdayString() -> String {
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+        return makeDateFormatter().string(from: yesterday)
+    }
+
+    private func refreshDateStrings() {
+        todayString = Self.currentTodayString()
+        yesterdayString = Self.currentYesterdayString()
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                VellumBackground()
+                ScrollView {
+                    TodayQueryView(
+                        todayString: todayString,
+                        yesterdayString: yesterdayString,
+                        showHomeLocationSheet: $showHomeLocationSheet
+                    )
+                }
+                .overlay(alignment: .bottomTrailing) { SproutFAB() }
+            }
+            .navigationTitle("")
+            .publishesAssistantContext(pageType: "today")
+            .navigationDestination(for: PetDetailDestination.self) { dest in
+                PetDetailView(plantingEventID: dest.plantingEventID)
+            }
+            .sheet(isPresented: $showHomeLocationSheet) {
+                NavigationStack {
+                    HomeLocationSettingsView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") { showHomeLocationSheet = false }
+                            }
+                        }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+                refreshDateStrings()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIApplication.willEnterForegroundNotification)) { _ in
+                refreshDateStrings()
+            }
+        }
+    }
+}
+
+// MARK: - TodayQueryView (date-bucketed child)
+
+/// Child view that holds the date-dependent `@Query` predicates.
+/// Re-initialised by `TodayView` whenever `todayString` / `yesterdayString`
+/// change, which rebuilds the queries and updates the UI at midnight.
+private struct TodayQueryView: View {
     @Environment(AppEnvironment.self) private var appEnv
 
     /// Today's + overdue events (deletedAt nil, completedAt nil, planned for today or earlier)
@@ -17,25 +100,16 @@ struct TodayView: View {
     @Query private var recentJournal: [LocalJournalEntry]
     /// Active seeds for pulling the seed name on a planting event.
     @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var seeds: [LocalSeed]
-    /// Live pets for the Garden roll-call strip. Phase filtering (alive /
-    /// wilted / departing) happens in `livePets` since lifecycle phase is
-    /// iOS-derived from cached mood snapshots, not stored.
+    /// Live pets for the Garden roll-call strip.
     @Query private var liveCandidates: [LocalPlantingEvent]
-    /// Departure rows are excluded from the strip — departed pets live
-    /// in Menagerie, not in Today.
+    /// Departure rows are excluded from the strip.
     @Query private var departures: [LocalPetDeparture]
 
-    /// Drives the "Set home location" sheet from the sun-arc empty state.
-    /// Hosts `HomeLocationSettingsView` in its own NavigationStack so the
-    /// user can resolve their ZIP without leaving Today.
-    @State private var showHomeLocationSheet: Bool = false
+    @Binding var showHomeLocationSheet: Bool
 
-    init() {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        let today = f.string(from: Date())
-        let yesterday = f.string(from: Date().addingTimeInterval(-86400))
+    init(todayString: String, yesterdayString: String, showHomeLocationSheet: Binding<Bool>) {
+        let today = todayString
+        let yesterday = yesterdayString
         _dueEvents = Query(
             filter: #Predicate<LocalPlantingEvent> { event in
                 event.deletedAt == nil
@@ -55,35 +129,10 @@ struct TodayView: View {
             filter: #Predicate<LocalPlantingEvent> { event in
                 event.deletedAt == nil && event.completedAt == nil
             })
+        _showHomeLocationSheet = showHomeLocationSheet
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                VellumBackground()
-                ScrollView { scrollContent }
-                    .overlay(alignment: .bottomTrailing) { SproutFAB() }
-            }
-            .navigationTitle("")
-            .publishesAssistantContext(pageType: "today")
-            .navigationDestination(for: PetDetailDestination.self) { dest in
-                PetDetailView(plantingEventID: dest.plantingEventID)
-            }
-            .sheet(isPresented: $showHomeLocationSheet) {
-                NavigationStack {
-                    HomeLocationSettingsView()
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Close") { showHomeLocationSheet = false }
-                            }
-                        }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var scrollContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             FolioStrip(section: "Diurnalis", folio: folioNumber)
 

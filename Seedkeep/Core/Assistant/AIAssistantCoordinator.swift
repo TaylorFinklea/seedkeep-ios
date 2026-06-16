@@ -45,7 +45,21 @@ final class AIAssistantCoordinator {
         case streaming(messageID: String)
         case awaitingConfirmation(toolCallID: String)
         case error(String)
+
+        var isError: Bool {
+            if case .error = self { return true }
+            return false
+        }
     }
+
+    /// Test-only seam: force the streaming state to a specific value so
+    /// tests can drive the coordinator into `.awaitingConfirmation` or
+    /// `.error` without needing a real network round-trip.
+    #if DEBUG
+    func _testInjectStreamingState(_ state: StreamingState) {
+        streamingState = state
+    }
+    #endif
 
     struct AIPageContext: Equatable, Hashable {
         let pageType: String          // 'seed' | 'bed' | 'planting_event' | 'garden' | 'library' | ...
@@ -129,7 +143,8 @@ final class AIAssistantCoordinator {
         guard let threadID = currentThreadID else {
             throw NSError(domain: "Sprout", code: 0, userInfo: [NSLocalizedDescriptionKey: "No thread open"])
         }
-        guard streamingState == .idle else { return }
+        guard streamingState == .idle || streamingState.isError else { return }
+        streamingState = .streaming(messageID: "pending")
         lastError = nil
         let ctx = contextOverride ?? pageContext
         let payload = ctx.map { AssistantPageContextPayload(pageType: $0.pageType, entityId: $0.entityID, label: $0.label) }
@@ -184,6 +199,7 @@ final class AIAssistantCoordinator {
             streamingState = .idle
             return
         }
+        streamingState = .streaming(messageID: "pending")
         let stream = await client.confirmAssistantToolCall(toolCallID)
         try await consumeStream(stream, threadID: threadID)
     }

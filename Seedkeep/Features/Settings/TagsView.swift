@@ -118,7 +118,11 @@ struct TagsView: View {
     private func delete(at offsets: IndexSet) {
         for index in offsets {
             let tag = tags[index]
-            try? appEnv.sync.enqueueDeleteTag(id: tag.id)
+            do {
+                try appEnv.sync.enqueueDeleteTag(id: tag.id)
+            } catch {
+                appEnv.surfaceError(error)
+            }
         }
         Task { try? await appEnv.sync.flushPending() }
     }

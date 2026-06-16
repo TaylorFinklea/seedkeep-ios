@@ -9,6 +9,7 @@ struct MessageBubble: View {
     let toolCalls: [LocalAssistantToolCall]
     let onConfirmTool: (String) -> Void
     let onCancelTool: (String) -> Void
+    var isStreamInFlight: Bool = false
 
     var body: some View {
         switch message.role {
@@ -78,7 +79,8 @@ struct MessageBubble: View {
                     AssistantToolCallCard(
                         toolCall: call,
                         onConfirm: { onConfirmTool(call.id) },
-                        onCancel: { onCancelTool(call.id) }
+                        onCancel: { onCancelTool(call.id) },
+                        isStreamInFlight: isStreamInFlight
                     )
                 }
             }

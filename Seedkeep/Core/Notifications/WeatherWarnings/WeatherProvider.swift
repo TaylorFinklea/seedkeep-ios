@@ -127,6 +127,12 @@ actor WeatherKitProvider: WeatherProvider {
             // service-level reconciliation can swap this in then.
             let homeTimeZone = TimeZone.current
 
+            // Check for cancellation before doing any further work — if
+            // `withTimeoutOrFailed` already cancelled this task we should
+            // not persist stale data or return a result the caller has
+            // already abandoned.
+            try Task.checkCancellation()
+
             let validForecast = Self.validateForecast(
                 dailyForecast.forecast,
                 now: now
