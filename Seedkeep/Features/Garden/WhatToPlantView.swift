@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
+import UIKit
 import SeedkeepKit
+import PhotosUI
 
 /// "What to plant" view — lists the household's catalog-linked seeds grouped
 /// by recommendation urgency: plant now, plant soon, and a collapsed "Later &
@@ -20,6 +22,9 @@ struct WhatToPlantView: View {
     private var seeds: [LocalSeed]
 
     @State private var showLaterGroup = false
+    @State private var cornerViewModel: CornerSuggestionsViewModel?
+    @State private var showCornerSuggestions = false
+    @State private var pickerItem: PhotosPickerItem?
 
     private let today = Calendar.current.startOfDay(for: Date())
 
@@ -102,6 +107,82 @@ struct WhatToPlantView: View {
             guard !ids.isEmpty else { return }
             await appEnv.recommendations.bulkRefresh(catalogSeedIDs: ids)
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                PhotosPicker(
+                    selection: $pickerItem,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "camera.viewfinder")
+                        Text("Snap a corner")
+                            .font(HerbFont.smallCaps(size: 10))
+                            .tracking(1.2)
+                    }
+                    .foregroundStyle(HerbColor.sepia)
+                }
+            }
+        }
+        .onChange(of: pickerItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let uiImage = UIImage(data: data) {
+                    await launchCornerSuggestions(image: uiImage)
+                }
+                pickerItem = nil
+            }
+        }
+        .sheet(isPresented: $showCornerSuggestions) {
+            if let vm = cornerViewModel {
+                CornerSuggestionsView(viewModel: vm)
+                    .environment(appEnv)
+            }
+        }
+    }
+
+    // MARK: - Corner suggestions launch
+
+    private func launchCornerSuggestions(image: UIImage) async {
+        let client = appEnv.client
+        let container = appEnv.container
+        let recommendations = appEnv.recommendations
+        // Only active (non-deleted, non-archived) seeds reach the ranker (AC #1).
+        let localSeeds = seeds.filter { $0.stateRaw == "active" }
+
+        let vm = CornerSuggestionsViewModel(
+            analyze: { img in
+                await CornerVisionAnalyzer().analyze(image: img)
+            },
+            fetchSeeds: {
+                localSeeds.map { seed in
+                    PlantSuggestionRanker.SeedInput(
+                        id: seed.id,
+                        displayName: seed.displayName,
+                        catalogID: seed.catalogID,
+                        yearPacked: seed.yearPacked,
+                        sunRequirement: seed.growingInfo?.sun_requirement,
+                        plantSpacingInches: seed.growingInfo?.plant_spacing_inches
+                    )
+                }
+            },
+            fetchRecommendations: { catalogIDs in
+                await recommendations.bulkRefresh(catalogSeedIDs: catalogIDs)
+                return catalogIDs.compactMap { catalogID in
+                    guard let rec = recommendations.recommendation(for: catalogID) else { return nil }
+                    return PlantSuggestionRanker.RecommendationInput(
+                        catalogSeedID: catalogID,
+                        verdict: rec.verdict,
+                        rangeStart: rec.rangeStart,
+                        rangeEnd: rec.rangeEnd
+                    )
+                }
+            }
+        )
+        cornerViewModel = vm
+        showCornerSuggestions = true
+        await vm.capture(image: image)
     }
 
     // MARK: - Row

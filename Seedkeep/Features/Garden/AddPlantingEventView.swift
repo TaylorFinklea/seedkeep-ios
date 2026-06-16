@@ -9,6 +9,15 @@ import SeedkeepKit
 struct AddPlantingEventView: View {
     let bedID: String?
     let prefillSeedID: String?
+    /// Optional prefill date for the planting event (e.g. from the corner suggestions rangeStart).
+    /// When non-nil, `plannedFor` is set to this value in `.onAppear`.
+    let prefillDate: Date?
+
+    init(bedID: String?, prefillSeedID: String?, prefillDate: Date? = nil) {
+        self.bedID = bedID
+        self.prefillSeedID = prefillSeedID
+        self.prefillDate = prefillDate
+    }
 
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.dismiss) private var dismiss
@@ -55,6 +64,7 @@ struct AddPlantingEventView: View {
             .onAppear {
                 if selectedBedID == nil { selectedBedID = bedID }
                 if selectedSeedID == nil { selectedSeedID = prefillSeedID }
+                if let date = prefillDate { plannedFor = date }
                 Task { await refreshRecommendationForSelection() }
             }
             .onChange(of: selectedSeedID) { _, _ in
