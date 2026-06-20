@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
 import SeedkeepKit
+import OSLog
+import SeedkeepCloudKit
 
 @main
 struct SeedkeepApp: App {
@@ -26,29 +28,41 @@ struct SeedkeepApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(pendingInviteCode: $pendingInviteCode)
-                .environment(environment)
-                .environment(environment.auth)
-                .modelContainer(environment.container)
-                // Force light mode while we validate the Herbarium palette
-                // on-device. Dark variants exist in HerbColor but are gated
-                // off until they've been verified screen-by-screen.
-                .preferredColorScheme(.light)
-                .task {
-                    await environment.auth.restoreSession()
-                }
-                .onOpenURL { url in
-                    if let code = InviteURLRouter.invitationCode(from: url) {
-                        pendingInviteCode = code
-                    }
-                }
-                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
-                    if let url = activity.webpageURL,
-                       let code = InviteURLRouter.invitationCode(from: url) {
-                        pendingInviteCode = code
-                    }
-                }
+            #if DEBUG
+            if let spikeMode = CKSpike.mode {
+                CKSpikeView(mode: spikeMode)
+            } else {
+                mainRoot
+            }
+            #else
+            mainRoot
+            #endif
         }
+    }
+
+    @ViewBuilder private var mainRoot: some View {
+        RootView(pendingInviteCode: $pendingInviteCode)
+            .environment(environment)
+            .environment(environment.auth)
+            .modelContainer(environment.container)
+            // Force light mode while we validate the Herbarium palette
+            // on-device. Dark variants exist in HerbColor but are gated
+            // off until they've been verified screen-by-screen.
+            .preferredColorScheme(.light)
+            .task {
+                await environment.auth.restoreSession()
+            }
+            .onOpenURL { url in
+                if let code = InviteURLRouter.invitationCode(from: url) {
+                    pendingInviteCode = code
+                }
+            }
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                if let url = activity.webpageURL,
+                   let code = InviteURLRouter.invitationCode(from: url) {
+                    pendingInviteCode = code
+                }
+            }
     }
 }
 
@@ -136,3 +150,55 @@ private struct InviteRoute: Identifiable {
     let code: String
     var id: String { code }
 }
+
+// MARK: - R1 Phase-0 LIVE CloudKit spike harness (DEBUG only, launch-arg gated — inert in normal use)
+//
+// Drive from the command line:
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike roundtrip   (gate 1, one sim)
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike merge       (gate 1b, one sim)
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike owner       (gate 2 owner)
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike participant (gate 2, the OTHER sim/account)
+//
+// Result is os_log'd (subsystem app.seedkeep.cloud, category Spike, marker "CKSPIKE-RESULT") AND
+// written to Documents/ck-spike-result.txt (read back via `simctl get_app_container … data`).
+#if DEBUG
+enum CKSpike {
+    /// Active spike mode from `--ck-spike <mode>` or the `CK_SPIKE` env var; nil = normal app.
+    static var mode: String? {
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--ck-spike"), i + 1 < args.count { return args[i + 1] }
+        return ProcessInfo.processInfo.environment["CK_SPIKE"]
+    }
+
+    static var resultURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ck-spike-result.txt")
+    }
+}
+
+struct CKSpikeView: View {
+    let mode: String
+    @State private var result = "running…"
+    private let log = Logger(subsystem: "app.seedkeep.cloud", category: "Spike")
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("CloudKit spike — \(mode)").font(.headline)
+                Text(result).font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding()
+        }
+        .task { await run() }
+    }
+
+    private func run() async {
+        let r = await runSeedkeepSpike(mode: mode)
+        result = r
+        log.log("CKSPIKE-RESULT mode=\(mode, privacy: .public) :: \(r, privacy: .public)")
+        try? r.write(to: CKSpike.resultURL, atomically: true, encoding: .utf8)
+    }
+}
+#endif
