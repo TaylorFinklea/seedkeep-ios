@@ -323,7 +323,14 @@ public final class AppEnvironment {
         // registered only in tests, silently breaking all weather-warning
         // persistence in production); the shared constant prevents a repeat.
         let schema = Schema(SeedkeepSchema.all)
-        let config = ModelConfiguration("seedkeep", schema: schema)
+        // cloudKitDatabase: .none — keep the SwiftData store LOCAL-ONLY. Once the iCloud/CloudKit
+        // capability is added, ModelConfiguration's default `.automatic` makes SwiftData try to
+        // mirror to CloudKit, which validates the schema against CloudKit's rules and THROWS on our
+        // `@Attribute(.unique) var id` models (CloudKit forbids unique constraints — spec gotcha G1).
+        // Seedkeep does NOT use SwiftData/NSPersistentCloudKitContainer auto-mirroring: the shared
+        // household zone is synced by our own CKSyncEngine stack (SeedkeepCloudKit). SwiftData is the
+        // local source of truth only.
+        let config = ModelConfiguration("seedkeep", schema: schema, cloudKitDatabase: .none)
         do {
             return try ModelContainer(for: schema, configurations: config)
         } catch {
