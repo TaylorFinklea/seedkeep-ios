@@ -11,7 +11,11 @@ import SeedkeepCloudKit
 //   - absent scalars clear OPTIONAL model fields (full-record semantics) but use `?? existing` to
 //     preserve REQUIRED fields a well-formed record always carries;
 //   - new records get `householdID` (the zone IS the household; records don't carry it).
-// Host/unit-testable; wired into the live engine's fetch seam with the engine integration.
+// Host/unit-testable. NOT yet wired into the live engine — the glue (decode CKRecord → apply) lands
+// with the engine integration. CONTRACT for that glue: route a fetched record through
+// SeedkeepRecordMerger BEFORE the applier whenever a local pending edit exists, so the sticky-
+// deletedAt guarantee holds. The applier clears `deletedAt` when a record omits it, which is correct
+// ONLY for fully-merged / authoritative server records — never feed it an un-merged conflicting peer.
 @MainActor
 enum HouseholdRecordApplier {
 

@@ -150,6 +150,14 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable {
         }
     }
 
+    /// Resolve a CKRecord's `recordType` string (e.g. "MigrationReceipt") back to its case. The
+    /// integration glue receives raw CKRecords from the engine knowing only the type STRING; this
+    /// is the single tested lookup so call sites don't re-implement it (and silently drop unknown
+    /// types). Returns nil for a type outside the manifest.
+    public static func type(forRecordTypeName name: String) -> SeedkeepRecordType? {
+        allCases.first { $0.recordTypeName == name }
+    }
+
     /// recordName policy. Every garden type preserves its existing id (migration invariant D5);
     /// `PetDeparture` preserves its `plantingEventID` (1:1 with the parent planting). The
     /// `migrationReceipt` is the lone deterministic-key record (keyed on householdID, no row id).

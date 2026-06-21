@@ -216,6 +216,15 @@ func ckdslCoversFullRoster() {
 
 // MARK: - Manifest invariants
 
+@Test("type(forRecordTypeName:) resolves every type name back to its case; nil for unknowns")
+func typeForRecordTypeName() {
+    for t in SeedkeepRecordType.allCases {
+        #expect(SeedkeepRecordType.type(forRecordTypeName: t.recordTypeName) == t)
+    }
+    #expect(SeedkeepRecordType.type(forRecordTypeName: "MigrationReceipt") == .migrationReceipt)  // slug ≠ rawValue
+    #expect(SeedkeepRecordType.type(forRecordTypeName: "NotAType") == nil)
+}
+
 @Test("merger handles every manifest type and rejects unknowns")
 func mergerHandlesAll() {
     let merger = SeedkeepRecordMerger()
@@ -291,6 +300,28 @@ func universalStickyNoGhost() {
     let b = record("Location", name: "location:g", updatedAt: 20, displayName: "Shed")
     let merged = SeedkeepRecordMerger().resolve(local: a, remote: b).record as! CKRecord
     #expect(merged["deletedAt"] == nil)
+}
+
+@Test("default LWW: the universal sticky-delete rule covers PlantingEvent + JournalEntry too, not just Bed")
+func universalStickyMoreTypes() {
+    let merger = SeedkeepRecordMerger()
+    for typeName in ["PlantingEvent", "JournalEntry", "Tag", "Location"] {
+        let deleted = record(typeName, name: "x:1", updatedAt: 50, displayName: "del")
+        deleted["deletedAt"] = 50 as CKRecordValue
+        let edited = record(typeName, name: "x:1", updatedAt: 200, displayName: "edit")   // newer, NOT deleted
+        let r = merger.resolve(local: deleted, remote: edited)
+        #expect((r.record as! CKRecord)["deletedAt"] as? Int == 50, "\(typeName): delete must survive a newer concurrent edit")
+        #expect(r.needsResave == true, "\(typeName): the server lacks the tombstone → resave")
+    }
+}
+
+@Test("default LWW: two concurrent tombstones converge on the max (commutative)")
+func stickyDeletedAtBothSidesMax() {
+    let merger = SeedkeepRecordMerger()
+    let a = record("Bed", name: "bed:m", updatedAt: 10, displayName: "a"); a["deletedAt"] = 50 as CKRecordValue
+    let b = record("Bed", name: "bed:m", updatedAt: 20, displayName: "b"); b["deletedAt"] = 100 as CKRecordValue
+    #expect((merger.resolve(local: a, remote: b).record as! CKRecord)["deletedAt"] as? Int == 100)
+    #expect((merger.resolve(local: b, remote: a).record as! CKRecord)["deletedAt"] as? Int == 100)
 }
 
 // MARK: - JournalChecklistItem has no createdAt (consistent with the model + DB)

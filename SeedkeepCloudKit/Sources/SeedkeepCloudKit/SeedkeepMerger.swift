@@ -85,7 +85,7 @@ public struct SeedkeepRecordMerger: RecordMerger {
 
         let remoteDeletedAt = remote["deletedAt"] as? Int
         let sticky = Self.stickyDeletedAt(local: local, remote: remote)
-        if let d = sticky { result["deletedAt"] = d as CKRecordValue }
+        if let d = sticky { result["deletedAt"] = d as CKRecordValue } else { result["deletedAt"] = nil }
         let didChangeDeleted = sticky != remoteDeletedAt
 
         return MergeResult(record: result, needsResave: localWasNewer || didChangeDeleted)
@@ -140,9 +140,14 @@ public struct SeedkeepRecordMerger: RecordMerger {
         //    on one device is re-added if the other device holds it (no OR-Set tombstones). This
         //    is the spec's locked choice (never lose an add); removals must be re-applied if they
         //    race a concurrent edit. See tagRemovalIsAddOnly test.
+        let localTags = local["tagIDs"] as? String
         let originalRemoteTags = remote["tagIDs"] as? String
-        let mergedTags = Self.mergeTagIDs(local: local["tagIDs"] as? String, remote: originalRemoteTags)
-        result["tagIDs"] = mergedTags as CKRecordValue
+        let mergedTags = Self.mergeTagIDs(local: localTags, remote: originalRemoteTags)
+        // Only MATERIALIZE the field when a side actually had tags — don't write a spurious "[]"
+        // onto a record neither side tagged (keeps the absent-optional invariant).
+        if localTags != nil || originalRemoteTags != nil {
+            result["tagIDs"] = mergedTags as CKRecordValue
+        }
 
         // needsResave: true when local was newer (LWW pushed local fields) OR a custom rule
         // produced a value the server (the ORIGINAL remote) did not already hold — so the merged
@@ -239,7 +244,8 @@ public struct DispatchingMerger: RecordMerger {
         for merger in mergers where merger.handles(remote.recordType) {
             return merger.resolve(local: local, remote: remote)
         }
-        return MergeResult(record: remote, needsResave: false)  // unreachable: gated by handles()
+        // unreachable (gated by handles()); copy to keep the never-alias-remote invariant.
+        return MergeResult(record: remote.copy() as! CKRecord, needsResave: false)
     }
 }
 #endif

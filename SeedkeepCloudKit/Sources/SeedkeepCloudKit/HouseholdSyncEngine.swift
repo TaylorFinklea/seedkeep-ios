@@ -119,6 +119,11 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate {
                 if !hasPendingRecordChanges { throw error }
             }
         }
+        // Budget exhausted with changes still pending (a conflict storm). Don't silently abandon
+        // them — surface it so a drain that never converged is diagnosable rather than a false success.
+        if hasPendingRecordChanges {
+            log.error("sendUntilDrained exhausted \(maxPasses, privacy: .public) passes — record changes STILL pending")
+        }
     }
 
     // MARK: - CKSyncEngineDelegate
@@ -220,8 +225,11 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate {
                     store.setRecord(ckRecord)
                     shouldResave = result.needsResave   // only push back when the merge changed something
                 } else if let local = store.record(for: recordID) {
-                    for key in local.allKeys() { serverRecord[key] = local[key] }
-                    store.setRecord(serverRecord)
+                    // No merger for this type: local-wins LWW onto a COPY (never mutate the
+                    // framework's serverRecord in place — same aliasing hazard the merger avoids).
+                    let merged = serverRecord.copy() as! CKRecord
+                    for key in local.allKeys() { merged[key] = local[key] }
+                    store.setRecord(merged)
                 } else {
                     // No local copy: adopt the server's record as-is; nothing to push back.
                     store.setRecord(serverRecord)

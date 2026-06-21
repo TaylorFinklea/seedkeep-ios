@@ -46,16 +46,42 @@ private func index(_ plan: [CloudKitRecordValue], _ type: SeedkeepRecordType) ->
 
 struct HouseholdMigrationPlannerTests {
 
-@Test("plan: count matches expectedCount, Household first, receipt last")
+@Test("plan: Household first, receipt last, and every type present (independent oracle)")
 func planShape() {
-    let input = sampleInput()
+    let input = sampleInput()   // exactly one record of each of the 11 garden types
     let plan = HouseholdMigrationPlanner.plan(input, completedAt: 999)
-    #expect(plan.count == HouseholdMigrationPlanner.expectedCount(input))
+    // Independent oracle (NOT expectedCount, which derives from plan): 10 collection types each
+    // appear once + Household + receipt = 12. Assert each manifest type is present so an
+    // omitted-type bug can't pass.
+    #expect(plan.count == 12)
+    let types = Set(plan.map(\.type))
+    #expect(types == Set(SeedkeepRecordType.allCases), "every record type must appear in the plan")
     #expect(plan.first?.type == .household)
     #expect(plan.first?.recordName == "household:hh1")
     #expect(plan.last?.type == .migrationReceipt)
     #expect(plan.last?.recordName == "migrated:hh1")
     #expect(plan.last?.scalars["completedAt"] == .int(999))
+}
+
+@Test("fetchInput: a stale OTHER-household record is NOT exported (defensive householdID filter)")
+@MainActor
+func fetchInputCrossHouseholdIsolation() throws {
+    let container = makeTestContainer(name: "migPlannerIsolation-\(UUID().uuidString)")
+    let context = ModelContext(container)
+    // hh1 is the real household; hh-stale is a leftover from a silently-failed wipe.
+    context.insert(LocalSeed(id: "s1", householdID: "hh1", state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 2))
+    context.insert(LocalSeed(id: "stale", householdID: "hh-stale", state: .active, packetCount: 9, source: .store, createdAt: 1, updatedAt: 2))
+    context.insert(LocalBed(id: "b1", householdID: "hh1", name: "North", createdAt: 1, updatedAt: 2))
+    context.insert(LocalBed(id: "bStale", householdID: "hh-stale", name: "Foreign", createdAt: 1, updatedAt: 2))
+    try context.save()
+
+    let input = HouseholdMigrationPlanner.fetchInput(
+        from: context, householdID: "hh1", householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 2)
+    #expect(input.seeds.map(\.id) == ["s1"], "the stale household's seed must not be pulled")
+    #expect(input.beds.map(\.id) == ["b1"], "the stale household's bed must not be pulled")
+    let plan = HouseholdMigrationPlanner.plan(input, completedAt: 1)
+    #expect(!plan.contains { $0.recordName == "seed:stale" })
+    #expect(!plan.contains { $0.recordName == "bed:bStale" })
 }
 
 @Test("plan: cascade children are ordered AFTER their parents")

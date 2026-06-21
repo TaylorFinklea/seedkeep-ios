@@ -90,6 +90,9 @@ struct HouseholdRecordApplierTests {
         #expect(m.reason == "wilted_too_long")
         #expect(m.fallback == true)
         #expect(m.departedAt == 3)
+        #expect(m.goodbyeNoteJSON == "{}")   // the primary payload — must not be dropped
+        #expect(m.createdAt == 1)
+        #expect(m.updatedAt == 2)
     }
 
     @Test("JournalEntry round-trips the present parent ref, leaves absent parents nil")
@@ -127,9 +130,69 @@ struct HouseholdRecordApplierTests {
         try c.save()
         let m = try fetchOne(c, FetchDescriptor<LocalBed>(predicate: #Predicate { $0.id == "b1" }))
         #expect(m.name == "North")
+        #expect(m.bedDescription == "raised")
         #expect(m.widthFeet == 4.5)
         #expect(m.lengthFeet == nil)
         #expect(m.sortOrder == 3)
+    }
+
+    @Test("SeedPhoto round-trips (cascade ref deprefixed, all immutable fields)")
+    func seedPhotoRoundTrip() throws {
+        let c = ctx("sp")
+        let original = LocalSeedPhoto(id: "sp1", seedID: "s1", householdID: "hh1", r2Key: "k/front", role: .front,
+                                      width: 1024, height: 768, byteSize: 4096, capturedAt: 42)
+        HouseholdRecordApplier.apply(original.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let m = try fetchOne(c, FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == "sp1" }))
+        #expect(m.seedID == "s1")          // "seed:s1" deprefixed
+        #expect(m.r2Key == "k/front")
+        #expect(m.roleRaw == "front")
+        #expect(m.width == 1024)
+        #expect(m.height == 768)
+        #expect(m.byteSize == 4096)
+        #expect(m.capturedAt == 42)
+    }
+
+    @Test("JournalEntryPhoto round-trips (cascade ref deprefixed, nil dim clears)")
+    func journalEntryPhotoRoundTrip() throws {
+        let c = ctx("jp")
+        let original = LocalJournalEntryPhoto(id: "jp1", entryID: "je1", storageKey: "k/1", sortOrder: 2,
+                                              width: 800, height: nil, createdAt: 1, updatedAt: 2)
+        HouseholdRecordApplier.apply(original.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let m = try fetchOne(c, FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.id == "jp1" }))
+        #expect(m.entryID == "je1")        // "journalEntry:je1" deprefixed
+        #expect(m.storageKey == "k/1")
+        #expect(m.sortOrder == 2)
+        #expect(m.width == 800)
+        #expect(m.height == nil)
+    }
+
+    @Test("Tag round-trips (non-nil color + deletedAt)")
+    func tagRoundTrip() throws {
+        let c = ctx("tag")
+        let original = LocalTag(id: "t1", householdID: "hh1", name: "Heirloom", color: "#A33", createdAt: 1, updatedAt: 2, deletedAt: 5)
+        HouseholdRecordApplier.apply(original.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let m = try fetchOne(c, FetchDescriptor<LocalTag>(predicate: #Predicate { $0.id == "t1" }))
+        #expect(m.name == "Heirloom")
+        #expect(m.color == "#A33")
+        #expect(m.deletedAt == 5)
+    }
+
+    @Test("ChecklistItem uncheck: an incoming completed=false clears a pre-existing checked item")
+    func checklistUncheckUpsert() throws {
+        let c = ctx("uncheck")
+        let pre = LocalJournalChecklistItem(id: "ci1", entryID: "je1", text: "Water", completed: true, sortOrder: 0, updatedAt: 1)
+        c.insert(pre); try c.save()
+        // Incoming record has completed=false (a remote uncheck). asBool must return false (not nil),
+        // so the ?? fallback does NOT preserve the stale `true`.
+        let incoming = LocalJournalChecklistItem(id: "ci1", entryID: "je1", text: "Water", completed: false, sortOrder: 0, updatedAt: 9)
+        HouseholdRecordApplier.apply(incoming.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let m = try fetchOne(c, FetchDescriptor<LocalJournalChecklistItem>(predicate: #Predicate { $0.id == "ci1" }))
+        #expect(m.completed == false, "a remote uncheck must clear the local checked state")
+        #expect(m.updatedAt == 9)
     }
 
     @Test("upsert: applying onto an existing model updates it in place (no duplicate)")

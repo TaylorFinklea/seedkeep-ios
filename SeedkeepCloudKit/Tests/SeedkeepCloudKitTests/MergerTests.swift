@@ -226,11 +226,13 @@ func checklistCompletedAtLaterWins() {
     let uncompletedEarlier = checklistRecord(name: "item-1", completed: 0, updatedAt: 100)
 
     let merger = SeedkeepRecordMerger()
-    let r1 = merger.resolve(local: completedLater, remote: uncompletedEarlier).record as! CKRecord
-    #expect(r1["completed"] as! Int == 1)
+    let res1 = merger.resolve(local: completedLater, remote: uncompletedEarlier)
+    #expect((res1.record as! CKRecord)["completed"] as! Int == 1)
+    #expect(res1.needsResave == true, "local newer → push the merged pair back (G11)")
 
-    let r2 = merger.resolve(local: uncompletedEarlier, remote: completedLater).record as! CKRecord
-    #expect(r2["completed"] as! Int == 1)
+    let res2 = merger.resolve(local: uncompletedEarlier, remote: completedLater)
+    #expect((res2.record as! CKRecord)["completed"] as! Int == 1)
+    #expect(res2.needsResave == false, "remote newer → nothing to push")
 }
 
 @Test("checklist: completed=false@t3 beats completed=true@t1 (later uncheck wins as pair)")
@@ -242,12 +244,14 @@ func checklistUncheckLaterWins() {
     let checkedEarlier = checklistRecord(name: "item-2", completed: 1, updatedAt: 100)
 
     let merger = SeedkeepRecordMerger()
-    let r1 = merger.resolve(local: uncheckedLater, remote: checkedEarlier).record as! CKRecord
-    #expect(r1["completed"] as! Int == 0)
-    #expect(r1["updatedAt"] as! Int == 300)
+    let res1 = merger.resolve(local: uncheckedLater, remote: checkedEarlier)
+    #expect((res1.record as! CKRecord)["completed"] as! Int == 0)
+    #expect((res1.record as! CKRecord)["updatedAt"] as! Int == 300)
+    #expect(res1.needsResave == true, "local uncheck newer → push it back")
 
-    let r2 = merger.resolve(local: checkedEarlier, remote: uncheckedLater).record as! CKRecord
-    #expect(r2["completed"] as! Int == 0)
+    let res2 = merger.resolve(local: checkedEarlier, remote: uncheckedLater)
+    #expect((res2.record as! CKRecord)["completed"] as! Int == 0)
+    #expect(res2.needsResave == false, "remote newer → nothing to push")
 }
 
 // MARK: - Codec round-trip

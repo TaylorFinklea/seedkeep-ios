@@ -59,11 +59,20 @@ public struct SeedkeepZoneProvisioner {
     /// Day-one CKShare on the Household root (spec locked decision §4 — share-from-birth, G9).
     /// The share is unsurfaced until the user explicitly invites a member.
     public func ensureShare(for householdRecord: CKRecord, title: String) async throws -> CKShare {
+        let db = container.privateCloudDatabase
+        // IDEMPOTENT (G9 day-one share, called on every launch): `CKShare(rootRecord:)` + save throws
+        // serverRecordAlreadyShared once the root is already shared. Reuse the existing share instead.
         let share = CKShare(rootRecord: householdRecord)
-        share[CKShare.SystemFieldKey.title] = title
-        _ = try await container.privateCloudDatabase
-            .modifyRecords(saving: [householdRecord, share], deleting: [])
-        return share
+        share[CKShare.SystemFieldKey.title] = title as CKRecordValue
+        do {
+            _ = try await db.modifyRecords(saving: [householdRecord, share], deleting: [])
+            return share
+        } catch let error as CKError where error.code == .alreadyShared {
+            let freshRoot = try await db.record(for: householdRecord.recordID)
+            guard let shareRef = freshRoot.share,
+                  let existing = try await db.record(for: shareRef.recordID) as? CKShare else { throw error }
+            return existing
+        }
     }
 }
 #endif

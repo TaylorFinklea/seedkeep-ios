@@ -63,26 +63,33 @@ enum HouseholdMigrationPlanner {
     @MainActor
     static func fetchInput(from context: ModelContext, householdID: String, householdName: String,
                            householdCreatedAt: Int64, householdUpdatedAt: Int64) -> Input {
-        func all<T: PersistentModel>(_: T.Type) -> [T] { (try? context.fetch(FetchDescriptor<T>())) ?? [] }
+        func fetch<T: PersistentModel>(_ d: FetchDescriptor<T>) -> [T] { (try? context.fetch(d)) ?? [] }
+        let hid = householdID
         var input = Input(householdID: householdID, householdName: householdName,
                           householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
-        input.locations         = all(LocalLocation.self)
-        input.tags              = all(LocalTag.self)
-        input.seeds             = all(LocalSeed.self)
-        input.seedPhotos        = all(LocalSeedPhoto.self)
-        input.beds              = all(LocalBed.self)
-        input.plantingEvents    = all(LocalPlantingEvent.self)
-        input.journalEntries    = all(LocalJournalEntry.self)
-        input.journalEntryPhotos = all(LocalJournalEntryPhoto.self)
-        input.checklistItems    = all(LocalJournalChecklistItem.self)
-        input.petDepartures     = all(LocalPetDeparture.self)
+        // Filter household-scoped types by householdID — defensive against a stale record left by a
+        // silently-failed sign-out wipe (AppEnvironment's best-effort eraser), which would otherwise
+        // export a FORMER household's data into this household's zone.
+        input.locations      = fetch(FetchDescriptor<LocalLocation>(predicate: #Predicate { $0.householdID == hid }))
+        input.tags           = fetch(FetchDescriptor<LocalTag>(predicate: #Predicate { $0.householdID == hid }))
+        input.seeds          = fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.householdID == hid }))
+        input.seedPhotos     = fetch(FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.householdID == hid }))
+        input.beds           = fetch(FetchDescriptor<LocalBed>(predicate: #Predicate { $0.householdID == hid }))
+        input.plantingEvents = fetch(FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.householdID == hid }))
+        input.journalEntries = fetch(FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.householdID == hid }))
+        // The journal/pet CHILDREN have no householdID — they're constrained by their parent FK
+        // (entryID/plantingEventID), which points at parents that ARE scoped above, so they cannot
+        // leak independently. Fetch all (single-household-per-user, R1 locked).
+        input.journalEntryPhotos = fetch(FetchDescriptor<LocalJournalEntryPhoto>())
+        input.checklistItems     = fetch(FetchDescriptor<LocalJournalChecklistItem>())
+        input.petDepartures      = fetch(FetchDescriptor<LocalPetDeparture>())
         return input
     }
 
     /// Expected record count (graph + Household + receipt) — a cheap post-write sanity check.
+    /// Derived from `plan()` itself (pure, no side effects) so it can never drift from the plan
+    /// when a new record type is added.
     static func expectedCount(_ input: Input) -> Int {
-        2 + input.locations.count + input.tags.count + input.seeds.count + input.seedPhotos.count
-          + input.beds.count + input.plantingEvents.count + input.journalEntries.count
-          + input.journalEntryPhotos.count + input.checklistItems.count + input.petDepartures.count
+        plan(input, completedAt: 0).count
     }
 }

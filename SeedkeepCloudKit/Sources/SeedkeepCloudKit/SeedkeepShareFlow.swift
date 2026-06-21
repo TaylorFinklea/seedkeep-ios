@@ -61,8 +61,22 @@ public struct SeedkeepShareFlow {
         let share = CKShare(rootRecord: root)
         share[CKShare.SystemFieldKey.title] = name as CKRecordValue
         share.publicPermission = .readWrite   // anyone with the link can join (spike simplicity)
-        _ = try await db.modifyRecords(saving: [root, share], deleting: [])
-        guard let url = share.url else { throw ShareError.noURL }
+
+        // IDEMPOTENT: `CKShare(rootRecord:)` + save throws serverRecordAlreadyShared when the root is
+        // already shared (every run after the first, since the zone persists). Catch it and reuse the
+        // existing share instead of failing.
+        let url: URL
+        do {
+            _ = try await db.modifyRecords(saving: [root, share], deleting: [])
+            guard let u = share.url else { throw ShareError.noURL }
+            url = u
+        } catch let error as CKError where error.code == .alreadyShared {
+            let freshRoot = try await db.record(for: recordID)
+            guard let shareRef = freshRoot.share,
+                  let existing = try await db.record(for: shareRef.recordID) as? CKShare,
+                  let u = existing.url else { throw error }
+            url = u
+        }
 
         try await publishURL(url)
         return OwnerResult(url: url, ownerStamp: ownerStamp)
@@ -71,8 +85,12 @@ public struct SeedkeepShareFlow {
     private static let handoffRecordName = "seedkeep-spike-share-handoff"
 
     private func publishURL(_ url: URL) async throws {
-        let record = CKRecord(recordType: "ShareHandoff",
-                              recordID: CKRecord.ID(recordName: Self.handoffRecordName))
+        // IDEMPOTENT: fetch the existing handoff record (so the save carries its server change tag);
+        // a fresh CKRecord has no tag and the default save policy rejects it with serverRecordChanged
+        // on the second run.
+        let id = CKRecord.ID(recordName: Self.handoffRecordName)
+        let record = (try? await container.publicCloudDatabase.record(for: id))
+            ?? CKRecord(recordType: "ShareHandoff", recordID: id)
         record["url"] = url.absoluteString as CKRecordValue
         _ = try await container.publicCloudDatabase.modifyRecords(saving: [record], deleting: [])
     }
