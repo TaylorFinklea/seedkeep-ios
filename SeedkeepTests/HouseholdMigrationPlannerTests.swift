@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftData
 @testable import Seedkeep
 import SeedkeepKit
 import SeedkeepCloudKit
@@ -118,6 +119,31 @@ func emptyHousehold() {
     let plan = HouseholdMigrationPlanner.plan(input, completedAt: 1)
     #expect(plan.count == 2)
     #expect(plan.map(\.type) == [.household, .migrationReceipt])
+}
+
+@Test("fetchInput: pulls the household's full local graph from a ModelContext")
+@MainActor
+func fetchInputFromContext() throws {
+    let container = makeTestContainer(name: "migPlannerFetch-\(UUID().uuidString)")
+    let context = ModelContext(container)
+    context.insert(LocalLocation(id: "loc1", householdID: "hh1", name: "Garage", sortOrder: 0, createdAt: 1, updatedAt: 2, deletedAt: nil))
+    context.insert(LocalSeed(id: "s1", householdID: "hh1", state: .active, packetCount: 3, source: .store, customName: "X", createdAt: 1, updatedAt: 2))
+    context.insert(LocalBed(id: "b1", householdID: "hh1", name: "North", createdAt: 1, updatedAt: 2))
+    try context.save()
+
+    let input = HouseholdMigrationPlanner.fetchInput(
+        from: context, householdID: "hh1", householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 2)
+    #expect(input.seeds.count == 1)
+    #expect(input.beds.count == 1)
+    #expect(input.locations.count == 1)
+    #expect(input.tags.isEmpty)
+    #expect(input.plantingEvents.isEmpty)
+
+    let plan = HouseholdMigrationPlanner.plan(input, completedAt: 1)
+    #expect(plan.count == HouseholdMigrationPlanner.expectedCount(input))
+    #expect(plan.contains { $0.recordName == "seed:s1" })
+    #expect(plan.contains { $0.recordName == "bed:b1" })
+    #expect(plan.contains { $0.recordName == "location:loc1" })
 }
 
 }

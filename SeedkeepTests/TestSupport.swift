@@ -10,7 +10,12 @@ import SeedkeepKit
 /// suites don't step on each other's stores.
 func makeTestContainer(name: String) -> ModelContainer {
     let schema = Schema(SeedkeepSchema.all)
-    let config = ModelConfiguration(name, schema: schema, isStoredInMemoryOnly: true)
+    // cloudKitDatabase: .none — once the app target carries the CloudKit entitlement,
+    // ModelConfiguration's default `.automatic` makes SwiftData validate the schema against
+    // CloudKit's rules (all attributes optional / default) even for an in-memory store in the
+    // test host, which throws on our `@Attribute(.unique) id` models (G1). Seedkeep syncs via its
+    // own CKSyncEngine, never SwiftData-CloudKit, so the store stays local here too.
+    let config = ModelConfiguration(name, schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
     return try! ModelContainer(for: schema, configurations: config)
 }
 

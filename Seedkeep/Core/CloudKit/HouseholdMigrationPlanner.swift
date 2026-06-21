@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import SeedkeepCloudKit
 
 // R1 — the one-time per-household export plan. Pure given a fetched model set: collects the
@@ -53,6 +54,29 @@ enum HouseholdMigrationPlanner {
         out.append(SeedkeepRecordValues.migrationReceipt(
             householdID: input.householdID, completedAt: completedAt, schemaVersion: schemaVersion))
         return out
+    }
+
+    /// Build the export Input by fetching the household's full local graph from `context`.
+    /// Single-household-per-user (R1 locked decision): the local store holds exactly one
+    /// household's data, so this fetches all of each type. @MainActor — SwiftData's ModelContext
+    /// is main-actor-bound in this app.
+    @MainActor
+    static func fetchInput(from context: ModelContext, householdID: String, householdName: String,
+                           householdCreatedAt: Int64, householdUpdatedAt: Int64) -> Input {
+        func all<T: PersistentModel>(_: T.Type) -> [T] { (try? context.fetch(FetchDescriptor<T>())) ?? [] }
+        var input = Input(householdID: householdID, householdName: householdName,
+                          householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
+        input.locations         = all(LocalLocation.self)
+        input.tags              = all(LocalTag.self)
+        input.seeds             = all(LocalSeed.self)
+        input.seedPhotos        = all(LocalSeedPhoto.self)
+        input.beds              = all(LocalBed.self)
+        input.plantingEvents    = all(LocalPlantingEvent.self)
+        input.journalEntries    = all(LocalJournalEntry.self)
+        input.journalEntryPhotos = all(LocalJournalEntryPhoto.self)
+        input.checklistItems    = all(LocalJournalChecklistItem.self)
+        input.petDepartures     = all(LocalPetDeparture.self)
+        return input
     }
 
     /// Expected record count (graph + Household + receipt) — a cheap post-write sanity check.

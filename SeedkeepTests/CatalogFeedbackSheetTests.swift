@@ -238,7 +238,7 @@ struct CatalogFeedbackSheetTests {
         let config = ModelConfiguration(
             "catalogFeedbackSheetTests_preflight",
             schema: schema,
-            isStoredInMemoryOnly: true
+            isStoredInMemoryOnly: true, cloudKitDatabase: .none
         )
         let container = try ModelContainer(for: schema, configurations: config)
         let context = ModelContext(container)
@@ -342,7 +342,7 @@ struct CatalogFeedbackSheetTests {
         let config = ModelConfiguration(
             "catalogFeedbackSheetTests_withdraw",
             schema: schema,
-            isStoredInMemoryOnly: true
+            isStoredInMemoryOnly: true, cloudKitDatabase: .none
         )
         let container = try ModelContainer(for: schema, configurations: config)
         let context = ModelContext(container)

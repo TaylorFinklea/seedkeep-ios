@@ -399,7 +399,7 @@ struct WithTimeoutOrFailedTests {
         let config = ModelConfiguration(
             "timeoutTests-\(UUID().uuidString)",
             schema: schema,
-            isStoredInMemoryOnly: true
+            isStoredInMemoryOnly: true, cloudKitDatabase: .none
         )
         let container = try! ModelContainer(for: schema, configurations: config)
         // Non-cooperative provider: Thread.sleep for 10s, ignores cancellation.

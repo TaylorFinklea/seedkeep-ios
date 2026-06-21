@@ -33,7 +33,7 @@ struct ActivePlantingsObserverTests {
         let config = ModelConfiguration(
             "activePlantingsObserverTests-\(UUID().uuidString)",
             schema: schema,
-            isStoredInMemoryOnly: true
+            isStoredInMemoryOnly: true, cloudKitDatabase: .none
         )
         return try! ModelContainer(for: schema, configurations: config)
     }
