@@ -138,6 +138,7 @@ targets:
     dependencies:
       - target: Seedkeep
       - package: SeedkeepKit
+      - package: SeedkeepCloudKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER).tests
