@@ -400,6 +400,14 @@ public enum SeedkeepRecordNames {
         type == .migrationReceipt ? migrationReceipt(id) : "\(type.rawValue):\(id)"
     }
 
+    /// The raw legacy id from a slug-prefixed recordName or in-zone reference
+    /// ("seed:s1" → "s1", "location:loc1" → "loc1", "migrated:hh1" → "hh1"). The reverse mapping
+    /// uses this to recover model ids. Cross-DB refs (catalogID) are already raw — do NOT pass them here.
+    public static func rawID(_ recordName: String) -> String {
+        guard let colon = recordName.firstIndex(of: ":") else { return recordName }
+        return String(recordName[recordName.index(after: colon)...])
+    }
+
     /// Idempotent migration receipt keyed by householdID (G12).
     public static func migrationReceipt(_ householdID: String) -> String { "migrated:\(householdID)" }
 
