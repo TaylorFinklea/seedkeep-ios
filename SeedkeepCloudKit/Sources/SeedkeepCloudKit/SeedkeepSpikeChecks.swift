@@ -186,28 +186,24 @@ private func withTimeout(_ seconds: Double, _ op: @escaping () async -> String) 
 // MARK: - Dispatch
 
 public func runSeedkeepSpike(mode: String, containerID: String = "iCloud.app.seedkeep") async -> String {
-    // Preflight: a clear account status beats a silent hang. accountStatus returns fast even when
-    // the CloudKit auth token is broken (it reports whether an account is present, not usable).
-    let container = CKContainer(identifier: containerID)
-    var statusLine = "accountStatus = ?"
-    do {
-        let status = try await container.accountStatus()
-        statusLine = "accountStatus = \(describe(status))"
-        if status != .available {
-            return "❌ CloudKit account not usable: \(describe(status)). Sign into iCloud on this sim (Settings ▸ Apple ID ▸ iCloud) + enable iCloud Drive, then retry.\n(\(statusLine))"
+    // The ENTIRE flow (accountStatus preflight + the check body) runs inside withTimeout — when the
+    // iCloud auth token is broken, even `accountStatus()` blocks on cloudd forever, so the preflight
+    // must be bounded too (a prior run hung indefinitely here). A clean "TIMED OUT" beats a hang.
+    await withTimeout(60) {
+        let container = CKContainer(identifier: containerID)
+        let status = (try? await container.accountStatus()) ?? .couldNotDetermine
+        guard status == .available else {
+            return "❌ CloudKit account not usable: \(describe(status)). Sign into iCloud on this sim (Settings ▸ Apple ID ▸ iCloud) + enable iCloud Drive, then retry."
         }
-    } catch {
-        return "❌ accountStatus check failed: \(error)\n(container \(containerID) — entitlement present?)"
+        let result: String
+        switch mode {
+        case "roundtrip":   result = await runSeedkeepRoundtripCheck(containerID: containerID)
+        case "merge":       result = await runSeedkeepMergeCheck(containerID: containerID)
+        case "owner":       result = await runSeedkeepShareOwnerCheck(containerID: containerID)
+        case "participant": result = await runSeedkeepShareParticipantCheck(containerID: containerID)
+        default:            return "❌ unknown spike mode: \(mode) (expected roundtrip|merge|owner|participant)"
+        }
+        return result + "\n(accountStatus = available)"
     }
-
-    let body: () async -> String
-    switch mode {
-    case "roundtrip":   body = { await runSeedkeepRoundtripCheck(containerID: containerID) }
-    case "merge":       body = { await runSeedkeepMergeCheck(containerID: containerID) }
-    case "owner":       body = { await runSeedkeepShareOwnerCheck(containerID: containerID) }
-    case "participant": body = { await runSeedkeepShareParticipantCheck(containerID: containerID) }
-    default:            return "❌ unknown spike mode: \(mode) (expected roundtrip|merge|owner|participant)"
-    }
-    return await withTimeout(45, body) + "\n(\(statusLine))"
 }
 #endif
