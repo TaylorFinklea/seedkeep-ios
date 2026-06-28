@@ -16,7 +16,7 @@ import OSLog
 ///
 /// `automaticSync` is configurable: tests drive `sync()` manually for determinism;
 /// the app turns automatic sync on.
-public final class HouseholdSyncEngine: CKSyncEngineDelegate {
+public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing {
     public let database: CKDatabase
     public let zoneID: CKRecordZone.ID
     public let store: HouseholdLocalStore
@@ -28,7 +28,36 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate {
 
     /// Optional field-merger. When set, records whose type it `handles` are field-merged
     /// at the fetch + serverRecordChanged seams instead of blanket LWW.
-    public var merger: RecordMerger?
+    ///
+    /// `merger` + the two callbacks below are lock-guarded: they are written once from the
+    /// coordinator (MainActor) before the first sync and READ on the CKSyncEngine delegate queue.
+    /// The lock makes the `Sendable` conformance sound; the live coordinator additionally builds the
+    /// engine with `automaticSync: false`, so no delegate event can fire before they are wired.
+    private let callbackLock = NSLock()
+    private var _merger: RecordMerger?
+    private var _onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)?
+    private var _onAccountChange: ((HouseholdAccountChange) -> Void)?
+
+    public var merger: RecordMerger? {
+        get { callbackLock.lock(); defer { callbackLock.unlock() }; return _merger }
+        set { callbackLock.lock(); _merger = newValue; callbackLock.unlock() }
+    }
+
+    /// Fired after a fetched batch is reconciled into the local store (and after a SENT batch's
+    /// saved records land), with the records actually applied + the deletion IDs. The coordinator
+    /// decodes these and projects them into SwiftData. Called off arbitrary tasks (CKSyncEngine's
+    /// queue) — the coordinator must hop to @MainActor before touching ModelContext.
+    public var onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)? {
+        get { callbackLock.lock(); defer { callbackLock.unlock() }; return _onFetchedChanges }
+        set { callbackLock.lock(); _onFetchedChanges = newValue; callbackLock.unlock() }
+    }
+
+    /// Fired on an iCloud account transition (mapped to the app-level kind) so the coordinator
+    /// can wipe SwiftData (AC5). Called in addition to the engine's own `store.removeAll()`.
+    public var onAccountChange: ((HouseholdAccountChange) -> Void)? {
+        get { callbackLock.lock(); defer { callbackLock.unlock() }; return _onAccountChange }
+        set { callbackLock.lock(); _onAccountChange = newValue; callbackLock.unlock() }
+    }
 
     private let traceLock = NSLock()
     private var trace: [String] = []
@@ -147,6 +176,11 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate {
 
         case .fetchedRecordZoneChanges(let changes):
             let pendingSaves = pendingSaveIDs()
+            // Collect the records ACTUALLY applied this batch (post-merge; local-pending skips
+            // excluded) + the deletion IDs, then hand them to the coordinator for SwiftData
+            // projection. A skipped (local-pending) mod must NOT reach SwiftData either — local wins.
+            var applied: [CKRecord] = []
+            var deletedIDs: [CKRecord.ID] = []
             for modification in changes.modifications {
                 let remote = modification.record
                 let hasPendingEdit = pendingSaves.contains(remote.recordID)
@@ -155,6 +189,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate {
                     let result = merger.resolve(local: local, remote: remote)
                     if let ckRecord = result.record as? CKRecord {
                         store.setRecord(ckRecord)
+                        applied.append(ckRecord)
                         if result.needsResave {
                             syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(ckRecord.recordID)])
                         }
@@ -167,22 +202,34 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate {
                     continue
                 }
                 store.applyRemoteModification(remote)
+                applied.append(remote)
                 note("fetched mod \(remote.recordID.recordName)")
             }
             for deletion in changes.deletions {
                 store.removeRecord(deletion.recordID)
+                deletedIDs.append(deletion.recordID)
                 note("fetched del \(deletion.recordID.recordName)")
+            }
+            if !applied.isEmpty || !deletedIDs.isEmpty {
+                onFetchedChanges?(applied, deletedIDs)
             }
 
         case .sentRecordZoneChanges(let sent):
-            for saved in sent.savedRecords {
-                store.setRecord(saved)
-                note("saved \(saved.recordID.recordName)")
+            var saved: [CKRecord] = []
+            for record in sent.savedRecords {
+                store.setRecord(record)
+                saved.append(record)
+                note("saved \(record.recordID.recordName)")
             }
             for failure in sent.failedRecordSaves {
                 note("FAILED \(failure.record.recordID.recordName) code=\(failure.error.code.rawValue)")
                 handleFailedSave(failure)
             }
+            // Project the SAVED records back to SwiftData. For a serverRecordChanged conflict, the
+            // re-saved record IS the merged result (packetCount-min / tagIDs-union / sticky-deletedAt)
+            // produced in handleFailedSave — without this, the editing device's SwiftData keeps its
+            // pre-merge values forever (it authored the last write, so it never re-fetches them).
+            if !saved.isEmpty { onFetchedChanges?(saved, []) }
 
         case .accountChange(let change):
             handleAccountChange(change)
@@ -251,10 +298,14 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate {
 
     private func handleAccountChange(_ change: CKSyncEngine.Event.AccountChange) {
         switch change.changeType {
-        case .signOut, .switchAccounts:
+        case .signOut:
             store.removeAll()
+            onAccountChange?(.signOut)
+        case .switchAccounts:
+            store.removeAll()
+            onAccountChange?(.switchAccounts)
         case .signIn:
-            break
+            onAccountChange?(.signIn)
         @unknown default:
             break
         }

@@ -9,7 +9,7 @@ import Foundation
 ///   - Root record type: `Household` with recordName `household:<householdID>`
 ///
 /// Compiles headlessly; live operations need a signed build + iCloud account (G6).
-public struct SeedkeepZoneProvisioner {
+public struct SeedkeepZoneProvisioner: Sendable {
     public let container: CKContainer
 
     public init(containerIdentifier: String = "iCloud.app.seedkeep") {

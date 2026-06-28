@@ -1,0 +1,286 @@
+import Testing
+import Foundation
+import SwiftData
+import CloudKit
+@testable import Seedkeep
+import SeedkeepKit
+import SeedkeepCloudKit
+
+// R1 live-engine wiring — the coordinator + migration executor + apply-gate + AC5 wipe, exercised
+// against a FAKE engine (no CKContainer / iCloud account). The engine's own callback firing is
+// validated on-device (CKSyncEngine.Event isn't synthetically constructible); these tests cover all
+// the SwiftData<->engine LOGIC the coordinator owns: reverse apply with the updatedAt-LWW gate,
+// watermark push with echo exclusion, the receipt-gated migration (AC3), and the account-wipe (AC5).
+@MainActor
+struct HouseholdCloudCoordinatorTests {
+
+    // MARK: Fake engine
+
+    /// Records saves/deletes; `pendingFetch` is delivered once via `fetchChanges()` (simulating a
+    /// remote batch) — both into the store and through `onFetchedChanges`, exactly as the real engine.
+    final class FakeEngine: HouseholdRecordSyncing, @unchecked Sendable {
+        let store = HouseholdLocalStore()
+        var merger: RecordMerger?
+        var onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)?
+        var onAccountChange: ((HouseholdAccountChange) -> Void)?
+        private(set) var savedRecords: [CKRecord] = []
+        private(set) var deletedIDs: [CKRecord.ID] = []
+        var pendingFetch: ([CKRecord], [CKRecord.ID]) = ([], [])
+
+        func save(_ record: CKRecord) { store.setRecord(record); savedRecords.append(record) }
+        func delete(_ recordID: CKRecord.ID) { store.removeRecord(recordID); deletedIDs.append(recordID) }
+        func fetchChanges() async throws {
+            let (mods, dels) = pendingFetch
+            pendingFetch = ([], [])
+            guard !mods.isEmpty || !dels.isEmpty else { return }
+            for m in mods { store.applyRemoteModification(m) }
+            for d in dels { store.removeRecord(d) }
+            onFetchedChanges?(mods, dels)
+        }
+        func sendUntilDrained(maxPasses: Int) async throws {}
+
+        var savedTypes: [String] { savedRecords.map(\.recordType) }
+    }
+
+    // MARK: Helpers
+
+    private func makeContainer() -> ModelContainer {
+        makeTestContainer(name: "coord-\(UUID().uuidString)")
+    }
+
+    private func makeCoordinator(
+        engine: FakeEngine, container: ModelContainer, householdID: String
+    ) -> HouseholdCloudCoordinator {
+        let zoneID = CKRecordZone.ID(
+            zoneName: SeedkeepZoneProvisioner.zoneName(householdID: householdID),
+            ownerName: CKCurrentUserDefaultName)
+        return HouseholdCloudCoordinator(
+            engine: engine, zoneID: zoneID, householdID: householdID, householdName: "Test House",
+            householdCreatedAt: 1, householdUpdatedAt: 1, container: container,
+            provisioner: nil, stateURL: nil)   // provisioner nil → skip live provisioning
+    }
+
+    private func zoneID(_ householdID: String) -> CKRecordZone.ID {
+        CKRecordZone.ID(zoneName: SeedkeepZoneProvisioner.zoneName(householdID: householdID),
+                        ownerName: CKCurrentUserDefaultName)
+    }
+
+    /// A remote Seed CKRecord (round-tripped through the real codec) with a chosen clock + name.
+    private func remoteSeed(id: String, householdID: String, name: String, updatedAt: Int64) -> CKRecord {
+        let local = LocalSeed(id: id, householdID: householdID, state: .active, packetCount: 5,
+                              source: .store, createdAt: 1, updatedAt: updatedAt)
+        local.customName = name
+        return SeedkeepRecordCodec.encode(local.cloudKitValue, zoneID: zoneID(householdID))
+    }
+
+    private func fetchSeed(_ c: ModelContext, _ id: String) -> LocalSeed? {
+        try? c.fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == id })).first
+    }
+
+    // MARK: - Migration executor (AC3)
+
+    @Test("executor writes the full plan + receipt when none exists, then skips on re-run")
+    func executorIdempotent() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let engine = FakeEngine()
+        let z = zoneID(hid)
+        let input = HouseholdMigrationPlanner.Input(
+            householdID: hid, householdName: "H", householdCreatedAt: 1, householdUpdatedAt: 1,
+            seeds: [LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 3, source: .store, createdAt: 1, updatedAt: 2)])
+        let plan = HouseholdMigrationPlanner.plan(input, completedAt: 100)
+
+        let r1 = try await HouseholdMigrationExecutor.run(into: engine, zoneID: z, householdID: hid, plan: plan)
+        #expect(r1.alreadyMigrated == false)
+        #expect(r1.written == plan.count)
+        #expect(engine.savedTypes.contains("Household"))
+        #expect(engine.savedTypes.contains("Seed"))
+        #expect(engine.savedTypes.contains("MigrationReceipt"))
+
+        // Second run: receipt now in the store → no-op.
+        let before = engine.savedRecords.count
+        let r2 = try await HouseholdMigrationExecutor.run(into: engine, zoneID: z, householdID: hid, plan: plan)
+        #expect(r2.alreadyMigrated == true)
+        #expect(r2.written == 0)
+        #expect(engine.savedRecords.count == before, "skip must write nothing")
+    }
+
+    @Test("coordinator skips migration when a receipt is already synced from another device")
+    func migrationSkippedWhenReceiptFetched() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        // Seed local data that WOULD be migrated…
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 3, source: .store, createdAt: 1, updatedAt: 2))
+        try setup.save()
+        // …but a receipt arrives on the first fetch (another device already migrated).
+        let receipt = SeedkeepRecordCodec.encode(
+            SeedkeepRecordValues.migrationReceipt(householdID: hid, completedAt: 1, schemaVersion: 1), zoneID: zoneID(hid))
+        engine.pendingFetch = ([receipt], [])
+
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        // The migration is SKIPPED (no receipt re-written) — that is the idempotency signal. The
+        // local seed still reconciles via the normal forward push (pushDirty), which is correct: a
+        // device that missed migration must still converge its local data with the migrated zone.
+        #expect(engine.savedTypes.contains("MigrationReceipt") == false, "migration must not re-export when the receipt is present")
+    }
+
+    // MARK: - Reverse apply + updatedAt-LWW gate
+
+    @Test("fetched remote is projected into SwiftData")
+    func fetchedRemoteApplied() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "Brandywine", updatedAt: 500)], [])
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        let m = fetchSeed(ModelContext(container), "s1")
+        #expect(m?.customName == "Brandywine")
+        #expect(m?.updatedAt == 500)
+    }
+
+    @Test("updatedAt-LWW gate: an OLDER remote does not clobber a newer local edit")
+    func lwwGateSkipsOlderRemote() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()   // start (empty graph)
+
+        // Local edit at clock 500.
+        let setup = ModelContext(container)
+        let local = LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 5, source: .store, createdAt: 1, updatedAt: 500)
+        local.customName = "LocalName"
+        setup.insert(local); try setup.save()
+
+        // Stale remote at clock 100 arrives.
+        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "StaleRemote", updatedAt: 100)], [])
+        await coordinator.sync()
+        #expect(fetchSeed(ModelContext(container), "s1")?.customName == "LocalName", "older remote must not win")
+
+        // A genuinely newer remote at clock 900 DOES win.
+        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "FreshRemote", updatedAt: 900)], [])
+        await coordinator.sync()
+        let after = fetchSeed(ModelContext(container), "s1")
+        #expect(after?.customName == "FreshRemote")
+        #expect(after?.updatedAt == 900)
+    }
+
+    @Test("a CloudKit deletion hard-deletes the local row")
+    func deletionRemovesLocalRow() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 1))
+        try setup.save()
+        #expect(fetchSeed(ModelContext(container), "s1") != nil)
+
+        let delID = CKRecord.ID(recordName: SeedkeepRecordNames.recordName(for: .seed, id: "s1"), zoneID: zoneID(hid))
+        engine.pendingFetch = ([], [delID])
+        await coordinator.sync()
+        #expect(fetchSeed(ModelContext(container), "s1") == nil, "deletion must remove the local row")
+    }
+
+    // MARK: - Watermark push + echo exclusion
+
+    @Test("pushDirty stages a local edit newer than the watermark")
+    func pushStagesLocalEdit() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()   // start (empty)
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 9, source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        await coordinator.sync()
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" }, "a local edit must be pushed")
+    }
+
+    @Test("echo exclusion: a record applied from remote this pass is not re-pushed")
+    func echoExcluded() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()   // start (empty) → only Household + receipt written
+
+        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "FromPeer", updatedAt: 400)], [])
+        await coordinator.sync()
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" } == false,
+                "a just-applied remote record must not echo back as a push")
+        // It IS now in SwiftData.
+        #expect(fetchSeed(ModelContext(container), "s1")?.customName == "FromPeer")
+    }
+
+    @Test("watermark is not poisoned by a peer's high clock — a later lower-clock local edit still pushes")
+    func watermarkNotPoisonedByPeerClock() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()   // start (empty)
+
+        // A peer record with a FAR-AHEAD clock is fetched + applied (peer's wall clock runs fast).
+        engine.pendingFetch = ([remoteSeed(id: "peer", householdID: hid, name: "Peer", updatedAt: 10_000)], [])
+        await coordinator.sync()
+
+        // A genuine LOCAL edit to a DIFFERENT record with a LOWER clock than the peer's.
+        let setup = ModelContext(container)
+        let local = LocalSeed(id: "mine", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 500)
+        local.customName = "Mine"
+        setup.insert(local); try setup.save()
+        await coordinator.sync()
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:mine" },
+                "the local edit must push even though a peer's clock is far ahead — the watermark must advance only over pushed records, never absorb peer clocks")
+    }
+
+    @Test("migration does not re-run after relaunch (durable marker survives a fresh engine store)")
+    func migrationDurableAcrossRelaunch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 2, source: .store, createdAt: 1, updatedAt: 2))
+        try setup.save()
+
+        // First launch: migrates (writes the receipt).
+        let engine1 = FakeEngine()
+        await makeCoordinator(engine: engine1, container: container, householdID: hid).sync()
+        #expect(engine1.savedTypes.contains("MigrationReceipt"), "first run migrates")
+
+        // Relaunch: a FRESH engine with an empty in-memory store (as on a real relaunch), SAME household.
+        // The in-memory receipt is gone, but the durable marker must still suppress re-export.
+        let engine2 = FakeEngine()
+        await makeCoordinator(engine: engine2, container: container, householdID: hid).sync()
+        #expect(engine2.savedTypes.contains("MigrationReceipt") == false,
+                "the durable migration marker must prevent a full re-export on every relaunch")
+    }
+
+    // MARK: - Account change (AC5)
+
+    @Test("signOut wipes household SwiftData; signIn does not")
+    func accountWipe() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 1))
+        setup.insert(LocalBed(id: "b1", householdID: hid, name: "North", createdAt: 1, updatedAt: 1))
+        try setup.save()
+
+        coordinator.handleAccountChange(.signIn)
+        #expect(fetchSeed(ModelContext(container), "s1") != nil, "signIn must not wipe")
+
+        coordinator.handleAccountChange(.signOut)
+        let c = ModelContext(container)
+        #expect((try? c.fetch(FetchDescriptor<LocalSeed>()))?.isEmpty == true)
+        #expect((try? c.fetch(FetchDescriptor<LocalBed>()))?.isEmpty == true)
+    }
+}

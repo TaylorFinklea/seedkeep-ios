@@ -82,7 +82,7 @@ public enum RecordNamePolicy: Equatable {
 // MARK: - Scalar transport value
 
 /// Pure Swift scalar (no CloudKit dependency). Used in CloudKitRecordValue and the merger.
-public enum ScalarValue: Equatable {
+public enum ScalarValue: Equatable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)
@@ -95,7 +95,7 @@ public enum ScalarValue: Equatable {
 /// Pure transport value for a Seedkeep household record — what the codec encodes
 /// to / decodes from a CKRecord, driven by the SeedkeepRecordType manifest.
 /// Generic field-bag: keeps the codec testable without bespoke structs per type.
-public struct CloudKitRecordValue: Equatable {
+public struct CloudKitRecordValue: Equatable, Sendable {
     public let type: SeedkeepRecordType
     public let recordName: String
     /// Scalar field name → value. Omitted fields = absent (optional columns stay absent).
@@ -116,7 +116,7 @@ public struct CloudKitRecordValue: Equatable {
 
 /// Seedkeep's CloudKit shared-zone record types: the full household garden graph (11 types)
 /// plus `migrationReceipt`, the one-time idempotency record the upgrade migration writes (G12).
-public enum SeedkeepRecordType: String, CaseIterable, Equatable {
+public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
     case household
     case location
     case tag

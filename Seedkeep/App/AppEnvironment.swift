@@ -58,20 +58,9 @@ public final class AppEnvironment {
         let auth = AuthController(client: client, tokenStore: store)
         let container = Self.makeModelContainer()
         let sync = SyncEngine(client: client, container: container)
-        // Stabilization B3 — sign-out / identity-switch wipe. The auth
-        // controller is built before the container exists, so the wipe
-        // is injected here: erase every model (generic over
-        // SeedkeepSchema.all — includes the pending-write queue and sync
-        // cursors) and drop pending + delivered notifications.
-        auth.wireLocalDataEraser { [sync] in
-            do {
-                try sync.eraseAllLocalData()
-            } catch {
-                // Best effort — a wipe failure must not block sign-out.
-                // The keychain token is already gone at this point.
-            }
-            NotificationsCenter.shared.removeAllAppNotifications()
-        }
+        // Stabilization B3 — sign-out / identity-switch wipe is wired in init() (below), where the
+        // AppEnvironment instance exists so the wipe can ALSO tear down the CloudKit coordinator
+        // (state token + watermark + migration marker), not just SwiftData. See wireSignOutEraser().
         let recommendations = RecommendationStore(client: client, container: container)
         let journal = JournalStore(client: client, container: container)
         let assistant = AIAssistantCoordinator(client: client, container: container)
@@ -156,6 +145,23 @@ public final class AppEnvironment {
         journal.wireErrorSink { [weak self] error in
             self?.surfaceError(error)
         }
+        // Stabilization B3 + R1 — sign-out / identity-switch wipe. Erases every model (generic over
+        // SeedkeepSchema.all — includes the pending-write queue + sync cursors), drops notifications,
+        // AND tears down the CloudKit coordinator (engine state token + watermark + migration marker)
+        // and nils its reference so a re-sign-in to the SAME household rebuilds a fresh coordinator
+        // that re-provisions + rehydrates rather than reusing a stale `started` one.
+        auth.wireLocalDataEraser { [weak self] in
+            guard let self else { return }
+            do {
+                try self.sync.eraseAllLocalData()
+            } catch {
+                // Best effort — a wipe failure must not block sign-out; the keychain token is gone.
+            }
+            NotificationsCenter.shared.removeAllAppNotifications()
+            self.cloudCoordinator?.wipeAndClear()
+            self.cloudCoordinator = nil
+            self.cloudCoordinatorHouseholdID = nil
+        }
     }
 
     /// Surfaces an error to the user via `bannerError`. Replaces silent
@@ -198,13 +204,27 @@ public final class AppEnvironment {
     /// Phase 5.1.4 (the side-effect helper has the hook points stubbed).
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
-            let ran = await sync.syncAll(householdID: household.id)
-            // Skipped (another sync already in flight): lastError still
-            // holds the PREVIOUS pass's outcome — re-presenting it here
-            // shows a phantom banner — and the post-sync orchestration
-            // below would run against a mid-sweep store. The in-flight
-            // caller does all of it when its pass finishes.
-            guard ran else { return }
+            // R1: route HOUSEHOLD garden data through the CloudKit coordinator when the flag is on,
+            // else the legacy server feeds. Both share the identical post-sync orchestration below.
+            // (catalogCorrections + assistantThreads stay on the server SyncEngine regardless — they
+            // are R3/R5 — so when the flag is ON we additionally run those two server feeds. For this
+            // OFF-by-default phase that extra-feed wiring is deferred to the cutover; see the spec.)
+            let banner: String?
+            if FeatureFlags.cloudKitHouseholdSyncEnabled {
+                let coordinator = ensureCloudCoordinator(household: household)
+                let ran = await coordinator.sync()
+                guard ran else { return }
+                banner = coordinator.lastHumanizedError
+            } else {
+                let ran = await sync.syncAll(householdID: household.id)
+                // Skipped (another sync already in flight): lastError still
+                // holds the PREVIOUS pass's outcome — re-presenting it here
+                // shows a phantom banner — and the post-sync orchestration
+                // below would run against a mid-sweep store. The in-flight
+                // caller does all of it when its pass finishes.
+                guard ran else { return }
+                banner = sync.lastHumanizedError
+            }
             // Mirror the sync outcome into the user-facing banner.
             // SyncEngine isn't @Observable, so SwiftUI can't react to it
             // directly — we surface here instead, on the boundary that
@@ -213,9 +233,7 @@ public final class AppEnvironment {
             // stay in `lastError` for the Settings diagnostics row).
             // Debounce inside presentBanner keeps repeated identical
             // errors from strobing the UI.
-            if let syncError = sync.lastHumanizedError {
-                presentBanner(syncError)
-            }
+            if let banner { presentBanner(banner) }
             let transitions = PetStateEngine.tickAll(
                 householdID: household.id,
                 container: container
@@ -235,6 +253,28 @@ public final class AppEnvironment {
             // tab-back-in doesn't burn a WeatherKit fetch.
             _ = await weatherWarnings.refreshAllIfStale(reason: .foreground)
         }
+    }
+
+    // R1 — the CloudKit household coordinator, built lazily on first use when the flag is on and a
+    // household is known. Rebuilt if the household id changes (account switch). nil/unused when the
+    // flag is off. `@ObservationIgnored` — its outcome is mirrored to `bannerError` explicitly.
+    @ObservationIgnored private var cloudCoordinator: HouseholdCloudCoordinator?
+    @ObservationIgnored private var cloudCoordinatorHouseholdID: String?
+
+    private func ensureCloudCoordinator(household: HouseholdDTO) -> HouseholdCloudCoordinator {
+        if let existing = cloudCoordinator, cloudCoordinatorHouseholdID == household.id {
+            return existing
+        }
+        let coordinator = HouseholdCloudCoordinator.live(
+            householdID: household.id,
+            householdName: household.name,
+            householdCreatedAt: household.created_at,
+            householdUpdatedAt: household.updated_at,
+            container: container
+        )
+        cloudCoordinator = coordinator
+        cloudCoordinatorHouseholdID = household.id
+        return coordinator
     }
 
     /// Phase 5.1.4 — recompute the Sunday-8am pet roundup body from the
