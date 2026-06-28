@@ -262,6 +262,32 @@ struct HouseholdCloudCoordinatorTests {
                 "the durable migration marker must prevent a full re-export on every relaunch")
     }
 
+    @Test("a local tombstone pushes even when the store holds a higher-clock LIVE peer record")
+    func tombstonePushesOverLiveStore() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()   // start (empty)
+
+        // A peer's LIVE edit at a FAR-AHEAD clock lands in the engine store + SwiftData.
+        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "PeerLive", updatedAt: 10_000)], [])
+        await coordinator.sync()
+
+        // Now locally SOFT-DELETE that seed at a LOWER clock (deletedAt set, updatedAt below the peer's).
+        let setup = ModelContext(container)
+        let m = fetchSeed(setup, "s1")
+        m?.deletedAt = 500
+        m?.updatedAt = 500
+        try setup.save()
+        await coordinator.sync()
+
+        let pushedTombstone = engine.savedRecords.contains {
+            $0.recordID.recordName == "seed:s1" && ($0["deletedAt"] as? Int) != nil
+        }
+        #expect(pushedTombstone, "the tombstone must push despite the store holding a higher-clock LIVE peer record (sticky-deletedAt converges)")
+    }
+
     // MARK: - Account change (AC5)
 
     @Test("signOut wipes household SwiftData; signIn does not")

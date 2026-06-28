@@ -214,7 +214,13 @@ public final class AppEnvironment {
                 let coordinator = ensureCloudCoordinator(household: household)
                 let ran = await coordinator.sync()
                 guard ran else { return }
-                banner = coordinator.lastHumanizedError
+                // Household data synced via CloudKit; still pull the non-household server feeds
+                // (catalog corrections R3 + assistant threads R5) — syncAll skips the 7 household
+                // feeds + flushPending when the flag is ON. Only fold in the server error when this
+                // syncAll actually RAN (a skipped in-flight pass leaves a stale lastHumanizedError —
+                // surfacing it would be a phantom banner; same reasoning as the OFF branch's guard).
+                let serverRan = await sync.syncAll(householdID: household.id)
+                banner = coordinator.lastHumanizedError ?? (serverRan ? sync.lastHumanizedError : nil)
             } else {
                 let ran = await sync.syncAll(householdID: household.id)
                 // Skipped (another sync already in flight): lastError still

@@ -104,16 +104,31 @@ public final class SyncEngine {
             }
         }
 
-        do { try await pullLocations(householdID: householdID) } catch { record("locations", error) }
-        do { try await pullTags(householdID: householdID) } catch { record("tags", error) }
-        do { try await pullSeeds(householdID: householdID) } catch { record("seeds", error) }
-        do { try await pullBeds(householdID: householdID) } catch { record("beds", error) }
-        do { try await pullPlantingEvents(householdID: householdID) } catch { record("planting_events", error) }
-        do { try await pullPetDepartures(householdID: householdID) } catch { record("pet_departures", error) }
+        // R1: the 7 HOUSEHOLD feeds (+ the optimistic-write push queue) move to the CloudKit
+        // coordinator when the flag is ON; the server stays the source of truth only while OFF. The
+        // 2 NON-household feeds (catalog corrections = R3, assistant threads = R5) stay on the server
+        // regardless. Flag OFF (shipping) runs all 9 feeds + flushPending exactly as before.
+        // Order is preserved EXACTLY vs the pre-flag sequence (flag OFF runs all 9 + flushPending in
+        // the original order: …pet_departures, catalog_corrections, journal_entries, assistant_threads,
+        // push). The household feeds are individually guarded in place so the flag-OFF order is
+        // byte-identical and flag-ON runs only catalog_corrections + assistant_threads.
+        let cloud = FeatureFlags.cloudKitHouseholdSyncEnabled
+        if !cloud {
+            do { try await pullLocations(householdID: householdID) } catch { record("locations", error) }
+            do { try await pullTags(householdID: householdID) } catch { record("tags", error) }
+            do { try await pullSeeds(householdID: householdID) } catch { record("seeds", error) }
+            do { try await pullBeds(householdID: householdID) } catch { record("beds", error) }
+            do { try await pullPlantingEvents(householdID: householdID) } catch { record("planting_events", error) }
+            do { try await pullPetDepartures(householdID: householdID) } catch { record("pet_departures", error) }
+        }
         do { try await pullCatalogCorrections(householdID: householdID) } catch { record("catalog_corrections", error) }
-        do { try await pullJournalEntries(householdID: householdID) } catch { record("journal_entries", error) }
+        if !cloud {
+            do { try await pullJournalEntries(householdID: householdID) } catch { record("journal_entries", error) }
+        }
         do { try await pullAssistantThreads(householdID: householdID) } catch { record("assistant_threads", error) }
-        do { try await flushPending() } catch { record("push", error) }
+        if !cloud {
+            do { try await flushPending() } catch { record("push", error) }
+        }
 
         lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
         // Banner copy: the first failure is representative (an offline

@@ -128,6 +128,9 @@ final class HouseholdCloudCoordinator {
             guard passEpoch == epoch else { return true }   // account changed mid-pass → abandon
             try await pullAndApply()
             guard passEpoch == epoch else { return true }
+            // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
+            // children locally so pushDirty propagates the tombstones (no server to cascade for us).
+            try HouseholdCascade.apply(in: ModelContext(container), now: Int64(Date().timeIntervalSince1970 * 1000))
             try await pushDirty()
             guard passEpoch == epoch else { return true }
             // Project any send-path merge results (serverRecordChanged → merged re-save) buffered
@@ -213,7 +216,13 @@ final class HouseholdCloudCoordinator {
             guard !appliedSinceLastPush.contains(d.recordName) else { continue }   // applied from remote this pass
             let id = CKRecord.ID(recordName: d.recordName, zoneID: zoneID)
             if let stored = engine.store.record(for: id), storeClock(stored) >= d.clock {
-                continue   // CloudKit already holds this (remote-applied or already-pushed) — no echo
+                // Normally skip — CloudKit already holds this (remote-applied or already-pushed).
+                // EXCEPTION: a local TOMBSTONE whose stored copy is still LIVE must always push, even
+                // at a lower clock — a peer's live edit (high clock) in the store would otherwise
+                // strand our cascade/delete tombstone. The merger's sticky-deletedAt keeps it converged.
+                let localTombstoneVsLiveStore =
+                    d.value.scalars["deletedAt"] != nil && (stored["deletedAt"] as? Int) == nil
+                if !localTombstoneVsLiveStore { continue }
             }
             engine.save(SeedkeepRecordCodec.encode(d.value, zoneID: zoneID))
             pushedMaxClock = max(pushedMaxClock, d.clock)
