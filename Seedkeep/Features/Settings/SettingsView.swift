@@ -195,6 +195,15 @@ struct SettingsContent: View {
                     } label: {
                         Label("Pending writes", systemImage: "tray.full")
                     }
+                    Toggle(isOn: Binding(
+                        get: { FeatureFlags.cloudKitHouseholdSyncEnabled },
+                        set: { FeatureFlags.setCloudKitHouseholdSync($0) }
+                    )) {
+                        Label("CloudKit sync (beta)", systemImage: "icloud")
+                    }
+                    Text("Experimental — syncs your garden across your devices via iCloud instead of the server. Both devices must use the same iCloud account. Tap “Sync now” after toggling.")
+                        .font(.footnote)
+                        .foregroundStyle(HerbColor.inkFaint)
                 } header: {
                     Rubric(text: "sync")
                 }

@@ -16,12 +16,20 @@ enum FeatureFlags {
 
     /// R1 serverless rearchitecture — route HOUSEHOLD GARDEN DATA sync through the
     /// `SeedkeepCloudKit` `CKSyncEngine` shared zone (+ CKShare households) instead of the
-    /// legacy server `SyncEngine` feeds. **OFF by default — additive, ships nothing.** The
-    /// coordinator/migration/account-wipe path is built + host/sim-tested + adversarially
-    /// reviewed, but the live data path is only device-validatable; do NOT flip ON until a
-    /// TestFlight cycle proves it on two real devices. When ON, the 7 household server feeds
-    /// MUST be skipped the same turn (else data double-syncs) — see the 2026-06-28
-    /// `r1-liveengine-wiring-spec.md` "Deferred (cutover)". `catalogCorrections` (R3) +
-    /// `assistantThreads` (R5) stay on the server `SyncEngine` regardless of this flag.
-    static let cloudKitHouseholdSyncEnabled = false
+    /// legacy server `SyncEngine` feeds. **OFF by default — additive, ships nothing.**
+    ///
+    /// Runtime-toggleable via UserDefaults (NOT a compile-time constant) so a TestFlight build can
+    /// opt in ON-DEVICE (Settings ▸ Sync ▸ "CloudKit sync (beta)") without a new build, with an
+    /// instant kill-switch, while the unit suite + production both run with the safe default (false).
+    /// When ON, `SyncEngine.syncAll` skips the 7 household feeds + flushPending (else double-sync);
+    /// `catalogCorrections` (R3) + `assistantThreads` (R5) stay on the server regardless. See the
+    /// 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
+    /// (additive, reversible); flipping OFF returns to server sync.
+    static let cloudKitHouseholdSyncKey = "seedkeep.flag.cloudKitHouseholdSync"
+    static var cloudKitHouseholdSyncEnabled: Bool {
+        UserDefaults.standard.bool(forKey: cloudKitHouseholdSyncKey)   // default false
+    }
+    static func setCloudKitHouseholdSync(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)
+    }
 }
