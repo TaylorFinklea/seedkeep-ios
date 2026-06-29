@@ -42,6 +42,11 @@ final class HouseholdCloudCoordinator {
     // MARK: Observable state (parity with SyncEngine for the banner + spinners)
     private(set) var isSyncing = false
     private(set) var lastHumanizedError: String?
+    /// Diagnostics surfaced in Settings ▸ Sync so the beta test isn't blind.
+    private(set) var lastSyncedAt: Date?
+    private(set) var accountStatusText: String?
+    /// Records currently mirrored in the CloudKit zone (in-memory store) — a rough "data is there" signal.
+    var zoneRecordCount: Int { engine.store.count() }
 
     // MARK: Internal reconcile state
     /// Off-main buffer the engine's fetch callback appends into; drained on @MainActor.
@@ -137,6 +142,7 @@ final class HouseholdCloudCoordinator {
             // during pushDirty's drain into SwiftData this pass rather than waiting for the next.
             try drainPendingApplies()
             lastHumanizedError = nil
+            lastSyncedAt = Date()
         } catch {
             lastHumanizedError = humanizeError(error)
         }
@@ -149,6 +155,7 @@ final class HouseholdCloudCoordinator {
         guard !started else { return }
         if let provisioner {
             let status = await accountStatus(provisioner.container)
+            accountStatusText = Self.describe(status)
             guard status == .available else { throw CoordinatorError.iCloudUnavailable(status ?? .couldNotDetermine) }
             try await provisioner.ensureZone(householdID: householdID)
             let root = try await provisioner.ensureHousehold(householdID: householdID, name: householdName)
@@ -344,6 +351,30 @@ final class HouseholdCloudCoordinator {
     // MARK: - Helpers
 
     enum CoordinatorError: Error { case iCloudUnavailable(CKAccountStatus) }
+
+    static func describe(_ status: CKAccountStatus?) -> String {
+        switch status {
+        case .available:        return "available"
+        case .noAccount:        return "no iCloud account — sign into iCloud in Settings"
+        case .restricted:       return "restricted (parental/MDM controls)"
+        case .couldNotDetermine:return "could not determine"
+        case .temporarilyUnavailable: return "temporarily unavailable — reopen Settings ▸ Apple ID"
+        case .none:             return "timed out"
+        @unknown default:       return "unknown"
+        }
+    }
+
+    /// Standalone bounded iCloud-account check for the Settings diagnostics button — works even when
+    /// no coordinator has been built yet (flag just toggled) or a sync errored.
+    static func currentAccountStatusText(containerIdentifier: String = "iCloud.app.seedkeep") async -> String {
+        let container = CKContainer(identifier: containerIdentifier)
+        let box = ResumeOnce()
+        let status: CKAccountStatus? = await withCheckedContinuation { cont in
+            Task.detached { box.resume(cont, (try? await container.accountStatus())) }
+            Task.detached { try? await Task.sleep(nanoseconds: 10 * 1_000_000_000); box.resume(cont, nil) }
+        }
+        return describe(status)
+    }
 
     /// Bounded `accountStatus()` returning nil on timeout. A broken cloudd auth token can hang the
     /// call indefinitely AND ignore cancellation (spike gotcha), so we must NOT depend on structured

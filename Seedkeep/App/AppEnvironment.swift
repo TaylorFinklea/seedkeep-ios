@@ -267,6 +267,10 @@ public final class AppEnvironment {
     @ObservationIgnored private var cloudCoordinator: HouseholdCloudCoordinator?
     @ObservationIgnored private var cloudCoordinatorHouseholdID: String?
 
+    /// Read-only access to the live CloudKit coordinator for the Settings diagnostics panel
+    /// (nil until the first sync after the flag is toggled on). Its @Observable state drives the UI.
+    var cloudKit: HouseholdCloudCoordinator? { cloudCoordinator }
+
     private func ensureCloudCoordinator(household: HouseholdDTO) -> HouseholdCloudCoordinator {
         if let existing = cloudCoordinator, cloudCoordinatorHouseholdID == household.id {
             return existing

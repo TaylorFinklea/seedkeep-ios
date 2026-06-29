@@ -129,6 +129,12 @@ targets:
           - iCloud.app.seedkeep
         com.apple.developer.icloud-services:
           - CloudKit
+        # Beta gate: pin the CloudKit container to the DEVELOPMENT environment even in a
+        # TestFlight/distribution build. TestFlight defaults to Production, which forbids
+        # schema-on-write — so the migration (which auto-creates record types) only works in
+        # Development (where the spike validated it). Promote the schema to Production + flip this
+        # to "Production" when R1 graduates from beta. See r1-liveengine-wiring-spec.md.
+        com.apple.developer.icloud-container-environment: Development
 
   SeedkeepTests:
     type: bundle.unit-test

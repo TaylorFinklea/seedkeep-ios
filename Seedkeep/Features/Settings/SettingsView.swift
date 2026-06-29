@@ -15,6 +15,19 @@ struct SettingsContent: View {
     @State private var isCreatingInvite = false
     @State private var inviteError: String?
 
+    // R1 beta — CloudKit diagnostics
+    @State private var iCloudStatus: String?
+    @State private var checkingICloud = false
+
+    @ViewBuilder private func statusRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(HerbColor.inkFaint)
+            Spacer()
+            Text(value).foregroundStyle(HerbColor.ink)
+        }
+        .font(.footnote)
+    }
+
     /// New preference: hide the bottom-right Sprout FAB on every primary
     /// page. The FAB is the popup-assistant entry point; users who don't
     /// use Sprout can reclaim that corner.
@@ -204,6 +217,40 @@ struct SettingsContent: View {
                     Text("Experimental — syncs your garden across your devices via iCloud instead of the server. Both devices must use the same iCloud account. Tap “Sync now” after toggling.")
                         .font(.footnote)
                         .foregroundStyle(HerbColor.inkFaint)
+
+                    if FeatureFlags.cloudKitHouseholdSyncEnabled {
+                        // Visible CloudKit status so the beta test isn't blind.
+                        Button {
+                            checkingICloud = true
+                            Task {
+                                let s = await HouseholdCloudCoordinator.currentAccountStatusText()
+                                await MainActor.run { iCloudStatus = s; checkingICloud = false }
+                            }
+                        } label: {
+                            Label(checkingICloud ? "Checking iCloud…" : "Check iCloud account", systemImage: "person.icloud")
+                        }
+                        .disabled(checkingICloud)
+                        if let iCloudStatus {
+                            statusRow("iCloud account", iCloudStatus)
+                        }
+                        if let ck = appEnv.cloudKit {
+                            if ck.isSyncing { statusRow("CloudKit", "syncing…") }
+                            if let at = ck.lastSyncedAt {
+                                statusRow("Last CloudKit sync", at.formatted(date: .omitted, time: .standard))
+                            }
+                            statusRow("Records in zone", "\(ck.zoneRecordCount)")
+                            if let acct = ck.accountStatusText { statusRow("Account (last sync)", acct) }
+                            if let err = ck.lastHumanizedError {
+                                Text("CloudKit error: \(err)")
+                                    .font(.footnote)
+                                    .foregroundStyle(HerbColor.rose)
+                            }
+                        } else {
+                            Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
+                                .font(.footnote)
+                                .foregroundStyle(HerbColor.inkFaint)
+                        }
+                    }
                 } header: {
                     Rubric(text: "sync")
                 }
