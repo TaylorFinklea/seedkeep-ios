@@ -441,13 +441,13 @@ final class HouseholdCloudCoordinator {
 
     // MARK: - Persisted per-household state (survives relaunch)
 
-    private var watermarkKey: String { "seedkeep.ck.pushWatermark.\(householdID)" }
+    private var watermarkKey: String { "seedkeep.ck.pushWatermark.\(Self.cloudKitEnvironmentTag).\(householdID)" }
     private var watermark: Int64 {
         get { Int64(UserDefaults.standard.integer(forKey: watermarkKey)) }
         set { UserDefaults.standard.set(Int(newValue), forKey: watermarkKey) }
     }
 
-    private var migratedKey: String { "seedkeep.ck.migrated.\(householdID)" }
+    private var migratedKey: String { "seedkeep.ck.migrated.\(Self.cloudKitEnvironmentTag).\(householdID)" }
     private var hasMigratedDurable: Bool {
         get { UserDefaults.standard.bool(forKey: migratedKey) }
         set { UserDefaults.standard.set(newValue, forKey: migratedKey) }
@@ -456,6 +456,14 @@ final class HouseholdCloudCoordinator {
     // MARK: - Helpers
 
     enum CoordinatorError: Error { case iCloudUnavailable(CKAccountStatus) }
+
+    /// MUST match `com.apple.developer.icloud-container-environment` in project.yml. All durable
+    /// per-household CloudKit state (migration marker, push watermark, engine-state token) is namespaced
+    /// by this, so flipping the CloudKit environment (the Development→Production cutover) re-migrates the
+    /// INTACT local graph into the new environment rather than skipping it — the marker is otherwise
+    /// env-agnostic, so a switched device would skip migration and its data would never reach the empty
+    /// Production zone (silent divergence). The old env-agnostic keys/tokens are left as harmless orphans.
+    static let cloudKitEnvironmentTag = "production"
 
     // MARK: - Durable engine-state token paths (single source of truth for the factories + the
     // adopt/leave token resets — a full re-fetch repopulates wiped SwiftData).
@@ -466,10 +474,10 @@ final class HouseholdCloudCoordinator {
         return dir
     }
     static func ownerStateTokenURL(householdID: String) -> URL {
-        householdSyncDir().appendingPathComponent("engine-state-\(householdID).json")
+        householdSyncDir().appendingPathComponent("engine-state-\(cloudKitEnvironmentTag)-\(householdID).json")
     }
     static func participantStateTokenURL(zoneName: String) -> URL {
-        householdSyncDir().appendingPathComponent("engine-state-shared-\(zoneName).json")
+        householdSyncDir().appendingPathComponent("engine-state-shared-\(cloudKitEnvironmentTag)-\(zoneName).json")
     }
     /// Delete a durable state token so the next coordinator on that scope does a FULL re-fetch. Used by
     /// adopt/leave: those wipe local SwiftData, so the rebuilt coordinator must re-download (an
