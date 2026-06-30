@@ -390,6 +390,20 @@ final class HouseholdCloudCoordinator {
     /// an account SWITCH additionally rebuilds this coordinator (different householdID → fresh state
     /// token + watermark in `AppEnvironment.ensureCloudCoordinator`).
     func wipeAndClear() {
+        Self.wipeHouseholdSwiftData(container: container)
+        if let stateURL { try? FileManager.default.removeItem(at: stateURL) }
+        watermark = 0
+        hasMigratedDurable = false
+        _ = buffer.drain()
+        appliedSinceLastPush.removeAll()
+        started = false
+        epoch += 1   // invalidate any in-flight sync() pass that resumes after this wipe
+    }
+
+    /// Delete every household-zone-mirrored SwiftData row (the 10 garden types). Standalone + static so
+    /// the share-adopt / leave flows can clean-swap the local store without an existing coordinator.
+    /// Device-local-only models (LocalForecastSnapshot / LocalPetMoodSnapshot) are intentionally left.
+    static func wipeHouseholdSwiftData(container: ModelContainer) {
         let context = ModelContext(container)
         wipeAll(LocalSeed.self, context)
         wipeAll(LocalLocation.self, context)
@@ -402,16 +416,9 @@ final class HouseholdCloudCoordinator {
         wipeAll(LocalJournalChecklistItem.self, context)
         wipeAll(LocalPetDeparture.self, context)
         try? context.save()
-        if let stateURL { try? FileManager.default.removeItem(at: stateURL) }
-        watermark = 0
-        hasMigratedDurable = false
-        _ = buffer.drain()
-        appliedSinceLastPush.removeAll()
-        started = false
-        epoch += 1   // invalidate any in-flight sync() pass that resumes after this wipe
     }
 
-    private func wipeAll<T: PersistentModel>(_ type: T.Type, _ context: ModelContext) {
+    private static func wipeAll<T: PersistentModel>(_ type: T.Type, _ context: ModelContext) {
         let all = (try? context.fetch(FetchDescriptor<T>())) ?? []
         for m in all { context.delete(m) }
     }

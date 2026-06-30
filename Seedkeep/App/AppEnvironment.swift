@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 import SwiftData
 import SeedkeepKit
+import SeedkeepCloudKit
+import CloudKit
 
 /// Reads launch-time configuration from `Info.plist`, wires the
 /// `SeedkeepClient`, the SwiftData `ModelContainer`, the `SyncEngine`,
@@ -160,7 +162,8 @@ public final class AppEnvironment {
             NotificationsCenter.shared.removeAllAppNotifications()
             self.cloudCoordinator?.wipeAndClear()
             self.cloudCoordinator = nil
-            self.cloudCoordinatorHouseholdID = nil
+            self.cloudCoordinatorKey = nil
+            self.clearParticipantMarker()   // sign-out abandons any adopted shared household too
         }
     }
 
@@ -270,19 +273,28 @@ public final class AppEnvironment {
     }
 
     // R1 — the CloudKit household coordinator, built lazily on first use when the flag is on and a
-    // household is known. Rebuilt if the household id changes (account switch). nil/unused when the
-    // flag is off. `@ObservationIgnored` — its outcome is mirrored to `bannerError` explicitly.
+    // household is known. The cache key is the OWNER householdID, or for a participant the shared
+    // zone name (so an account switch / share adopt rebuilds). nil/unused when the flag is off.
     @ObservationIgnored private var cloudCoordinator: HouseholdCloudCoordinator?
-    @ObservationIgnored private var cloudCoordinatorHouseholdID: String?
+    @ObservationIgnored private var cloudCoordinatorKey: String?
 
     /// Read-only access to the live CloudKit coordinator for the Settings diagnostics panel
     /// (nil until the first sync after the flag is toggled on). Its @Observable state drives the UI.
     var cloudKit: HouseholdCloudCoordinator? { cloudCoordinator }
 
+    /// Owner (private DB) coordinator for the user's own household, OR — if this device has adopted a
+    /// shared household (participant marker present) — a participant coordinator on the owner's shared
+    /// zone. Participant-first: the marker is checked before the owner path so a relaunch re-boots as
+    /// participant and never orphan-mints a solo zone.
     private func ensureCloudCoordinator(household: HouseholdDTO) -> HouseholdCloudCoordinator {
-        if let existing = cloudCoordinator, cloudCoordinatorHouseholdID == household.id {
-            return existing
+        if let marker = loadParticipantMarker() {
+            if let existing = cloudCoordinator, cloudCoordinatorKey == marker.zoneName { return existing }
+            let coordinator = HouseholdCloudCoordinator.participant(ownerZoneID: marker.zoneID, container: container)
+            cloudCoordinator = coordinator
+            cloudCoordinatorKey = marker.zoneName
+            return coordinator
         }
+        if let existing = cloudCoordinator, cloudCoordinatorKey == household.id { return existing }
         let coordinator = HouseholdCloudCoordinator.live(
             householdID: household.id,
             householdName: household.name,
@@ -291,8 +303,88 @@ public final class AppEnvironment {
             container: container
         )
         cloudCoordinator = coordinator
-        cloudCoordinatorHouseholdID = household.id
+        cloudCoordinatorKey = household.id
         return coordinator
+    }
+
+    // MARK: - CloudKit household sharing (participant cutover)
+
+    /// Whether this device is currently viewing a SHARED household (adopted via a CKShare) rather
+    /// than its own. Drives the Settings "you're viewing a shared garden / Leave" affordance.
+    var isViewingSharedHousehold: Bool { loadParticipantMarker() != nil }
+
+    struct ParticipantMarker {
+        let zoneName: String
+        let ownerName: String
+        var zoneID: CKRecordZone.ID { CKRecordZone.ID(zoneName: zoneName, ownerName: ownerName) }
+    }
+    @ObservationIgnored private let markerZoneKey = "seedkeep.sharing.participant.zoneName"
+    @ObservationIgnored private let markerOwnerKey = "seedkeep.sharing.participant.ownerName"
+
+    func loadParticipantMarker() -> ParticipantMarker? {
+        let d = UserDefaults.standard
+        guard let zone = d.string(forKey: markerZoneKey), !zone.isEmpty,
+              let owner = d.string(forKey: markerOwnerKey), !owner.isEmpty else { return nil }
+        return ParticipantMarker(zoneName: zone, ownerName: owner)
+    }
+    private func saveParticipantMarker(_ m: ParticipantMarker) {
+        UserDefaults.standard.set(m.zoneName, forKey: markerZoneKey)
+        UserDefaults.standard.set(m.ownerName, forKey: markerOwnerKey)
+    }
+    private func clearParticipantMarker() {
+        UserDefaults.standard.removeObject(forKey: markerZoneKey)
+        UserDefaults.standard.removeObject(forKey: markerOwnerKey)
+    }
+
+    /// OWNER: create (or fetch) the household's zone-wide CKShare for `UICloudSharingController`.
+    /// Returns nil if not signed in, already a participant, or on error (surfaced to the banner).
+    func prepareOwnerShare() async -> (share: CKShare, container: CKContainer)? {
+        guard case .signedIn(_, let household) = auth.state, !isViewingSharedHousehold else { return nil }
+        do {
+            let flow = SeedkeepShareFlow()
+            let share = try await flow.makeOrFetchZoneWideShare(householdID: household.id, title: household.name)
+            return (share, flow.container)
+        } catch {
+            surfaceError(error)
+            return nil
+        }
+    }
+
+    /// Warm-tap entry from the scene delegate: drain a just-accepted share + adopt it.
+    func processPendingShare() async {
+        guard let metadata = PendingShareInbox.shared.take() else { return }
+        await bootParticipant(accepting: metadata)
+    }
+
+    /// Accept a zone-wide CKShare and adopt the owner's household: wipe this device's own local garden
+    /// (clean swap — the participant's own data stays in their own CloudKit zone, restored on Leave),
+    /// persist the participant marker, rebuild as a participant coordinator, and sync.
+    func bootParticipant(accepting metadata: CKShare.Metadata) async {
+        if metadata.participantRole == .owner { return }   // owner tapped their own link — benign no-op
+        guard metadata.containerIdentifier == "iCloud.app.seedkeep" else { return }
+        do {
+            let flow = SeedkeepShareFlow()
+            let zoneID = try await flow.acceptZoneWideShare(metadata)
+            HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+            saveParticipantMarker(ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
+            cloudCoordinator = nil; cloudCoordinatorKey = nil   // force rebuild as participant
+            await syncIfPossible()
+        } catch {
+            // Re-deposit so a foreground retry re-attempts the accept rather than falling through to
+            // owner discovery (which would orphan-mint a solo zone). A permanently bad share just
+            // keeps surfacing — never corrupts data.
+            PendingShareInbox.shared.deposit(metadata)
+            surfaceError(error)
+        }
+    }
+
+    /// Leave the shared household: clear the marker + wipe the shared local data + drop the participant
+    /// coordinator so the next sync rebuilds the OWNER coordinator (the user's own zone re-syncs).
+    func leaveSharedHousehold() async {
+        clearParticipantMarker()
+        HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+        cloudCoordinator = nil; cloudCoordinatorKey = nil
+        await syncIfPossible()
     }
 
     /// Phase 5.1.4 — recompute the Sunday-8am pet roundup body from the

@@ -21,6 +21,7 @@ struct SettingsContent: View {
     @State private var isSyncingNow = false
     @State private var syncedJustNow = false
     @State private var syncToken = 0
+    @State private var preparingShare = false
 
     @ViewBuilder private func statusRow(_ label: String, _ value: String) -> some View {
         HStack {
@@ -287,6 +288,36 @@ struct SettingsContent: View {
                             Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
                                 .font(.footnote)
                                 .foregroundStyle(HerbColor.inkFaint)
+                        }
+
+                        // Cross-account sharing (CloudKit). Owner shares the household zone via the
+                        // system share sheet; a participant who has joined sees a Leave affordance.
+                        if appEnv.isViewingSharedHousehold {
+                            statusRow("Household", "shared with you")
+                            Button(role: .destructive) {
+                                Task { await appEnv.leaveSharedHousehold() }
+                            } label: {
+                                Label("Leave shared garden", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        } else {
+                            Button {
+                                guard !preparingShare else { return }
+                                preparingShare = true
+                                Task {
+                                    let pkg = await appEnv.prepareOwnerShare()
+                                    preparingShare = false
+                                    if let pkg {
+                                        CloudSharingPresenter.present(share: pkg.share, container: pkg.container, title: "Seedkeep garden")
+                                    }
+                                }
+                            } label: {
+                                HStack {
+                                    Label("Share garden via iCloud", systemImage: "person.crop.circle.badge.plus")
+                                    Spacer()
+                                    if preparingShare { ProgressView() }
+                                }
+                            }
+                            .disabled(preparingShare)
                         }
                     }
                 } header: {

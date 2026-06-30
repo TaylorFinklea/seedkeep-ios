@@ -8,6 +8,9 @@ import SeedkeepCloudKit
 struct SeedkeepApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var pendingInviteCode: String?
+    // Pure-SwiftUI app otherwise — this delegate exists only to route scenes through ShareSceneDelegate
+    // so CKShare acceptance is delivered (WindowGroup doesn't surface it on the app delegate).
+    @UIApplicationDelegateAdaptor(SeedkeepAppDelegate.self) private var appDelegate
 
     init() {
         configureTabBarAppearance()
@@ -50,7 +53,9 @@ struct SeedkeepApp: App {
             // off until they've been verified screen-by-screen.
             .preferredColorScheme(.light)
             .task {
+                appDelegate.environment = environment   // let the scene delegate drive participant adopt
                 await environment.auth.restoreSession()
+                await environment.processPendingShare()  // cold-launch: adopt a share tapped while terminated
             }
             .onOpenURL { url in
                 if let code = InviteURLRouter.invitationCode(from: url) {
