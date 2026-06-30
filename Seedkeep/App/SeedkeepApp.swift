@@ -68,6 +68,11 @@ struct SeedkeepApp: App {
                     pendingInviteCode = code
                 }
             }
+            // Bridge invite codes forwarded by ShareSceneDelegate (covers the case where the custom
+            // scene delegate suppresses the SwiftUI .onOpenURL/.onContinueUserActivity hooks above).
+            .onChange(of: environment.incomingInviteCode) { _, code in
+                if let code { pendingInviteCode = code; environment.incomingInviteCode = nil }
+            }
     }
 }
 
@@ -97,7 +102,9 @@ struct RootView: View {
                         // + streak counters are materialized whenever
                         // the user opens the app.
                         guard newPhase == .active else { return }
-                        Task { await appEnv.syncIfPossible() }
+                        // Also drain any pending CKShare accept (a cold accept whose first attempt
+                        // failed re-deposits the metadata; foregrounding retries it without a relaunch).
+                        Task { await appEnv.processPendingShare(); await appEnv.syncIfPossible() }
                     }
                     .overlay { SproutAssistantOverlay() }
             }

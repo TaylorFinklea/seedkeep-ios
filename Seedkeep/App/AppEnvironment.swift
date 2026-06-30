@@ -356,6 +356,15 @@ public final class AppEnvironment {
         await bootParticipant(accepting: metadata)
     }
 
+    /// Invite code forwarded from `ShareSceneDelegate`. The custom scene delegate REPLACES SwiftUI's,
+    /// which can suppress `.onOpenURL`/`.onContinueUserActivity` — so the delegate forwards URL opens
+    /// here and `SeedkeepApp` bridges this into the existing invite sheet. Observable so the bridge fires.
+    var incomingInviteCode: String?
+    /// Route an incoming URL (custom scheme or universal link) to the invite flow, if it is one.
+    func routeIncomingURL(_ url: URL) {
+        if let code = InviteURLRouter.invitationCode(from: url) { incomingInviteCode = code }
+    }
+
     /// Accept a zone-wide CKShare and adopt the owner's household: wipe this device's own local garden
     /// (clean swap — the participant's own data stays in their own CloudKit zone, restored on Leave),
     /// persist the participant marker, rebuild as a participant coordinator, and sync.
@@ -366,6 +375,9 @@ public final class AppEnvironment {
             let flow = SeedkeepShareFlow()
             let zoneID = try await flow.acceptZoneWideShare(metadata)
             HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+            // Reset the shared-zone token so the rebuilt participant coordinator does a FULL re-fetch
+            // (re-adopting a previously-left share would otherwise resume a stale cursor → empty store).
+            HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.participantStateTokenURL(zoneName: zoneID.zoneName))
             saveParticipantMarker(ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
             cloudCoordinator = nil; cloudCoordinatorKey = nil   // force rebuild as participant
             await syncIfPossible()
@@ -383,6 +395,12 @@ public final class AppEnvironment {
     func leaveSharedHousehold() async {
         clearParticipantMarker()
         HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+        // Reset the OWNER token so the rebuilt owner coordinator does a FULL re-fetch — re-downloading
+        // the user's own (parked, intact) CloudKit zone into the just-wiped SwiftData. Without this, the
+        // resumed cursor sees no changes since adopt and the user's own garden would stay empty locally.
+        if case .signedIn(_, let household) = auth.state {
+            HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
+        }
         cloudCoordinator = nil; cloudCoordinatorKey = nil
         await syncIfPossible()
     }

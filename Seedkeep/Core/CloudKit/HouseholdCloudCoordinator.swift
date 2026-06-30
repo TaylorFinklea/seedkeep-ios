@@ -108,10 +108,7 @@ final class HouseholdCloudCoordinator {
             zoneName: SeedkeepZoneProvisioner.zoneName(householdID: householdID),
             ownerName: CKCurrentUserDefaultName)
 
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("HouseholdSync", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let stateURL = dir.appendingPathComponent("engine-state-\(householdID).json")
+        let stateURL = ownerStateTokenURL(householdID: householdID)
 
         // automaticSync:false — the coordinator drives fetch/push explicitly from `sync()` (matching
         // the app's existing foreground-only sync model). This guarantees NO delegate event fires
@@ -138,13 +135,9 @@ final class HouseholdCloudCoordinator {
         let database = ckContainer.sharedCloudDatabase
         // The household id is the zone's: zoneName is "seedkeep-<householdID>".
         let householdID = SeedkeepRecordNames.householdID(fromZoneName: ownerZoneID.zoneName)
-
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("HouseholdSync", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // Separate token from the owner scope so the shared-zone change cursor never corrupts the
         // (parked) solo owner zone's.
-        let stateURL = dir.appendingPathComponent("engine-state-shared-\(ownerZoneID.zoneName).json")
+        let stateURL = participantStateTokenURL(zoneName: ownerZoneID.zoneName)
 
         let engine = HouseholdSyncEngine(
             database: database, zoneID: ownerZoneID, store: HouseholdLocalStore(),
@@ -239,10 +232,33 @@ final class HouseholdCloudCoordinator {
         }
         try await engine.fetchChanges()
         try drainPendingApplies()
-        // A participant imports NOTHING — it only reconciles the owner's shared zone into SwiftData.
-        // Migration (exporting the local graph + writing the receipt) is the OWNER's one-time job.
-        if !isParticipant { try await migrateIfNeeded() }
+        if isParticipant {
+            // Accept-race close (SimmerSmith's participantInitialFetch): right after accept the server
+            // often hasn't materialized the shared zone yet and the accepting device gets no push — so
+            // fetch once more after a short backoff so the first sync doesn't leave an empty garden.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try await engine.fetchChanges()
+            try drainPendingApplies()
+            // Seed the push watermark past the imported graph so a relaunch doesn't re-upload the
+            // entire shared zone (a participant has no migration step to seed it).
+            seedWatermarkFromLocalGraph()
+        } else {
+            // A participant imports NOTHING; migration (export + receipt) is the OWNER's one-time job.
+            try await migrateIfNeeded()
+        }
         started = true
+    }
+
+    /// Set the watermark to the max clock currently in SwiftData — so pushDirty won't re-push records
+    /// the engine already holds (used after a participant's initial import, which has no migrate step).
+    private func seedWatermarkFromLocalGraph() {
+        let context = ModelContext(container)
+        let input = HouseholdMigrationPlanner.fetchInput(
+            from: context, householdID: householdID, householdName: householdName,
+            householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
+        if let maxClock = dirtyRecords(from: input).map(\.clock).max() {
+            watermark = max(watermark, maxClock)
+        }
     }
 
     /// Pull remote changes then project the buffered records into SwiftData.
@@ -440,6 +456,25 @@ final class HouseholdCloudCoordinator {
     // MARK: - Helpers
 
     enum CoordinatorError: Error { case iCloudUnavailable(CKAccountStatus) }
+
+    // MARK: - Durable engine-state token paths (single source of truth for the factories + the
+    // adopt/leave token resets — a full re-fetch repopulates wiped SwiftData).
+    private static func householdSyncDir() -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent("HouseholdSync", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+    static func ownerStateTokenURL(householdID: String) -> URL {
+        householdSyncDir().appendingPathComponent("engine-state-\(householdID).json")
+    }
+    static func participantStateTokenURL(zoneName: String) -> URL {
+        householdSyncDir().appendingPathComponent("engine-state-shared-\(zoneName).json")
+    }
+    /// Delete a durable state token so the next coordinator on that scope does a FULL re-fetch. Used by
+    /// adopt/leave: those wipe local SwiftData, so the rebuilt coordinator must re-download (an
+    /// incremental fetch on the parked token would return nothing → an empty local store).
+    static func resetStateToken(at url: URL) { try? FileManager.default.removeItem(at: url) }
 
     /// A CloudKit error worth auto-retrying inline (transient infra) vs surfacing (permanent).
     static func isTransient(_ error: Error) -> Bool {

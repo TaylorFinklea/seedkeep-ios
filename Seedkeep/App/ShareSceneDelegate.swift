@@ -18,6 +18,28 @@ final class ShareSceneDelegate: NSObject, UIWindowSceneDelegate {
         if let metadata = connectionOptions.cloudKitShareMetadata {
             Task { @MainActor in PendingShareInbox.shared.deposit(metadata) }
         }
+        // Cold-launch invite links: this custom scene delegate replaces SwiftUI's, which can suppress
+        // .onOpenURL / .onContinueUserActivity — so forward both ways' URLs to the invite router.
+        let coldURLs = connectionOptions.urlContexts.map(\.url)
+            + connectionOptions.userActivities.compactMap(\.webpageURL)
+        if !coldURLs.isEmpty { forwardURLs(coldURLs) }
+    }
+
+    /// Warm custom-scheme open (e.g. seedkeep://invite/<code>).
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        forwardURLs(URLContexts.map(\.url))
+    }
+
+    /// Warm universal-link open (https://seedkeep.app/invite/<code>).
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        if let url = userActivity.webpageURL { forwardURLs([url]) }
+    }
+
+    private func forwardURLs(_ urls: [URL]) {
+        Task { @MainActor in
+            let environment = (UIApplication.shared.delegate as? SeedkeepAppDelegate)?.environment
+            for url in urls { environment?.routeIncomingURL(url) }
+        }
     }
 
     /// Warm tap: the app was running. Deposit + process immediately so an already-booted owner
