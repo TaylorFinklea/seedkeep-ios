@@ -141,3 +141,15 @@
 **Alternatives considered**: Onboarding wall with create/join choice.
 
 **Rationale**: Phase 1's primary user is the solo gardener replacing a Google Sheet. They shouldn't see a screen explaining a household before they see seeds. The household is invisible plumbing until they create an invite.
+
+---
+
+## 2026-06-30 — CloudKit push state: per-record ledger, not a global watermark (R1 p3, bead 8ck.1)
+
+**Context**: `HouseholdCloudCoordinator` decided what to push to CloudKit using a single global `watermark: Int64` (max clock of locally-pushed records). The applier copies a peer's clock onto the local row, and the watermark only advances over LOCAL pushes (a deliberate clock-skew-poisoning fix), so every peer-edited record had `clock > watermark` and re-uploaded once per cold launch (the session-scoped echo guards reset on relaunch). In an active multi-device household that approached the whole zone every launch.
+
+**Decision**: Replace the global watermark with a durable per-record ledger `[recordName: {clock, tombstoned}]` = the state we KNOW CloudKit holds, written on BOTH push-success and apply-success (the apply-path writer is the actual fix). Stored as a Codable JSON file in Application Support (path DERIVED from householdID/zoneName, env-namespaced), mirroring `HouseholdSyncEngine.loadState/saveState`. Push gate is per-record (no shared ceiling → clock-skew poisoning gone by construction). The `tombstoned` bit lets a local tombstone push over a higher-clock live peer (sticky-deletedAt) AND prevents a tombstone relaunch residual. Ledger committed strictly after `sendUntilDrained`/`context.save` succeeds.
+
+**Alternatives considered**: (a) a dirty boolean per Local* model — rejected (SwiftData schema migration + touch every mutation site). (b) UserDefaults-backed map — rejected: a years-old garden is thousands of entries and `UserDefaults.standard` rewrites the whole shared plist per write. (c) keeping two parallel structures (`syncedClocks` + a tombstone `Set`) — rejected: a single `{clock, tombstoned}` struct also compares tombstone clocks (a re-tombstone at a higher clock still pushes).
+
+**Rationale**: Smallest change that kills the residual without regressing convergence/tombstone/clock-skew invariants; stays entirely inside the coordinator (applier/gate/planner untouched); the derived (not injected) path is what makes the relaunch unit tests work. Deferred (pre-existing, bead 8ck.8): reseed-from-local-graph can mark an unpushed local edit as synced.
