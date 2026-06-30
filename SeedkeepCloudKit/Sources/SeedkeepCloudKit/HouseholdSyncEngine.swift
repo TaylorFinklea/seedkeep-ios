@@ -16,6 +16,12 @@ import OSLog
 ///
 /// `automaticSync` is configurable: tests drive `sync()` manually for determinism;
 /// the app turns automatic sync on.
+public enum SyncEngineError: Error {
+    /// `sendUntilDrained` ran its full budget with record changes still pending (a conflict storm or
+    /// a persistent failure). Thrown so the caller treats the pass as incomplete, not a false success.
+    case drainIncomplete
+}
+
 public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing {
     public let database: CKDatabase
     public let zoneID: CKRecordZone.ID
@@ -138,20 +144,35 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     }
 
     /// Send repeatedly until nothing is pending (G11: a serverRecordChanged re-enqueues
-    /// a merged save; stopping on the throw loses it).
-    public func sendUntilDrained(maxPasses: Int = 8) async throws {
-        for _ in 0..<maxPasses {
+    /// a merged save; stopping on the throw loses it). Backs off between thrown passes honoring
+    /// CloudKit's retry-after hint (rate-limit / service-unavailable / zone-busy). THROWS if the
+    /// budget is exhausted with changes still pending, so the caller does NOT report a false success
+    /// or advance its watermark past records CloudKit never confirmed.
+    public func sendUntilDrained(maxPasses: Int = 6) async throws {
+        failLock.lock(); surfacedFailure = nil; failLock.unlock()
+        var lastError: Error?
+        for pass in 0..<maxPasses {
             do {
                 try await syncEngine.sendChanges()
+                // A permanent per-record failure is reported via the .sentRecordZoneChanges event
+                // (processed during sendChanges, NOT thrown) — surface it instead of a false success.
+                if let surfaced = takeSurfacedFailure() { throw surfaced }
                 if !hasPendingRecordChanges { return }
             } catch {
+                lastError = error
+                if let surfaced = takeSurfacedFailure() { throw surfaced }
                 if !hasPendingRecordChanges { throw error }
+                if pass < maxPasses - 1 {
+                    let hint = (error as? CKError)?.retryAfterSeconds ?? 0.5
+                    let delay = min(max(0, hint), 2)   // cap so a foreground sync can't hang for long
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
             }
         }
-        // Budget exhausted with changes still pending (a conflict storm). Don't silently abandon
-        // them — surface it so a drain that never converged is diagnosable rather than a false success.
+        if let surfaced = takeSurfacedFailure() { throw surfaced }
         if hasPendingRecordChanges {
             log.error("sendUntilDrained exhausted \(maxPasses, privacy: .public) passes — record changes STILL pending")
+            throw lastError ?? SyncEngineError.drainIncomplete
         }
     }
 
@@ -219,6 +240,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             for record in sent.savedRecords {
                 store.setRecord(record)
                 saved.append(record)
+                clearAttempts(record.recordID)   // confirmed → reset its re-enqueue counter
                 note("saved \(record.recordID.recordName)")
             }
             for failure in sent.failedRecordSaves {
@@ -255,6 +277,43 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
 
     // MARK: - Conflict + failure handling
 
+    /// Per-record re-enqueue attempt counter + the worst PERMANENT failure observed during the current
+    /// drain. Lock-guarded — `handleFailedSave` runs on CKSyncEngine's delegate task, off the actor.
+    private let failLock = NSLock()
+    private var attemptCounts: [String: Int] = [:]
+    private var surfacedFailure: CKError?
+    /// Cap on per-record re-enqueues, so a persistently-failing record can't poison every future sync
+    /// (it's surfaced + dropped instead). Reset on a confirmed save / account change / relaunch.
+    private static let maxReEnqueues = 5
+
+    private func clearAttempts(_ recordID: CKRecord.ID) {
+        failLock.lock(); attemptCounts[recordID.recordName] = nil; failLock.unlock()
+    }
+    /// Re-enqueue a save, but give up + surface (as permanent) after `maxReEnqueues` attempts, so a
+    /// record that keeps failing for the same reason can't loop the drain across every sync forever.
+    private func reEnqueue(_ recordID: CKRecord.ID, after error: CKError) {
+        failLock.lock()
+        let n = (attemptCounts[recordID.recordName] ?? 0) + 1
+        attemptCounts[recordID.recordName] = n
+        failLock.unlock()
+        if n <= Self.maxReEnqueues {
+            syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+        } else {
+            log.error("giving up on \(recordID.recordName, privacy: .public) after \(n, privacy: .public) re-enqueues: \(error, privacy: .public)")
+            surface(error)
+            clearAttempts(recordID)
+        }
+    }
+    /// Record a permanent failure so `sendUntilDrained` surfaces it (false-success otherwise — the
+    /// record is already dropped from CloudKit's pending set, so the drain would report clean).
+    private func surface(_ error: CKError) {
+        failLock.lock(); if surfacedFailure == nil { surfacedFailure = error }; failLock.unlock()
+    }
+    private func takeSurfacedFailure() -> CKError? {
+        failLock.lock(); defer { surfacedFailure = nil; failLock.unlock() }
+        return surfacedFailure
+    }
+
     private func handleFailedSave(_ failure: CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave) {
         let recordID = failure.record.recordID
         switch failure.error.code {
@@ -282,17 +341,32 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                     store.setRecord(serverRecord)
                     shouldResave = false
                 }
-                if shouldResave {
-                    syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-                }
+                if shouldResave { reEnqueue(recordID, after: failure.error) }
+            } else {
+                // serverRecordChanged with no attached serverRecord (uncommon). Re-enqueue (capped) so a
+                // later pass re-attempts; the cap stops a persistent nil-serverRecord from poisoning sync.
+                reEnqueue(recordID, after: failure.error)
             }
         case .zoneNotFound, .userDeletedZone:
             syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-            syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+            reEnqueue(recordID, after: failure.error)
         case .unknownItem:
             store.removeRecord(recordID)
+            clearAttempts(recordID)
+        // Retriable / collateral failures: CKSyncEngine reports a record ONCE in failedRecordSaves and
+        // drops it from pending — so we MUST re-enqueue or the local edit never reaches CloudKit.
+        // `.batchRequestFailed` is routine (a sibling in the same atomic batch conflicted). All clear on
+        // a backed-off retry (sendUntilDrained); the cap stops a stuck one from looping forever.
+        case .batchRequestFailed, .zoneBusy, .serviceUnavailable,
+             .requestRateLimited, .networkFailure, .networkUnavailable, .serverResponseLost:
+            reEnqueue(recordID, after: failure.error)
         default:
-            log.error("seed save failed for \(recordID.recordName, privacy: .public): \(failure.error, privacy: .public)")
+            // Genuinely permanent (serverRejectedRequest / invalidArguments / permissionFailure /
+            // quotaExceeded / …) — re-enqueueing would loop. Drop + SURFACE so the drain reports it as a
+            // real error instead of a false success, and the watermark doesn't advance past it.
+            log.error("save permanently failed for \(recordID.recordName, privacy: .public): \(failure.error, privacy: .public)")
+            surface(failure.error)
+            clearAttempts(recordID)
         }
     }
 

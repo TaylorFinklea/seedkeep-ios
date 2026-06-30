@@ -32,6 +32,11 @@ public protocol HouseholdRecordSyncing: AnyObject, Sendable {
     /// Fired on an iCloud account transition so the coordinator can wipe SwiftData (AC5).
     var onAccountChange: ((HouseholdAccountChange) -> Void)? { get set }
 
+    /// True while the engine still has staged record changes not yet confirmed by CloudKit — lets the
+    /// coordinator drain leftover pending changes (e.g. a transient failure re-enqueued last pass) even
+    /// when this pass staged nothing new.
+    var hasPendingRecordChanges: Bool { get }
+
     func save(_ record: CKRecord)
     func delete(_ recordID: CKRecord.ID)
     /// Pull remote changes (fires `onFetchedChanges` as batches arrive).

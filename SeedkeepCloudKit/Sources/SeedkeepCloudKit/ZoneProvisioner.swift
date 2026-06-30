@@ -51,8 +51,14 @@ public struct SeedkeepZoneProvisioner: Sendable {
             record["name"]      = name as CKRecordValue
             record["createdAt"] = nowMillis as CKRecordValue   // INT64 millis (manifest: createdAt .int)
             record["updatedAt"] = nowMillis as CKRecordValue
-            _ = try await db.modifyRecords(saving: [record], deleting: [])
-            return record
+            do {
+                _ = try await db.modifyRecords(saving: [record], deleting: [])
+                return record
+            } catch let saveError as CKError where saveError.code == .serverRecordChanged {
+                // First-launch race: another of the owner's devices created the same Household root
+                // concurrently. Adopt the server copy instead of surfacing a spurious error banner.
+                return try await db.record(for: recordID)
+            }
         }
     }
 

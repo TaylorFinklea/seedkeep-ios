@@ -24,6 +24,16 @@ enum HouseholdApplyGate {
     /// True if the decoded remote should be projected into SwiftData (remote newer-or-equal, or a
     /// new/clock-less record); false to preserve a strictly-newer local edit (LWW).
     static func shouldApply(_ value: CloudKitRecordValue, into context: ModelContext) -> Bool {
+        // Sticky-deletedAt on the APPLY path (mirrors SeedkeepRecordMerger's commutative-max tombstone).
+        // The merger enforces this at the engine seam, but a remote edit fetched with NO pending local
+        // engine edit bypasses the merger and lands here as a plain LWW apply — so without this, a peer's
+        // newer LIVE edit would resurrect a row this device has locally tombstoned (silent delete-loss),
+        // and a stale-clock incoming tombstone would be ignored. Make the tombstone win either way:
+        let incomingDeleted = value.scalars["deletedAt"]?.asInt64 != nil
+        let localDeleted = existingDeletedAt(value, into: context) != nil
+        if localDeleted && !incomingDeleted { return false }   // don't resurrect — keep the local tombstone
+        if incomingDeleted && !localDeleted { return true }    // tombstone wins regardless of clock
+
         guard let incoming = value.scalars["updatedAt"]?.asInt64 else { return true }
         guard let existing = existingUpdatedAt(value, into: context) else { return true }
         return incoming >= existing
@@ -82,6 +92,24 @@ enum HouseholdApplyGate {
         case .petDeparture:         return first(context, FetchDescriptor<LocalPetDeparture>(predicate: #Predicate { $0.plantingEventID == id }))?.updatedAt
         case .seedPhoto, .household, .migrationReceipt:
             return nil   // no merge clock → always apply
+        }
+    }
+
+    /// The existing local model's `deletedAt`, or nil if the model is absent or the type has no
+    /// tombstone column (SeedPhoto / Journal photo / checklist item / infra). Non-nil ⇒ locally
+    /// tombstoned, which the sticky-deletedAt guard must not resurrect.
+    private static func existingDeletedAt(_ value: CloudKitRecordValue, into context: ModelContext) -> Int64? {
+        let id = SeedkeepRecordNames.rawID(value.recordName)
+        switch value.type {
+        case .seed:          return first(context, FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == id }))?.deletedAt
+        case .location:      return first(context, FetchDescriptor<LocalLocation>(predicate: #Predicate { $0.id == id }))?.deletedAt
+        case .tag:           return first(context, FetchDescriptor<LocalTag>(predicate: #Predicate { $0.id == id }))?.deletedAt
+        case .bed:           return first(context, FetchDescriptor<LocalBed>(predicate: #Predicate { $0.id == id }))?.deletedAt
+        case .plantingEvent: return first(context, FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id }))?.deletedAt
+        case .journalEntry:  return first(context, FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == id }))?.deletedAt
+        case .petDeparture:  return first(context, FetchDescriptor<LocalPetDeparture>(predicate: #Predicate { $0.plantingEventID == id }))?.deletedAt
+        case .seedPhoto, .journalEntryPhoto, .journalChecklistItem, .household, .migrationReceipt:
+            return nil   // no tombstone column
         }
     }
 }

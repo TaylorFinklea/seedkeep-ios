@@ -45,8 +45,16 @@ final class HouseholdCloudCoordinator {
     /// Diagnostics surfaced in Settings ▸ Sync so the beta test isn't blind.
     private(set) var lastSyncedAt: Date?
     private(set) var accountStatusText: String?
-    /// Records currently mirrored in the CloudKit zone (in-memory store) — a rough "data is there" signal.
+    /// Raw error detail (CKError code / description) for the diagnostics row — distinct from the
+    /// humanized banner string, mirroring SyncEngine.lastError. nil when the last pass succeeded.
+    private(set) var lastErrorDetail: String?
+    /// Records currently mirrored in the CloudKit zone (in-memory store) — a rough "data is there"
+    /// signal. NOTE: the store is rehydrated from CloudKit each launch, so it reads 0 until the first
+    /// fetch this session (the Settings label says "this session" so 0 isn't misread as data loss).
     var zoneRecordCount: Int { engine.store.count() }
+    /// Whether the one-time migration (initial upload) has completed for this household — the durable
+    /// receipt marker. Surfaced so a tester can confirm their data uploaded.
+    var initialUploadComplete: Bool { hasMigratedDurable }
 
     // MARK: Internal reconcile state
     /// Off-main buffer the engine's fetch callback appends into; drained on @MainActor.
@@ -128,25 +136,53 @@ final class HouseholdCloudCoordinator {
         // Always reset the per-pass echo set, even if a stage throws before pushDirty clears it —
         // otherwise a stale recordName would suppress a later legitimate push of that record.
         defer { isSyncing = false; appliedSinceLastPush.removeAll() }
-        do {
-            try await ensureStarted()
-            guard passEpoch == epoch else { return true }   // account changed mid-pass → abandon
-            try await pullAndApply()
-            guard passEpoch == epoch else { return true }
-            // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
-            // children locally so pushDirty propagates the tombstones (no server to cascade for us).
-            try HouseholdCascade.apply(in: ModelContext(container), now: Int64(Date().timeIntervalSince1970 * 1000))
-            try await pushDirty()
-            guard passEpoch == epoch else { return true }
-            // Project any send-path merge results (serverRecordChanged → merged re-save) buffered
-            // during pushDirty's drain into SwiftData this pass rather than waiting for the next.
-            try drainPendingApplies()
-            lastHumanizedError = nil
-            lastSyncedAt = Date()
-        } catch {
-            lastHumanizedError = humanizeError(error)
+
+        // Bounded auto-retry: a single transient CloudKit error (rate-limit / zone-busy / network /
+        // first-write-of-a-new-type schema settle, or an incomplete drain) used to abort the whole
+        // pass and force the user to tap "Sync now" again. Retry it inline, honoring CloudKit's
+        // retry-after hint, so the hiccup self-heals and no scary banner fires. Permanent errors
+        // (iCloud-unavailable, quota, permission) surface on the first try.
+        let maxAttempts = 2
+        for attempt in 0..<maxAttempts {
+            do {
+                try await runPass(passEpoch)
+                // Don't record a fresh success for a pass the account-change abandoned mid-flight
+                // (runPass returns cleanly on epoch change) — that would stamp lastSyncedAt + clear a
+                // real prior error after the data was wiped.
+                guard passEpoch == epoch else { return true }
+                lastHumanizedError = nil
+                lastErrorDetail = nil
+                lastSyncedAt = Date()
+                return true
+            } catch {
+                guard passEpoch == epoch else { return true }   // account changed mid-pass → abandon quietly
+                if Self.isTransient(error), attempt < maxAttempts - 1 {
+                    let delay = min(max(0, (error as? CKError)?.retryAfterSeconds ?? 0.5), 5)
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    continue   // auto-retry — no banner; the hiccup self-heals
+                }
+                lastErrorDetail = Self.errorDetail(error)
+                lastHumanizedError = Self.humanizeCloudError(error)
+                return true
+            }
         }
         return true
+    }
+
+    /// One reconcile pass. Returns early (no throw) if the account changed mid-pass.
+    private func runPass(_ passEpoch: Int) async throws {
+        try await ensureStarted()
+        guard passEpoch == epoch else { return }
+        try await pullAndApply()
+        guard passEpoch == epoch else { return }
+        // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
+        // children locally so pushDirty propagates the tombstones (no server to cascade for us).
+        try HouseholdCascade.apply(in: ModelContext(container), now: Int64(Date().timeIntervalSince1970 * 1000))
+        try await pushDirty()
+        guard passEpoch == epoch else { return }
+        // Project any send-path merge results (serverRecordChanged → merged re-save) buffered during
+        // pushDirty's drain into SwiftData this pass rather than waiting for the next.
+        try drainPendingApplies()
     }
 
     // MARK: - Lifecycle
@@ -235,7 +271,14 @@ final class HouseholdCloudCoordinator {
             pushedMaxClock = max(pushedMaxClock, d.clock)
             pushed += 1
         }
-        if pushed > 0 { try await engine.sendUntilDrained(maxPasses: 8) }
+        // Drain whenever ANYTHING is pending — not only when this pass staged new records — so a
+        // record re-enqueued by a transient failure on a PRIOR pass still gets flushed (with
+        // automaticSync:false the coordinator is the only drain driver). sendUntilDrained THROWS on an
+        // incomplete drain, so the watermark advance below is skipped → the unconfirmed record isn't
+        // stranded below the watermark; it retries next pass.
+        if pushed > 0 || engine.hasPendingRecordChanges {
+            try await engine.sendUntilDrained(maxPasses: 6)
+        }
         watermark = pushedMaxClock
     }
 
@@ -284,12 +327,14 @@ final class HouseholdCloudCoordinator {
         // Migrated now (or the receipt was already present from a peer) → never migrate again on this
         // device for this household. (Cleared on account change in wipeAndClear.)
         hasMigratedDurable = true
-        // The just-migrated graph is now in CloudKit; advance the watermark past it so pushDirty
-        // doesn't immediately re-push every record it already exported.
-        if !result.alreadyMigrated {
-            let maxClock = dirtyRecords(from: input).map(\.clock).max() ?? watermark
-            watermark = max(watermark, maxClock)
-        }
+        // Advance the watermark past the local graph REGARDLESS of `alreadyMigrated`: on a retry after a
+        // transient migration-drain failure the receipt is already in the store (so the re-run reports
+        // alreadyMigrated), but the watermark hasn't advanced yet — leaving it would re-upload the whole
+        // graph on relaunch. Advancing over local-graph clocks is safe in both the first-migrate and the
+        // peer-already-migrated cases (the records reconcile via the merger either way).
+        _ = result
+        let maxClock = dirtyRecords(from: input).map(\.clock).max() ?? watermark
+        watermark = max(watermark, maxClock)
     }
 
     // MARK: - Account change (AC5)
@@ -351,6 +396,51 @@ final class HouseholdCloudCoordinator {
     // MARK: - Helpers
 
     enum CoordinatorError: Error { case iCloudUnavailable(CKAccountStatus) }
+
+    /// A CloudKit error worth auto-retrying inline (transient infra) vs surfacing (permanent).
+    static func isTransient(_ error: Error) -> Bool {
+        if error is SyncEngineError { return true }   // drainIncomplete — pending changes, retry
+        if error is URLError { return true }
+        guard let ck = error as? CKError else { return false }
+        switch ck.code {
+        case .networkUnavailable, .networkFailure, .serviceUnavailable, .zoneBusy,
+             .requestRateLimited, .serverResponseLost, .batchRequestFailed:
+            return true
+        default:
+            return false   // serverRejectedRequest / quotaExceeded / permission / notAuthenticated → surface
+        }
+    }
+
+    /// Raw detail for the diagnostics row (distinct from the humanized banner copy).
+    static func errorDetail(_ error: Error) -> String {
+        if let ck = error as? CKError { return "CKError \(ck.errorCode): \(ck.localizedDescription)" }
+        return error.localizedDescription
+    }
+
+    /// CloudKit-aware humanized copy — keeps the CKError mapping out of the cross-platform
+    /// SeedkeepKit humanizer; falls back to it for URLError / SeedkeepError.
+    static func humanizeCloudError(_ error: Error) -> String {
+        if case CoordinatorError.iCloudUnavailable(let status) = error {
+            return "iCloud unavailable — \(describe(status))."
+        }
+        if let ck = error as? CKError {
+            switch ck.code {
+            case .networkUnavailable, .networkFailure:
+                return "You're offline — your garden will sync when you're back online."
+            case .serviceUnavailable, .zoneBusy, .requestRateLimited, .serverResponseLost, .serverRejectedRequest, .batchRequestFailed:
+                return "iCloud is busy — your garden will sync shortly."
+            case .notAuthenticated:
+                return "Sign into iCloud (Settings ▸ Apple ID) to sync your garden across devices."
+            case .quotaExceeded:
+                return "Your iCloud storage is full — free up space to keep syncing."
+            case .managedAccountRestricted:
+                return "iCloud sync is restricted on this account."
+            default:
+                return "iCloud sync hit a snag — it will retry automatically."
+            }
+        }
+        return humanizeError(error)
+    }
 
     static func describe(_ status: CKAccountStatus?) -> String {
         switch status {

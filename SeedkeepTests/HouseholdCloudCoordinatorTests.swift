@@ -26,10 +26,16 @@ struct HouseholdCloudCoordinatorTests {
         private(set) var savedRecords: [CKRecord] = []
         private(set) var deletedIDs: [CKRecord.ID] = []
         var pendingFetch: ([CKRecord], [CKRecord.ID]) = ([], [])
+        var hasPendingRecordChanges = false
+        /// Number of leading fetchChanges() calls that should throw `fetchError` (simulating a
+        /// transient hiccup that clears on retry). Decrements per throw.
+        var fetchFailuresRemaining = 0
+        var fetchError: Error = URLError(.timedOut)
 
         func save(_ record: CKRecord) { store.setRecord(record); savedRecords.append(record) }
         func delete(_ recordID: CKRecord.ID) { store.removeRecord(recordID); deletedIDs.append(recordID) }
         func fetchChanges() async throws {
+            if fetchFailuresRemaining > 0 { fetchFailuresRemaining -= 1; throw fetchError }
             let (mods, dels) = pendingFetch
             pendingFetch = ([], [])
             guard !mods.isEmpty || !dels.isEmpty else { return }
@@ -286,6 +292,65 @@ struct HouseholdCloudCoordinatorTests {
             $0.recordID.recordName == "seed:s1" && ($0["deletedAt"] as? Int) != nil
         }
         #expect(pushedTombstone, "the tombstone must push despite the store holding a higher-clock LIVE peer record (sticky-deletedAt converges)")
+    }
+
+    // MARK: - Transient auto-retry (R3)
+
+    @Test("a transient error auto-recovers within sync() — no error surfaced, no double-tap")
+    func autoRetryRecoversTransient() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        engine.fetchFailuresRemaining = 1   // first fetch throws, retry succeeds (maxAttempts = 2)
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        #expect(coordinator.lastHumanizedError == nil, "the transient must self-heal without surfacing an error")
+        #expect(coordinator.lastSyncedAt != nil, "the recovered pass completes")
+    }
+
+    @Test("a persistent error gives up after the retry budget and surfaces humanized + detail")
+    func transientGivesUpAfterMax() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        engine.fetchFailuresRemaining = 99   // never clears within the budget
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        #expect(coordinator.lastHumanizedError != nil, "an unrecoverable error must surface")
+        #expect(coordinator.lastErrorDetail != nil, "raw detail is recorded for the diagnostics row")
+    }
+
+    @Test("error classification: transient vs permanent")
+    func errorClassification() {
+        #expect(HouseholdCloudCoordinator.isTransient(URLError(.timedOut)) == true)
+        #expect(HouseholdCloudCoordinator.isTransient(SyncEngineError.drainIncomplete) == true)
+        #expect(HouseholdCloudCoordinator.isTransient(HouseholdCloudCoordinator.CoordinatorError.iCloudUnavailable(.noAccount)) == false)
+        #expect(HouseholdCloudCoordinator.humanizeCloudError(HouseholdCloudCoordinator.CoordinatorError.iCloudUnavailable(.noAccount)).contains("iCloud"))
+    }
+
+    // MARK: - Apply-path sticky-deletedAt (R4)
+
+    @Test("sticky-deletedAt on apply: a live remote edit does NOT resurrect a locally-deleted row")
+    func applyGateStickyDeletedAt() throws {
+        let container = makeContainer()
+        let ctx = ModelContext(container)
+        let hid = "hh1"
+        // Local row is tombstoned at clock 100.
+        let local = LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 100)
+        local.deletedAt = 100
+        ctx.insert(local); try ctx.save()
+        // Incoming LIVE peer edit (no deletedAt) at a HIGHER clock must NOT resurrect it.
+        let liveIncoming = LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 2, source: .store, createdAt: 1, updatedAt: 200)
+        #expect(HouseholdApplyGate.shouldApply(liveIncoming.cloudKitValue, into: ctx) == false,
+                "a live remote edit must not resurrect a locally-deleted row")
+
+        // Incoming TOMBSTONE over a live local row wins regardless of clock.
+        let liveLocal = LocalSeed(id: "s2", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 500)
+        ctx.insert(liveLocal); try ctx.save()
+        let tombstoneIncoming = LocalSeed(id: "s2", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 50)
+        tombstoneIncoming.deletedAt = 50
+        #expect(HouseholdApplyGate.shouldApply(tombstoneIncoming.cloudKitValue, into: ctx) == true,
+                "an incoming tombstone wins over a live local row even at a lower clock")
     }
 
     // MARK: - Account change (AC5)

@@ -43,7 +43,7 @@ enum HouseholdMigrationExecutor {
             engine.save(SeedkeepRecordCodec.encode(value, zoneID: zoneID))
             written += 1
         }
-        if drain { try await engine.sendUntilDrained(maxPasses: 8) }
+        if drain { try await engine.sendUntilDrained(maxPasses: 6) }
         return Result(alreadyMigrated: false, written: written)
     }
 }

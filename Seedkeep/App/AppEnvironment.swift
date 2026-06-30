@@ -219,8 +219,16 @@ public final class AppEnvironment {
                 // feeds + flushPending when the flag is ON. Only fold in the server error when this
                 // syncAll actually RAN (a skipped in-flight pass leaves a stale lastHumanizedError —
                 // surfacing it would be a phantom banner; same reasoning as the OFF branch's guard).
+                // SOURCE-TAG the banner so a legacy-server-feed hiccup isn't misread as a CloudKit
+                // failure (and vice-versa). The CloudKit copy is already iCloud-flavored.
                 let serverRan = await sync.syncAll(householdID: household.id)
-                banner = coordinator.lastHumanizedError ?? (serverRan ? sync.lastHumanizedError : nil)
+                if let ckError = coordinator.lastHumanizedError {
+                    banner = ckError
+                } else if serverRan, let serverError = sync.lastHumanizedError {
+                    banner = "Server sync — \(serverError)"
+                } else {
+                    banner = nil
+                }
             } else {
                 let ran = await sync.syncAll(householdID: household.id)
                 // Skipped (another sync already in flight): lastError still

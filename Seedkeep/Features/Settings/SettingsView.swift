@@ -18,6 +18,9 @@ struct SettingsContent: View {
     // R1 beta — CloudKit diagnostics
     @State private var iCloudStatus: String?
     @State private var checkingICloud = false
+    @State private var isSyncingNow = false
+    @State private var syncedJustNow = false
+    @State private var syncToken = 0
 
     @ViewBuilder private func statusRow(_ label: String, _ value: String) -> some View {
         HStack {
@@ -194,19 +197,48 @@ struct SettingsContent: View {
 
                 Section {
                     Button {
-                        Task { await appEnv.syncIfPossible() }
+                        guard !isSyncingNow else { return }
+                        isSyncingNow = true
+                        syncedJustNow = false
+                        syncToken += 1
+                        let token = syncToken
+                        Task {
+                            await appEnv.syncIfPossible()
+                            isSyncingNow = false
+                            // Only show the success ✓ when the pass actually succeeded (no error
+                            // surfaced on either path) — a green check next to an error banner lies.
+                            let clean = appEnv.sync.lastError == nil && appEnv.cloudKit?.lastHumanizedError == nil
+                            syncedJustNow = clean
+                            try? await Task.sleep(nanoseconds: 2_500_000_000)
+                            if syncToken == token { syncedJustNow = false }   // don't clear a newer tap's ✓
+                        }
                     } label: {
-                        Label("Sync now", systemImage: "arrow.clockwise")
+                        HStack {
+                            Label("Sync now", systemImage: "arrow.clockwise")
+                            Spacer()
+                            if isSyncingNow {
+                                ProgressView()
+                            } else if syncedJustNow {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(HerbColor.sage)
+                            }
+                        }
                     }
+                    .disabled(isSyncingNow)
                     if let err = appEnv.sync.lastError {
                         Text(err)
                             .font(.footnote)
                             .foregroundStyle(HerbColor.rose)
                     }
-                    NavigationLink {
-                        PendingWritesView()
-                    } label: {
-                        Label("Pending writes", systemImage: "tray.full")
+                    // The legacy server write-queue is only meaningful on the server path — when the
+                    // CloudKit flag is ON those rows never flush (and a manual flush would push them to
+                    // the server, re-introducing a second writer), so hide the entry to avoid a fake
+                    // backlog + footgun.
+                    if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+                        NavigationLink {
+                            PendingWritesView()
+                        } label: {
+                            Label("Pending writes", systemImage: "tray.full")
+                        }
                     }
                     Toggle(isOn: Binding(
                         get: { FeatureFlags.cloudKitHouseholdSyncEnabled },
@@ -234,16 +266,22 @@ struct SettingsContent: View {
                             statusRow("iCloud account", iCloudStatus)
                         }
                         if let ck = appEnv.cloudKit {
+                            statusRow("Initial upload", ck.initialUploadComplete ? "complete" : "pending")
                             if ck.isSyncing { statusRow("CloudKit", "syncing…") }
                             if let at = ck.lastSyncedAt {
                                 statusRow("Last CloudKit sync", at.formatted(date: .omitted, time: .standard))
                             }
-                            statusRow("Records in zone", "\(ck.zoneRecordCount)")
-                            if let acct = ck.accountStatusText { statusRow("Account (last sync)", acct) }
+                            statusRow("Records synced this session", "\(ck.zoneRecordCount)")
+                            if let acct = ck.accountStatusText { statusRow("Account (at first sync)", acct) }
                             if let err = ck.lastHumanizedError {
-                                Text("CloudKit error: \(err)")
+                                Text("CloudKit: \(err)")
                                     .font(.footnote)
                                     .foregroundStyle(HerbColor.rose)
+                            }
+                            if let detail = ck.lastErrorDetail {
+                                Text(detail)
+                                    .font(.caption2)
+                                    .foregroundStyle(HerbColor.inkFaint)
                             }
                         } else {
                             Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
