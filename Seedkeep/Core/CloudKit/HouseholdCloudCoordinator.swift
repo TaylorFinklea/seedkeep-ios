@@ -11,8 +11,9 @@ import SeedkeepCloudKit
 /// adapted so SwiftData (not an in-memory typed store) is the truth:
 ///
 ///   - `sync()` reconciles: pull (engine.fetchChanges → buffer → project into SwiftData with an
-///     updatedAt-LWW gate) then push (scan SwiftData for records newer than the watermark, exclude
-///     ones just applied this pass to avoid echo, encode, engine.save, drain).
+///     updatedAt-LWW gate) then push (scan SwiftData for records not already confirmed synced per the
+///     durable per-record synced-state, exclude ones just applied this pass to avoid echo, encode,
+///     engine.save, drain).
 ///   - `ensureStarted()` (once): gate on iCloud availability, provision zone/household/share (owner),
 ///     wire the merger + callbacks, first fetch, run the one-time migration (AC3, receipt-gated).
 ///   - `handleAccountChange` wipes SwiftData + the engine state token on sign-out/switch (AC5).
@@ -65,6 +66,9 @@ final class HouseholdCloudCoordinator {
     private let buffer = PendingApplyBuffer()
     /// recordNames projected from remote since the last push — excluded from pushDirty to avoid echo.
     private var appliedSinceLastPush = Set<String>()
+    /// Lazy in-memory cache of the durable per-record synced-state map (nil until first touched this
+    /// process; loaded from `syncedStateURL` on first read).
+    private var syncedStateCache: [String: SyncedRecordState]?
     private var started = false
     /// Bumped by `wipeAndClear` so an in-flight `sync()` resuming after an await can detect that the
     /// account changed mid-pass and bail instead of operating on wiped/abandoned state.
@@ -239,9 +243,9 @@ final class HouseholdCloudCoordinator {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             try await engine.fetchChanges()
             try drainPendingApplies()
-            // Seed the push watermark past the imported graph so a relaunch doesn't re-upload the
-            // entire shared zone (a participant has no migration step to seed it).
-            seedWatermarkFromLocalGraph()
+            // Seed the per-record synced-state past the imported graph so a relaunch doesn't
+            // re-upload the entire shared zone (a participant has no migration step to seed it).
+            seedSyncedStateFromLocalGraph()
         } else {
             // A participant imports NOTHING; migration (export + receipt) is the OWNER's one-time job.
             try await migrateIfNeeded()
@@ -249,16 +253,15 @@ final class HouseholdCloudCoordinator {
         started = true
     }
 
-    /// Set the watermark to the max clock currently in SwiftData — so pushDirty won't re-push records
-    /// the engine already holds (used after a participant's initial import, which has no migrate step).
-    private func seedWatermarkFromLocalGraph() {
+    /// Seed the per-record synced-state from the current local graph — so pushDirty won't re-push
+    /// records the engine already holds (used after a participant's initial import, which has no
+    /// migrate step).
+    private func seedSyncedStateFromLocalGraph() {
         let context = ModelContext(container)
         let input = HouseholdMigrationPlanner.fetchInput(
             from: context, householdID: householdID, householdName: householdName,
             householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
-        if let maxClock = dirtyRecords(from: input).map(\.clock).max() {
-            watermark = max(watermark, maxClock)
-        }
+        seedSyncedState(from: input)
     }
 
     /// Pull remote changes then project the buffered records into SwiftData.
@@ -273,73 +276,74 @@ final class HouseholdCloudCoordinator {
         let (mods, dels) = buffer.drain()
         guard !mods.isEmpty || !dels.isEmpty else { return }
         let context = ModelContext(container)
+        var updates: [String: SyncedRecordState] = [:]
+        var removals: Set<String> = []
         for record in mods {
             guard let type = SeedkeepRecordType.type(forRecordTypeName: record.recordType) else { continue }
             let value = SeedkeepRecordCodec.decode(record, as: type)
             guard HouseholdApplyGate.shouldApply(value, into: context) else { continue }
             HouseholdRecordApplier.apply(value, householdID: householdID, into: context)
             appliedSinceLastPush.insert(value.recordName)
+            // Synced-state write (the AC1 fix): apply is now a writer too, not just push — a peer
+            // record's clock is recorded as KNOWN-synced the moment it lands locally, so it no longer
+            // looks unconfirmed (and gets needlessly re-pushed) on the next relaunch.
+            let clock = (record["updatedAt"] as? Int).map(Int64.init) ?? (record["capturedAt"] as? Int).map(Int64.init) ?? 0
+            updates[value.recordName] = SyncedRecordState(clock: clock, tombstoned: (record["deletedAt"] as? Int) != nil)
         }
         for id in dels {
             HouseholdApplyGate.deleteLocal(recordName: id.recordName, into: context)
             appliedSinceLastPush.insert(id.recordName)
+            removals.insert(id.recordName)   // S7 — clear the entry; nothing local left to compare against
         }
         try context.save()
+        commitSyncedState(updates, removing: removals)
     }
 
     // MARK: - Push local-newer → engine
 
-    /// Stage every local record that is genuinely newer than what CloudKit holds, then drain.
+    /// Stage every local record whose current state isn't already confirmed in CloudKit, then drain.
     ///
-    /// Echo / clock-skew safety (the watermark is a relaunch-only optimization, NOT the echo guard):
-    ///  - `d.clock > watermark` skips records already pushed in a PRIOR SESSION (durable watermark).
-    ///  - `appliedSinceLastPush` skips records projected from remote THIS pass.
-    ///  - the `engine.store` comparison skips records the store already holds at an equal-or-newer
-    ///    clock — i.e. remote-applied or already-pushed records — which is the cross-pass echo guard.
-    ///  - the watermark advances ONLY over records actually PUSHED (local-origin). A peer's clock can
-    ///    therefore never raise the local push threshold, so a local edit with a lower wall-clock than
-    ///    a fast peer is still pushed (fixes the clock-skew poisoning the review flagged).
+    /// Echo / clock-skew safety (durable per-record synced-state — NOT a relaunch-only optimization;
+    /// this is what kills the relaunch re-upload residual a single global push ceiling left behind):
+    ///  - `appliedSinceLastPush` skips records projected from remote THIS pass (within-session echo).
+    ///  - `syncedState(for:)` skips a record whose KNOWN CloudKit state is already at an equal-or-newer
+    ///    clock for the SAME liveness (live-vs-live or tombstone-vs-tombstone) — durable across relaunch
+    ///    because it's written on BOTH push-success (below) and apply-success (`drainPendingApplies`).
+    ///  - EXCEPTION: a local TOMBSTONE whose known synced state is still LIVE always pushes, regardless
+    ///    of clock — a peer's live edit must never strand our delete (sticky-deletedAt keeps it converged).
+    /// No shared ceiling var, so a peer's clock can never raise a threshold that strands a later
+    /// genuine local edit at a lower clock (the clock-skew-poisoning fix, expressed per-record).
     private func pushDirty() async throws {
         let context = ModelContext(container)
         let input = HouseholdMigrationPlanner.fetchInput(
             from: context, householdID: householdID, householdName: householdName,
             householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
-        let wm = watermark
-        var pushedMaxClock = wm
+        var staged: [String: SyncedRecordState] = [:]
         var pushed = 0
         for d in dirtyRecords(from: input) {
-            guard d.clock > wm else { continue }                                   // pushed in a prior session
             guard !appliedSinceLastPush.contains(d.recordName) else { continue }   // applied from remote this pass
-            let id = CKRecord.ID(recordName: d.recordName, zoneID: zoneID)
-            if let stored = engine.store.record(for: id), storeClock(stored) >= d.clock {
-                // Normally skip — CloudKit already holds this (remote-applied or already-pushed).
-                // EXCEPTION: a local TOMBSTONE whose stored copy is still LIVE must always push, even
-                // at a lower clock — a peer's live edit (high clock) in the store would otherwise
-                // strand our cascade/delete tombstone. The merger's sticky-deletedAt keeps it converged.
-                let localTombstoneVsLiveStore =
-                    d.value.scalars["deletedAt"] != nil && (stored["deletedAt"] as? Int) == nil
-                if !localTombstoneVsLiveStore { continue }
+            let isLocalTombstone = d.value.scalars["deletedAt"] != nil
+            if let known = syncedState(for: d.recordName) {
+                if isLocalTombstone {
+                    if known.tombstoned && known.clock >= d.clock { continue }
+                } else {
+                    if !known.tombstoned && known.clock >= d.clock { continue }
+                }
+                // else fall through & push (never-confirmed / stale-clock / confirmed-live-now-tombstoned)
             }
             engine.save(SeedkeepRecordCodec.encode(d.value, zoneID: zoneID))
-            pushedMaxClock = max(pushedMaxClock, d.clock)
+            staged[d.recordName] = SyncedRecordState(clock: d.clock, tombstoned: isLocalTombstone)
             pushed += 1
         }
         // Drain whenever ANYTHING is pending — not only when this pass staged new records — so a
         // record re-enqueued by a transient failure on a PRIOR pass still gets flushed (with
         // automaticSync:false the coordinator is the only drain driver). sendUntilDrained THROWS on an
-        // incomplete drain, so the watermark advance below is skipped → the unconfirmed record isn't
-        // stranded below the watermark; it retries next pass.
+        // incomplete drain, so the commit below is skipped → an unconfirmed record is NOT marked
+        // synced; it retries next pass (invariant 3).
         if pushed > 0 || engine.hasPendingRecordChanges {
             try await engine.sendUntilDrained(maxPasses: 6)
         }
-        watermark = pushedMaxClock
-    }
-
-    /// The CloudKit-side merge clock of a stored CKRecord (updatedAt, or capturedAt for SeedPhoto).
-    private func storeClock(_ record: CKRecord) -> Int64 {
-        if let u = record["updatedAt"] as? Int { return Int64(u) }
-        if let c = record["capturedAt"] as? Int { return Int64(c) }
-        return 0
+        commitSyncedState(staged)
     }
 
     private struct Dirty { let recordName: String; let clock: Int64; let value: CloudKitRecordValue }
@@ -380,14 +384,13 @@ final class HouseholdCloudCoordinator {
         // Migrated now (or the receipt was already present from a peer) → never migrate again on this
         // device for this household. (Cleared on account change in wipeAndClear.)
         hasMigratedDurable = true
-        // Advance the watermark past the local graph REGARDLESS of `alreadyMigrated`: on a retry after a
-        // transient migration-drain failure the receipt is already in the store (so the re-run reports
-        // alreadyMigrated), but the watermark hasn't advanced yet — leaving it would re-upload the whole
-        // graph on relaunch. Advancing over local-graph clocks is safe in both the first-migrate and the
-        // peer-already-migrated cases (the records reconcile via the merger either way).
+        // Seed per-record synced-state past the local graph REGARDLESS of `alreadyMigrated`: on a retry
+        // after a transient migration-drain failure the receipt is already in the store (so the re-run
+        // reports alreadyMigrated), but the synced-state hasn't been seeded yet — leaving it unseeded
+        // would re-upload the whole graph on relaunch. Seeding is safe in both the first-migrate and
+        // the peer-already-migrated cases (the records reconcile via the merger either way).
         _ = result
-        let maxClock = dirtyRecords(from: input).map(\.clock).max() ?? watermark
-        watermark = max(watermark, maxClock)
+        seedSyncedState(from: input)
     }
 
     // MARK: - Account change (AC5)
@@ -404,11 +407,12 @@ final class HouseholdCloudCoordinator {
     /// `onAccountChange` (AC5 — a CloudKit account sign-out/switch). NOTE: the APP-level sign-out
     /// (`AuthController.signOut` → `eraseAllLocalData`) already wipes household SwiftData generically;
     /// an account SWITCH additionally rebuilds this coordinator (different householdID → fresh state
-    /// token + watermark in `AppEnvironment.ensureCloudCoordinator`).
+    /// token + synced-state file in `AppEnvironment.ensureCloudCoordinator`).
     func wipeAndClear() {
         Self.wipeHouseholdSwiftData(container: container)
         if let stateURL { try? FileManager.default.removeItem(at: stateURL) }
-        watermark = 0
+        try? FileManager.default.removeItem(at: syncedStateURL)
+        syncedStateCache = [:]
         hasMigratedDurable = false
         _ = buffer.drain()
         appliedSinceLastPush.removeAll()
@@ -441,16 +445,69 @@ final class HouseholdCloudCoordinator {
 
     // MARK: - Persisted per-household state (survives relaunch)
 
-    private var watermarkKey: String { "seedkeep.ck.pushWatermark.\(Self.cloudKitEnvironmentTag).\(householdID)" }
-    private var watermark: Int64 {
-        get { Int64(UserDefaults.standard.integer(forKey: watermarkKey)) }
-        set { UserDefaults.standard.set(Int(newValue), forKey: watermarkKey) }
-    }
-
     private var migratedKey: String { "seedkeep.ck.migrated.\(Self.cloudKitEnvironmentTag).\(householdID)" }
     private var hasMigratedDurable: Bool {
         get { UserDefaults.standard.bool(forKey: migratedKey) }
         set { UserDefaults.standard.set(newValue, forKey: migratedKey) }
+    }
+
+    // MARK: - Per-record synced-state (replaces the single global push clock ceiling)
+
+    /// The newest state we KNOW CloudKit holds for a given record — written on BOTH push-success
+    /// (`pushDirty`) and apply-success (`drainPendingApplies`; the missing writer that fixes the
+    /// relaunch re-upload residual, AC1). The `tombstoned` bit makes the tombstone-over-live-peer
+    /// exception durable across relaunch instead of session-scoped (AC3).
+    private struct SyncedRecordState: Codable { var clock: Int64; var tombstoned: Bool }
+
+    /// Derived from ivars the same way `migratedKey` is — NOT an init param — so a second coordinator
+    /// built against the same household (the relaunch tests) resolves to the same file.
+    private var syncedStateURL: URL {
+        isParticipant
+            ? Self.participantSyncedStateURL(zoneName: zoneID.zoneName)
+            : Self.ownerSyncedStateURL(householdID: householdID)
+    }
+
+    /// Mirrors `HouseholdSyncEngine.loadState`'s contract: best-effort, missing/corrupt → empty.
+    private static func loadSyncedState(from url: URL) -> [String: SyncedRecordState] {
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        return (try? JSONDecoder().decode([String: SyncedRecordState].self, from: data)) ?? [:]
+    }
+
+    /// Mirrors `HouseholdSyncEngine.saveState`'s contract: best-effort atomic write.
+    private static func saveSyncedState(_ state: [String: SyncedRecordState], to url: URL) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private func syncedState(for recordName: String) -> SyncedRecordState? {
+        if syncedStateCache == nil { syncedStateCache = Self.loadSyncedState(from: syncedStateURL) }
+        return syncedStateCache?[recordName]
+    }
+
+    /// Merge `updates` into the durable map and drop `removing`, then persist. No-ops (no disk
+    /// touch) when both are empty, so a pass that pushed/applied nothing never writes the file.
+    private func commitSyncedState(_ updates: [String: SyncedRecordState], removing: Set<String> = []) {
+        guard !updates.isEmpty || !removing.isEmpty else { return }
+        if syncedStateCache == nil { syncedStateCache = Self.loadSyncedState(from: syncedStateURL) }
+        for (name, state) in updates { syncedStateCache?[name] = state }
+        for name in removing { syncedStateCache?[name] = nil }
+        Self.saveSyncedState(syncedStateCache ?? [:], to: syncedStateURL)
+    }
+
+    /// Seed synced-state for every record in the local graph with its REAL tombstoned bit (not always
+    /// false — a pre-migration soft-delete would otherwise re-push immediately). Used after the
+    /// one-time migration (everything just exported) and after a participant's initial import (no
+    /// migrate step) so a relaunch doesn't re-push/re-upload the graph (AC6).
+    ///
+    /// DEFERRED (tracked separately, seedkeep-8ck.8 — not fixed here): this can mark a genuinely
+    /// unpushed local edit (force-quit before its first send) as synced and suppress it. The single
+    /// global push ceiling this replaces had the identical defect; reproduced faithfully, not fixed.
+    private func seedSyncedState(from input: HouseholdMigrationPlanner.Input) {
+        var seed: [String: SyncedRecordState] = [:]
+        for d in dirtyRecords(from: input) {
+            seed[d.recordName] = SyncedRecordState(clock: d.clock, tombstoned: d.value.scalars["deletedAt"] != nil)
+        }
+        commitSyncedState(seed)
     }
 
     // MARK: - Helpers
@@ -458,11 +515,12 @@ final class HouseholdCloudCoordinator {
     enum CoordinatorError: Error { case iCloudUnavailable(CKAccountStatus) }
 
     /// MUST match `com.apple.developer.icloud-container-environment` in project.yml. All durable
-    /// per-household CloudKit state (migration marker, push watermark, engine-state token) is namespaced
-    /// by this, so flipping the CloudKit environment (the Development→Production cutover) re-migrates the
-    /// INTACT local graph into the new environment rather than skipping it — the marker is otherwise
-    /// env-agnostic, so a switched device would skip migration and its data would never reach the empty
-    /// Production zone (silent divergence). The old env-agnostic keys/tokens are left as harmless orphans.
+    /// per-household CloudKit state (migration marker, per-record synced-state file, engine-state
+    /// token) is namespaced by this, so flipping the CloudKit environment (the Development→Production
+    /// cutover) re-migrates the INTACT local graph into the new environment rather than skipping it —
+    /// the marker is otherwise env-agnostic, so a switched device would skip migration and its data
+    /// would never reach the empty Production zone (silent divergence). The old env-agnostic
+    /// keys/tokens are left as harmless orphans.
     static let cloudKitEnvironmentTag = "production"
 
     // MARK: - Durable engine-state token paths (single source of truth for the factories + the
@@ -478,6 +536,12 @@ final class HouseholdCloudCoordinator {
     }
     static func participantStateTokenURL(zoneName: String) -> URL {
         householdSyncDir().appendingPathComponent("engine-state-shared-\(cloudKitEnvironmentTag)-\(zoneName).json")
+    }
+    static func ownerSyncedStateURL(householdID: String) -> URL {
+        householdSyncDir().appendingPathComponent("synced-state-\(cloudKitEnvironmentTag)-\(householdID).json")
+    }
+    static func participantSyncedStateURL(zoneName: String) -> URL {
+        householdSyncDir().appendingPathComponent("synced-state-shared-\(cloudKitEnvironmentTag)-\(zoneName).json")
     }
     /// Delete a durable state token so the next coordinator on that scope does a FULL re-fetch. Used by
     /// adopt/leave: those wipe local SwiftData, so the rebuilt coordinator must re-download (an

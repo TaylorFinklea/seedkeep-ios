@@ -62,7 +62,8 @@ public final class AppEnvironment {
         let sync = SyncEngine(client: client, container: container)
         // Stabilization B3 — sign-out / identity-switch wipe is wired in init() (below), where the
         // AppEnvironment instance exists so the wipe can ALSO tear down the CloudKit coordinator
-        // (state token + watermark + migration marker), not just SwiftData. See wireSignOutEraser().
+        // (state token + per-record synced-state file + migration marker), not just SwiftData. See
+        // wireSignOutEraser().
         let recommendations = RecommendationStore(client: client, container: container)
         let journal = JournalStore(client: client, container: container)
         let assistant = AIAssistantCoordinator(client: client, container: container)
@@ -149,9 +150,9 @@ public final class AppEnvironment {
         }
         // Stabilization B3 + R1 — sign-out / identity-switch wipe. Erases every model (generic over
         // SeedkeepSchema.all — includes the pending-write queue + sync cursors), drops notifications,
-        // AND tears down the CloudKit coordinator (engine state token + watermark + migration marker)
-        // and nils its reference so a re-sign-in to the SAME household rebuilds a fresh coordinator
-        // that re-provisions + rehydrates rather than reusing a stale `started` one.
+        // AND tears down the CloudKit coordinator (engine state token + per-record synced-state file +
+        // migration marker) and nils its reference so a re-sign-in to the SAME household rebuilds a
+        // fresh coordinator that re-provisions + rehydrates rather than reusing a stale `started` one.
         auth.wireLocalDataEraser { [weak self] in
             guard let self else { return }
             do {

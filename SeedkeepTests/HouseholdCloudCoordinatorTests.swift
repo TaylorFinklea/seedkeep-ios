@@ -79,6 +79,15 @@ struct HouseholdCloudCoordinatorTests {
         return SeedkeepRecordCodec.encode(local.cloudKitValue, zoneID: zoneID(householdID))
     }
 
+    /// A remote Seed CKRecord carrying a TOMBSTONE (deletedAt set) — for the apply-only-tombstone path
+    /// where a peer pushed a delete this device learns purely by fetching (never pushes itself).
+    private func remoteTombstoneSeed(id: String, householdID: String, deletedAt: Int64) -> CKRecord {
+        let local = LocalSeed(id: id, householdID: householdID, state: .active, packetCount: 1,
+                              source: .store, createdAt: 1, updatedAt: deletedAt)
+        local.deletedAt = deletedAt
+        return SeedkeepRecordCodec.encode(local.cloudKitValue, zoneID: zoneID(householdID))
+    }
+
     private func fetchSeed(_ c: ModelContext, _ id: String) -> LocalSeed? {
         try? c.fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == id })).first
     }
@@ -268,6 +277,29 @@ struct HouseholdCloudCoordinatorTests {
                 "the durable migration marker must prevent a full re-export on every relaunch")
     }
 
+    @Test("a record applied from a peer is not re-uploaded on relaunch (AC1)")
+    func relaunchDoesNotReUploadPeerAppliedRecord() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine1 = FakeEngine()
+        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
+        await coordinator1.sync()   // start (empty migrate)
+
+        // A peer record is fetched + applied this session.
+        engine1.pendingFetch = ([remoteSeed(id: "peer1", householdID: hid, name: "Peer", updatedAt: 200)], [])
+        await coordinator1.sync()
+        #expect(fetchSeed(ModelContext(container), "peer1")?.customName == "Peer")
+
+        // Relaunch: a FRESH engine with an empty in-memory store, SAME household + container. The
+        // in-session echo guard (`appliedSinceLastPush`) is gone; only the durable per-record
+        // synced-state can suppress the re-upload.
+        let engine2 = FakeEngine()
+        let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
+        await coordinator2.sync()
+        #expect(engine2.savedRecords.contains { $0.recordID.recordName == "seed:peer1" } == false,
+                "a record applied from a peer must not be re-uploaded on relaunch")
+    }
+
     @Test("a local tombstone pushes even when the store holds a higher-clock LIVE peer record")
     func tombstonePushesOverLiveStore() async throws {
         let hid = "hh-\(UUID().uuidString)"
@@ -292,6 +324,68 @@ struct HouseholdCloudCoordinatorTests {
             $0.recordID.recordName == "seed:s1" && ($0["deletedAt"] as? Int) != nil
         }
         #expect(pushedTombstone, "the tombstone must push despite the store holding a higher-clock LIVE peer record (sticky-deletedAt converges)")
+    }
+
+    @Test("a tombstone PUSHED by this device records its tombstoned bit + does not re-push on relaunch")
+    func pushedTombstoneRecordsBitAndDoesNotRePushOnRelaunch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()   // start (empty)
+
+        // A peer's LIVE edit at a FAR-AHEAD clock lands in the engine store + SwiftData.
+        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "PeerLive", updatedAt: 10_000)], [])
+        await coordinator.sync()
+
+        // Now locally SOFT-DELETE that seed at a LOWER clock (deletedAt set, updatedAt below the peer's).
+        let setup = ModelContext(container)
+        let m = fetchSeed(setup, "s1")
+        m?.deletedAt = 500
+        m?.updatedAt = 500
+        try setup.save()
+        await coordinator.sync()
+
+        let pushedTombstone = engine.savedRecords.contains {
+            $0.recordID.recordName == "seed:s1" && ($0["deletedAt"] as? Int) != nil
+        }
+        #expect(pushedTombstone, "the tombstone must push despite the store holding a higher-clock LIVE peer record (sticky-deletedAt converges)")
+
+        // Relaunch: a FRESH engine with an empty in-memory store, SAME household + container — the
+        // durable per-record synced-state (not the in-memory store) must remember the tombstone is
+        // already confirmed in CloudKit and not re-push it.
+        let engine2 = FakeEngine()
+        let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
+        await coordinator2.sync()
+        let rePushedTombstone = engine2.savedRecords.contains { $0.recordID.recordName == "seed:s1" }
+        #expect(rePushedTombstone == false, "a tombstone already confirmed in CloudKit must not re-push on relaunch")
+    }
+
+    @Test("an APPLY-ONLY peer tombstone (never pushed by this device) is not re-uploaded on relaunch (AC3 mirror of AC1)")
+    func applyOnlyTombstoneDoesNotRePushOnRelaunch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine1 = FakeEngine()
+        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
+        await coordinator1.sync()   // start (empty migrate)
+
+        // A peer's TOMBSTONE for a record this device never created locally arrives + is APPLIED. This
+        // device NEVER pushes it (learned purely via apply) — the exact case the old global watermark
+        // missed (an applied record never advanced the push ceiling, so it re-uploaded every relaunch).
+        engine1.pendingFetch = ([remoteTombstoneSeed(id: "ghost", householdID: hid, deletedAt: 700)], [])
+        await coordinator1.sync()
+        #expect(fetchSeed(ModelContext(container), "ghost")?.deletedAt == 700, "the peer tombstone is applied locally")
+        #expect(engine1.savedRecords.contains { $0.recordID.recordName == "seed:ghost" } == false,
+                "the applied tombstone is not echoed back this session")
+
+        // Relaunch: fresh engine + coordinator, SAME household + container. Only the durable apply-success
+        // synced-state write (tombstoned:true) can suppress the re-upload — proving the AC1 fix extends
+        // to apply-only tombstones. This assertion FAILS against the pre-change global-watermark code.
+        let engine2 = FakeEngine()
+        let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
+        await coordinator2.sync()
+        #expect(engine2.savedRecords.contains { $0.recordID.recordName == "seed:ghost" } == false,
+                "an apply-only peer tombstone must not be re-uploaded on relaunch")
     }
 
     // MARK: - Transient auto-retry (R3)
@@ -402,5 +496,26 @@ struct HouseholdCloudCoordinatorTests {
         let c = ModelContext(container)
         #expect((try? c.fetch(FetchDescriptor<LocalSeed>()))?.isEmpty == true)
         #expect((try? c.fetch(FetchDescriptor<LocalBed>()))?.isEmpty == true)
+    }
+
+    @Test("wipeAndClear removes the durable per-record synced-state file")
+    func wipeRemovesSyncedStateFile() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()   // start (empty)
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        await coordinator.sync()   // pushes s1 → commits the synced-state file
+
+        let url = HouseholdCloudCoordinator.ownerSyncedStateURL(householdID: hid)
+        #expect(FileManager.default.fileExists(atPath: url.path), "a push must commit the synced-state file")
+
+        coordinator.handleAccountChange(.signOut)
+        #expect(FileManager.default.fileExists(atPath: url.path) == false,
+                "wipeAndClear must remove the durable synced-state file")
     }
 }
