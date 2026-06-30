@@ -353,6 +353,35 @@ struct HouseholdCloudCoordinatorTests {
                 "an incoming tombstone wins over a live local row even at a lower clock")
     }
 
+    // MARK: - Participant mode (cross-account sharing)
+
+    @Test("participant coordinator imports NOTHING — no migration receipt / household export")
+    func participantSkipsMigration() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 2))
+        try setup.save()
+        // Build a participant coordinator directly (the .participant factory builds a real engine on
+        // sharedCloudDatabase; here we inject the fake + isParticipant to test the no-migration path).
+        let ownerZone = CKRecordZone.ID(zoneName: SeedkeepZoneProvisioner.zoneName(householdID: hid), ownerName: "_ownerRecordName")
+        let coordinator = HouseholdCloudCoordinator(
+            engine: engine, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        await coordinator.sync()
+        #expect(engine.savedTypes.contains("MigrationReceipt") == false, "a participant must not write a migration receipt")
+        #expect(engine.savedTypes.contains("Household") == false, "a participant must not export the household root")
+    }
+
+    @Test("householdID derives from the (shared) zone name")
+    func householdIDFromZoneName() {
+        #expect(SeedkeepRecordNames.householdID(fromZoneName: "seedkeep-hh1") == "hh1")
+        #expect(SeedkeepRecordNames.householdID(fromZoneName: "seedkeep-ABC-123") == "ABC-123")
+        #expect(SeedkeepRecordNames.householdID(fromZoneName: "noprefix") == "noprefix")
+    }
+
     // MARK: - Account change (AC5)
 
     @Test("signOut wipes household SwiftData; signIn does not")

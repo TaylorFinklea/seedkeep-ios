@@ -34,10 +34,14 @@ final class HouseholdCloudCoordinator {
     private let householdCreatedAt: Int64
     private let householdUpdatedAt: Int64
     private let container: ModelContainer
-    /// Live provisioner — nil in tests (skips zone/share creation + the iCloud-availability gate).
+    /// Live provisioner — nil in tests AND for a participant (the owner owns the zone; a participant
+    /// never provisions or runs the iCloud-availability gate against its own private DB).
     private let provisioner: SeedkeepZoneProvisioner?
     /// Durable engine-state token URL (Application Support); deleted on account-change. nil in tests.
     private let stateURL: URL?
+    /// Participant mode: the engine runs on the OWNER's shared zone (sharedCloudDatabase). A
+    /// participant imports NOTHING (no migration) — it only reconciles the owner's zone into SwiftData.
+    private let isParticipant: Bool
 
     // MARK: Observable state (parity with SyncEngine for the banner + spinners)
     private(set) var isSyncing = false
@@ -75,7 +79,8 @@ final class HouseholdCloudCoordinator {
         householdUpdatedAt: Int64,
         container: ModelContainer,
         provisioner: SeedkeepZoneProvisioner?,
-        stateURL: URL?
+        stateURL: URL?,
+        isParticipant: Bool = false
     ) {
         self.engine = engine
         self.zoneID = zoneID
@@ -86,6 +91,7 @@ final class HouseholdCloudCoordinator {
         self.container = container
         self.provisioner = provisioner
         self.stateURL = stateURL
+        self.isParticipant = isParticipant
     }
 
     /// Production factory: real `HouseholdSyncEngine` on the owner's private DB, durable state token.
@@ -119,6 +125,35 @@ final class HouseholdCloudCoordinator {
             engine: engine, zoneID: zoneID, householdID: householdID, householdName: householdName,
             householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt,
             container: container, provisioner: provisioner, stateURL: stateURL)
+    }
+
+    /// Participant factory: sync the OWNER's shared zone on `sharedCloudDatabase`. No provisioner (the
+    /// owner owns the zone), no migration (a participant imports nothing), a SEPARATE durable state
+    /// token. `ownerZoneID.ownerName` is the OWNER's record name (NOT CKCurrentUserDefaultName).
+    static func participant(
+        ownerZoneID: CKRecordZone.ID,
+        container: ModelContainer
+    ) -> HouseholdCloudCoordinator {
+        let ckContainer = SeedkeepZoneProvisioner().container
+        let database = ckContainer.sharedCloudDatabase
+        // The household id is the zone's: zoneName is "seedkeep-<householdID>".
+        let householdID = SeedkeepRecordNames.householdID(fromZoneName: ownerZoneID.zoneName)
+
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent("HouseholdSync", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Separate token from the owner scope so the shared-zone change cursor never corrupts the
+        // (parked) solo owner zone's.
+        let stateURL = dir.appendingPathComponent("engine-state-shared-\(ownerZoneID.zoneName).json")
+
+        let engine = HouseholdSyncEngine(
+            database: database, zoneID: ownerZoneID, store: HouseholdLocalStore(),
+            stateURL: stateURL, automaticSync: false)
+
+        return HouseholdCloudCoordinator(
+            engine: engine, zoneID: ownerZoneID, householdID: householdID, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0,
+            container: container, provisioner: nil, stateURL: stateURL, isParticipant: true)
     }
 
     // MARK: - Sync entry point
@@ -204,7 +239,9 @@ final class HouseholdCloudCoordinator {
         }
         try await engine.fetchChanges()
         try drainPendingApplies()
-        try await migrateIfNeeded()
+        // A participant imports NOTHING — it only reconciles the owner's shared zone into SwiftData.
+        // Migration (exporting the local graph + writing the receipt) is the OWNER's one-time job.
+        if !isParticipant { try await migrateIfNeeded() }
         started = true
     }
 

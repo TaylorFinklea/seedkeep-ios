@@ -421,4 +421,11 @@ public enum SeedkeepRecordNames {
 
     /// Deterministic zone name: `seedkeep-<householdID>` (G10 — two devices racing converge).
     public static func zoneName(householdID: String) -> String { "seedkeep-\(householdID)" }
+
+    /// Reverse of `zoneName` — recover the householdID from a (shared) zone's name. A participant
+    /// derives the owner's householdID this way (the zone name is the only identity it has).
+    public static func householdID(fromZoneName zoneName: String) -> String {
+        let prefix = "seedkeep-"
+        return zoneName.hasPrefix(prefix) ? String(zoneName.dropFirst(prefix.count)) : zoneName
+    }
 }

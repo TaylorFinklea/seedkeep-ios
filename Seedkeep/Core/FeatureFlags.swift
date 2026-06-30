@@ -26,10 +26,18 @@ enum FeatureFlags {
     /// 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
     /// (additive, reversible); flipping OFF returns to server sync.
     static let cloudKitHouseholdSyncKey = "seedkeep.flag.cloudKitHouseholdSync"
+    /// DEFAULT ON (2026-06-29 cutover): CloudKit is now the default household-sync path. Resolution:
+    ///   1. a value the user EXPLICITLY set (Settings toggle, on or off) is always honored — kill-switch;
+    ///   2. else default ON in production, but OFF under the TEST host so the legacy-server-path suites
+    ///      (which call `syncAll` and assert the household feeds) keep exercising that path until AC4
+    ///      tears it down. A test can still opt into either via `setCloudKitHouseholdSync`.
     static var cloudKitHouseholdSyncEnabled: Bool {
-        UserDefaults.standard.bool(forKey: cloudKitHouseholdSyncKey)   // default false
+        if let explicit = UserDefaults.standard.object(forKey: cloudKitHouseholdSyncKey) as? Bool { return explicit }
+        return !isRunningUnitTests
     }
     static func setCloudKitHouseholdSync(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)
     }
+    /// True when the app is hosting a unit-test bundle (XCTest is linked + loaded only then).
+    private static let isRunningUnitTests = NSClassFromString("XCTestCase") != nil
 }
