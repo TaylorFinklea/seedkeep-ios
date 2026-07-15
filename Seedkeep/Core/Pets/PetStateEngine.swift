@@ -48,14 +48,14 @@ public enum PetStateEngine {
     ) -> [Transition] {
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<LocalPlantingEvent>(
-            predicate: #Predicate { event in
+            predicate: #Predicate<LocalPlantingEvent> { event in
                 event.householdID == householdID
                     && event.deletedAt == nil
-                    && event.completedAt == nil
-                    && event.petSeed != nil
             }
         )
-        let events = (try? context.fetch(descriptor)) ?? []
+        let events = ((try? context.fetch(descriptor)) ?? []).filter {
+            $0.completedAt == nil && $0.petSeed != nil
+        }
         var transitions: [Transition] = []
         for event in events {
             if let t = tick(event: event, context: context, now: now) {

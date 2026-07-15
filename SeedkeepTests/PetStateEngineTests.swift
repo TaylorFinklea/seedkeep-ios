@@ -509,6 +509,67 @@ struct PetStateEngineTests {
         #expect(t == nil)
     }
 
+    @Test("tickAll excludes completed, deleted, non-pet, and other-household plantings")
+    func tickAllOnlyTicksActivePets() {
+        let container = Self.makeContainer()
+        let context = ModelContext(container)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let nowMs = Self.msFor(now)
+
+        _ = Self.insertEvent(
+            id: "pe_tick_all_active",
+            daysAgo: 21,
+            now: now,
+            context: context
+        )
+        _ = Self.insertEvent(
+            id: "pe_tick_all_completed",
+            daysAgo: 21,
+            now: now,
+            context: context,
+            completedAt: nowMs
+        )
+        let deleted = Self.insertEvent(
+            id: "pe_tick_all_deleted",
+            daysAgo: 21,
+            now: now,
+            context: context
+        )
+        deleted.deletedAt = nowMs
+        let nonPet = LocalPlantingEvent(
+            id: "pe_tick_all_nonpet",
+            householdID: Self.householdID,
+            kindRaw: "sowing",
+            plannedFor: "2026-01-01",
+            createdAt: nowMs,
+            updatedAt: nowMs,
+            petSeed: nil
+        )
+        let otherHousehold = LocalPlantingEvent(
+            id: "pe_tick_all_other_household",
+            householdID: "hh_other",
+            kindRaw: "sowing",
+            plannedFor: "2026-01-01",
+            createdAt: Self.msFor(now.addingTimeInterval(-21 * 86_400)),
+            updatedAt: Self.msFor(now.addingTimeInterval(-21 * 86_400)),
+            petSeed: "seed_pe_tick_all_other_household"
+        )
+        context.insert(nonPet)
+        context.insert(otherHousehold)
+        try? context.save()
+
+        let transitions = PetStateEngine.tickAll(
+            householdID: Self.householdID,
+            container: container,
+            now: now
+        )
+
+        #expect(transitions == [.aliveToWilted(eventID: "pe_tick_all_active")])
+        let snapshotDescriptor = FetchDescriptor<LocalPetMoodSnapshot>()
+        let snapshots = (try? context.fetch(snapshotDescriptor)) ?? []
+        #expect(snapshots.map(\.plantingEventID) == ["pe_tick_all_active"])
+    }
+
     // MARK: - performSideEffects: departing → departed fires the depart RPC
 
     @Test("performSideEffects(departingToDeparted:) POSTs /depart and upserts LocalPetDeparture")
