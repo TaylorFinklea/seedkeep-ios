@@ -42,6 +42,7 @@ public final class SyncEngine {
     /// User-readable rendering of the first failure from the last sync
     /// pass, via `humanizeError`. `nil` after a clean pass.
     public private(set) var lastHumanizedError: String?
+    public var onLocalHouseholdMutation: (() -> Void)?
 
     public init(client: SeedkeepClient, container: ModelContainer) {
         self.client = client
@@ -480,6 +481,7 @@ public final class SyncEngine {
            let merged = Self.mergedPatchJSON(base: existing.payloadJSON, overlay: payloadString) {
             existing.payloadJSON = merged
             try context.save()
+            noteLocalHouseholdMutation()
             return
         }
         context.insert(LocalPendingWrite(
@@ -489,6 +491,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
     }
 
     /// Shallow JSON-object merge: overlay keys (including JSON null —
@@ -637,6 +640,10 @@ public final class SyncEngine {
 
     // MARK: - Optimistic write entrypoints (called by views)
 
+    private func noteLocalHouseholdMutation() {
+        onLocalHouseholdMutation?()
+    }
+
     public func enqueueCreateLocation(name: String, sortOrder: Int = 0, householdID: String) throws -> LocalLocation {
         // The local id rides the create payload (contract decision 7,
         // seeds pattern) so the server stores it verbatim and queued
@@ -655,6 +662,7 @@ public final class SyncEngine {
         context.insert(local)
         context.insert(pending)
         try context.save()
+        noteLocalHouseholdMutation()
         return local
     }
 
@@ -686,6 +694,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
     }
 
     public func enqueueCreateTag(name: String, color: String?, householdID: String) throws -> LocalTag {
@@ -703,6 +712,7 @@ public final class SyncEngine {
         context.insert(local)
         context.insert(pending)
         try context.save()
+        noteLocalHouseholdMutation()
         return local
     }
 
@@ -737,6 +747,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
     }
 
     public func enqueueCreateSeed(_ input: SeedkeepClient.CreateSeedInput, householdID: String) throws -> LocalSeed {
@@ -774,6 +785,7 @@ public final class SyncEngine {
         context.insert(local)
         context.insert(pending)
         try context.save()
+        noteLocalHouseholdMutation()
         return local
     }
 
@@ -840,6 +852,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
     }
 
     // MARK: - Beds (Phase 2)
@@ -872,6 +885,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
         return local
     }
 
@@ -906,6 +920,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
     }
 
     // MARK: - Planting events (Phase 2)
@@ -969,6 +984,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
         // Phase 4 C — schedule a local "Planned for today" reminder. No-op
         // when the user has notifications off; permission check happens
         // inside the call.
@@ -1029,6 +1045,7 @@ public final class SyncEngine {
             createdAt: now
         ))
         try context.save()
+        noteLocalHouseholdMutation()
         // Phase 4 C — drop any pending reminder for this event.
         // Phase 5.1.4 — also drop any pet notifications for this event.
         Task { @MainActor in

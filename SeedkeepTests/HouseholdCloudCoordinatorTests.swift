@@ -25,6 +25,8 @@ struct HouseholdCloudCoordinatorTests {
         var onAccountChange: ((HouseholdAccountChange) -> Void)?
         private(set) var savedRecords: [CKRecord] = []
         private(set) var deletedIDs: [CKRecord.ID] = []
+        private(set) var fetchChangesCallCount = 0
+        private(set) var sendUntilDrainedCallCount = 0
         var pendingFetch: ([CKRecord], [CKRecord.ID]) = ([], [])
         var hasPendingRecordChanges = false
         var drainGate: DrainGate?
@@ -36,6 +38,7 @@ struct HouseholdCloudCoordinatorTests {
         func save(_ record: CKRecord) { store.setRecord(record); savedRecords.append(record) }
         func delete(_ recordID: CKRecord.ID) { store.removeRecord(recordID); deletedIDs.append(recordID) }
         func fetchChanges() async throws {
+            fetchChangesCallCount += 1
             if fetchFailuresRemaining > 0 { fetchFailuresRemaining -= 1; throw fetchError }
             let (mods, dels) = pendingFetch
             pendingFetch = ([], [])
@@ -45,6 +48,7 @@ struct HouseholdCloudCoordinatorTests {
             onFetchedChanges?(mods, dels)
         }
         func sendUntilDrained(maxPasses: Int) async throws {
+            sendUntilDrainedCallCount += 1
             if let drainGate { await drainGate.waitForDrain() }
         }
 
@@ -246,6 +250,81 @@ struct HouseholdCloudCoordinatorTests {
         try setup.save()
         await coordinator.sync()
         #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" }, "a local edit must be pushed")
+    }
+
+    @Test("save nudges a local edit through sync and commits synced state")
+    func saveNudgesLocalEdit() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        coordinator.pushDebounceIntervalNanoseconds = 0
+        await coordinator.sync()
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1,
+                               source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+
+        await coordinator.save()
+        await coordinator.awaitPendingImmediacy()
+
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" },
+                "save must push the local edit through the coordinator")
+        let url = HouseholdCloudCoordinator.ownerSyncedStateURL(householdID: hid)
+        let data = try Data(contentsOf: url)
+        let state = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(state["seed:s1"] != nil, "immediacy push must commit per-record synced state")
+    }
+
+    @Test("save coalesces a burst into one sync push")
+    func saveCoalescesBurst() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        coordinator.pushDebounceIntervalNanoseconds = 1_000_000
+        await coordinator.sync()
+        let baselineFetches = engine.fetchChangesCallCount
+        let baselineDrains = engine.sendUntilDrainedCallCount
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1,
+                               source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+
+        await coordinator.save()
+        await coordinator.save()
+        await coordinator.save()
+        await coordinator.awaitPendingImmediacy()
+
+        #expect(engine.savedRecords.filter { $0.recordID.recordName == "seed:s1" }.count == 1,
+                "a burst of nudges must push the dirty record once")
+        #expect(engine.fetchChangesCallCount == baselineFetches + 1,
+                "a burst of nudges must run one reconcile pass")
+        #expect(engine.sendUntilDrainedCallCount == baselineDrains + 1,
+                "a burst of nudges must drain once")
+    }
+
+    @Test("wipe cancels a pending save nudge")
+    func wipeCancelsPendingSave() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        coordinator.pushDebounceIntervalNanoseconds = 1_000_000_000
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1,
+                               source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+
+        await coordinator.save()
+        let pending = try #require(coordinator.pendingImmediacyTaskForTesting())
+        coordinator.handleAccountChange(.signOut)
+        await pending.value
+
+        #expect(engine.savedRecords.isEmpty, "a wiped coordinator must not push a queued nudge")
     }
 
     @Test("echo exclusion: a record applied from remote this pass is not re-pushed")

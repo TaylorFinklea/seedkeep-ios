@@ -73,6 +73,8 @@ final class HouseholdCloudCoordinator {
     /// Bumped by `wipeAndClear` so an in-flight `sync()` resuming after an await can detect that the
     /// account changed mid-pass and bail instead of operating on wiped/abandoned state.
     private var epoch = 0
+    private var pushDebounceTask: Task<Void, Never>?
+    var pushDebounceIntervalNanoseconds: UInt64 = 1_500_000_000
 
     init(
         engine: HouseholdRecordSyncing,
@@ -154,6 +156,33 @@ final class HouseholdCloudCoordinator {
     }
 
     // MARK: - Sync entry point
+
+    /// Schedule a coalesced push through the normal reconcile path.
+    func save() async {
+        pushDebounceTask?.cancel()
+        let armedEpoch = epoch
+        pushDebounceTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: self.pushDebounceIntervalNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, self.epoch == armedEpoch else { return }
+            let ran = await self.sync()
+            if !Task.isCancelled, self.epoch == armedEpoch, !ran {
+                await self.save()
+            }
+        }
+    }
+
+    func awaitPendingImmediacy() async {
+        await pushDebounceTask?.value
+    }
+
+    func pendingImmediacyTaskForTesting() -> Task<Void, Never>? {
+        pushDebounceTask
+    }
 
     /// Reconcile one pass: ensure started (provision + migrate once), pull + project, push dirty.
     /// Never throws — surfaces failures via `lastHumanizedError` (mirrors SyncEngine's contract so
@@ -405,6 +434,8 @@ final class HouseholdCloudCoordinator {
         _ = buffer.drain()
         appliedSinceLastPush.removeAll()
         started = false
+        pushDebounceTask?.cancel()
+        pushDebounceTask = nil
         epoch += 1   // invalidate any in-flight sync() pass that resumes after this wipe
     }
 

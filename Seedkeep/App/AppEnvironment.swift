@@ -134,6 +134,7 @@ public final class AppEnvironment {
         self.apiKeys = apiKeys
         self.subscriptions = subscriptions
         self.weatherWarnings = weatherWarnings
+        sync.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
         // Phase 4C — wire `NotificationCenter.default` observers
         // (active-plantings debounce + system-timezone-change). The
         // service is idempotent so a second start() is a no-op.
@@ -276,6 +277,13 @@ public final class AppEnvironment {
             // tab-back-in doesn't burn a WeatherKit fetch.
             _ = await weatherWarnings.refreshAllIfStale(reason: .foreground)
         }
+    }
+
+    private func noteHouseholdMutation() {
+        guard FeatureFlags.cloudKitHouseholdSyncEnabled,
+              case .signedIn(_, let household) = auth.state else { return }
+        let coordinator = ensureCloudCoordinator(household: household)
+        Task { await coordinator.save() }
     }
 
     // R1 — the CloudKit household coordinator, built lazily on first use when the flag is on and a
