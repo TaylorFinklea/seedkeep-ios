@@ -20,7 +20,9 @@ enum FeatureFlags {
     ///
     /// Runtime-toggleable via UserDefaults (NOT a compile-time constant) so a TestFlight build can
     /// opt in ON-DEVICE (Settings ▸ Sync ▸ "CloudKit sync (beta)") without a new build, with an
-    /// instant kill-switch, while the unit suite + production both run with the safe default (false).
+    /// instant kill-switch. The test-only compilation condition used by the release gate lets the
+    /// suite run both the legacy OFF lane and the shipping default-ON lane without changing release
+    /// behavior.
     /// When ON, `SyncEngine.syncAll` skips the 7 household feeds + flushPending (else double-sync);
     /// `catalogCorrections` (R3) stays on the server; assistant threads are gated with Sprout while
     /// CloudKit is active. See the 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
@@ -28,12 +30,19 @@ enum FeatureFlags {
     static let cloudKitHouseholdSyncKey = "seedkeep.flag.cloudKitHouseholdSync"
     /// DEFAULT ON (2026-06-29 cutover): CloudKit is now the default household-sync path. Resolution:
     ///   1. a value the user EXPLICITLY set (Settings toggle, on or off) is always honored — kill-switch;
-    ///   2. else default ON in production, but OFF under the TEST host so the legacy-server-path suites
-    ///      (which call `syncAll` and assert the household feeds) keep exercising that path until AC4
-    ///      tears it down. A test can still opt into either via `setCloudKitHouseholdSync`.
+    ///   2. under the explicitly test-scoped ON compilation condition, XCTest uses the shipping
+    ///      default; otherwise XCTest keeps the legacy OFF default deterministic;
+    ///   3. outside XCTest, the default is ON.
     static var cloudKitHouseholdSyncEnabled: Bool {
         if let explicit = UserDefaults.standard.object(forKey: cloudKitHouseholdSyncKey) as? Bool { return explicit }
-        return !isRunningUnitTests
+        if isRunningUnitTests {
+            #if SEEDKEEP_TEST_CLOUDKIT_ON
+            return true
+            #else
+            return false
+            #endif
+        }
+        return true
     }
     static func setCloudKitHouseholdSync(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)

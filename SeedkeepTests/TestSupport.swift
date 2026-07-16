@@ -94,6 +94,14 @@ final class CatalogRouterMockURLProtocol: URLProtocol, @unchecked Sendable {
         return Self.capturedRequests.compactMap { $0.url?.path }
     }
 
+    static func capturedMethodPaths() -> [(method: String, path: String)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Self.capturedRequests.map {
+            (method: $0.httpMethod ?? "", path: $0.url?.path ?? "")
+        }
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 

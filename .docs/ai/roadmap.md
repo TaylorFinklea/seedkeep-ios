@@ -20,6 +20,7 @@ iOS client for Seedkeep. Phase 1 ships a household seed library with offline-fir
 - [x] Per-seed Type field with `LibraryView` "Group by type" toggle (build 16)
 - [x] **Smart planting window** (Phase B, merged to `main` 2026-05-20) — server-driven recommendations: home-ZIP location, `RecommendationStore`, `WeatherKitRefiner`, `RecommendationPanel`, four UI surfaces (Library dot, seed detail, planting event, "What to plant" view). Replaced the old local `SowRecommendation` engine. Not yet TestFlight-cut (gated on the Phase A server deploy + a 0.2.0 build).
 - [ ] **R1 core-shared CRUD capability gate** — iOS hides Sprout/MCP entry points and blocks assistant background/detail requests in `a7e8bf0`; existing MCP/OAuth credentials remain executable at the server boundary pending `seedkeep-6wm` / `seedkeep-27d.9`.
+- [x] **Production-default CloudKit release gate** — shared package/simulator gate with explicit legacy OFF regression and production-default ON routing contract (`seedkeep-n91`, 2026-07-15).
 - [x] **R1 photo capability gate** — CloudKit-active owner, participant, and rollback modes preserve photo metadata/server objects while hiding server-backed seed/journal photo bytes, galleries, uploads, and deletes; flag OFF retains the existing paths.
 - [ ] **Extension-calendar integration** (regional planting calendars from state cooperative-extension feeds) — deferred to 0.3.0+ per the smart-planting-window spec.
 - [ ] **TestFlight feedback triage** — pull tester feedback / crash logs from App Store Connect for builds 11–16.

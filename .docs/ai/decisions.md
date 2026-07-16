@@ -169,3 +169,13 @@
 **Decision**: Capture the reconcile epoch in each fetched callback batch; a projection drains only its own epoch and irreversibly discards all other batches. Fence startup, fetch/apply, migration, and push continuations after every suspension point. Retire the current `CKSyncEngine` generation synchronously at sign-out/account-switch and reject staging until cleanup explicitly rearms its replacement; `.signIn` is not an abandonment boundary and does not invalidate the epoch. Make household and outbox cleanup throwing. Write a cleanup-pending marker beside the engine token before the MainActor cleanup hop, preserve it across every failure, and clear it only after rows, outbox, token, and synced-state cleanup all succeed. A fresh coordinator that sees the marker permits “Sync now” only to retry cleanup before CloudKit work resumes.
 
 **Rationale**: A return-only epoch check cannot protect against callback data that arrives after a wipe, and an in-memory retry bit cannot survive process death. Binding the generation to the callback closes the projection handoff; retiring the engine closes the staging gap before the MainActor runs; the write-ahead marker makes the same precondition survive relaunch. Together they prevent old-account rows, migration receipts, pending deletes, or queued CKSyncEngine state from leaking into a replacement account.
+
+## 2026-07-15 — Release gates select the CloudKit production default with a test-only compile condition
+
+**Context**: XCTest-hosted app tests historically resolve the CloudKit flag OFF so legacy server-path regressions remain deterministic, while shipping app code must default ON. Shell environment variables are not forwarded by `xcodebuild` into the simulator test runner.
+
+**Decision**: Keep explicit UserDefaults precedence, production default ON, and ordinary XCTest default OFF. The shared gate's ON lane passes the visibly test-scoped `SEEDKEEP_TEST_CLOUDKIT_ON` Swift compilation condition and compiles only its production-default contract suite; the OFF lane runs the legacy suite.
+
+**Alternatives considered**: Shell environment variables; changing the release default; making all existing tests CloudKit-aware in one migration.
+
+**Rationale**: The compile condition crosses the xcodebuild-to-test-runner boundary reliably, cannot affect a normal release build, and makes a missing or zero-test ON lane fail closed.

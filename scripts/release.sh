@@ -82,17 +82,8 @@ fi
 
 # ---------- run tests before mutating anything ----------
 if [[ "$SKIP_TESTS" == "false" ]]; then
-    step "Running tests (xcodebuild test)"
-    # -parallel-testing-enabled NO: shared-singleton Swift Testing suites
-    # (CatalogCorrectionNotifier / NotificationCenter) flake under cross-suite
-    # parallelism; serializing makes it deterministic. Matches CI.
-    xcodebuild \
-        -project "$REPO_ROOT/Seedkeep.xcodeproj" \
-        -scheme "Seedkeep" \
-        -destination 'platform=iOS Simulator,name=iPhone 16' \
-        -parallel-testing-enabled NO \
-        test 2>&1 | grep -E "Test Suite|FAILED|error:|Executed [0-9]+" | tail -5
-    # xcodebuild exits non-zero on test failure, which kills the script via set -e.
+    step "Running release-quality test gate"
+    "$REPO_ROOT/scripts/test-gate.sh"
 else
     echo "[release] WARNING: skipping tests (--skip-tests)"
 fi
