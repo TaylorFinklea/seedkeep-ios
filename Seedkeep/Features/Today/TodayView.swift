@@ -86,6 +86,29 @@ struct TodayView: View {
     }
 }
 
+enum TodayHouseholdScope {
+    static func events(_ rows: [LocalPlantingEvent], householdID: String) -> [LocalPlantingEvent] {
+        rows.filter { $0.householdID == householdID }
+    }
+
+    static func seeds(_ rows: [LocalSeed], householdID: String) -> [LocalSeed] {
+        rows.filter { $0.householdID == householdID }
+    }
+
+    static func journals(_ rows: [LocalJournalEntry], householdID: String) -> [LocalJournalEntry] {
+        rows.filter { $0.householdID == householdID }
+    }
+
+    static func departures(
+        _ rows: [LocalPetDeparture],
+        belongingTo events: [LocalPlantingEvent],
+        householdID: String
+    ) -> [LocalPetDeparture] {
+        let eventIDs = Set(events.filter { $0.householdID == householdID }.map(\.id))
+        return rows.filter { $0.deletedAt == nil && eventIDs.contains($0.plantingEventID) }
+    }
+}
+
 // MARK: - TodayQueryView (date-bucketed child)
 
 /// Child view that holds the date-dependent `@Query` predicates.
@@ -106,6 +129,35 @@ private struct TodayQueryView: View {
     @Query private var departures: [LocalPetDeparture]
 
     @Binding var showHomeLocationSheet: Bool
+
+    private var activeDueEvents: [LocalPlantingEvent] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return TodayHouseholdScope.events(dueEvents, householdID: householdID)
+    }
+
+    private var activeSeeds: [LocalSeed] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return TodayHouseholdScope.seeds(seeds, householdID: householdID)
+    }
+
+    private var activeLiveCandidates: [LocalPlantingEvent] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return TodayHouseholdScope.events(liveCandidates, householdID: householdID)
+    }
+
+    private var activeDepartures: [LocalPetDeparture] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return TodayHouseholdScope.departures(
+            departures,
+            belongingTo: activeLiveCandidates,
+            householdID: householdID
+        )
+    }
+
+    private var activeRecentJournal: [LocalJournalEntry] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return TodayHouseholdScope.journals(recentJournal, householdID: householdID)
+    }
 
     init(todayString: String, yesterdayString: String, showHomeLocationSheet: Binding<Bool>) {
         let today = todayString
@@ -172,8 +224,8 @@ private struct TodayQueryView: View {
     /// first; stable tiebreak by createdAt ascending.
     @MainActor
     private var livePets: [LocalPlantingEvent] {
-        let depIDs = Set(departures.filter { $0.deletedAt == nil }.map { $0.plantingEventID })
-        return liveCandidates
+        let depIDs = Set(activeDepartures.map { $0.plantingEventID })
+        return activeLiveCandidates
             .filter { $0.petSeed != nil && !depIDs.contains($0.id) }
             .sorted { lhs, rhs in
                 let lr = moodRank(lhs.petMoodLabel)
@@ -306,7 +358,7 @@ private struct TodayQueryView: View {
             Rubric(text: "to be sown today")
                 .padding(.horizontal, 4)
 
-            if dueEvents.isEmpty {
+            if activeDueEvents.isEmpty {
                 if appEnv.sync.isSyncing {
                     VStack(spacing: 8) {
                         ProgressView()
@@ -327,7 +379,7 @@ private struct TodayQueryView: View {
                         .padding(.top, 4)
                 }
             } else {
-                ForEach(dueEvents.prefix(6)) { event in
+                ForEach(activeDueEvents.prefix(6)) { event in
                     SowingRow(event: event, seed: seedFor(eventID: event.id))
                 }
             }
@@ -336,9 +388,9 @@ private struct TodayQueryView: View {
 
     private func seedFor(eventID: String) -> LocalSeed? {
         // Match the planting event's seed_id; fall back to nil if absent.
-        guard let evt = dueEvents.first(where: { $0.id == eventID }),
+        guard let evt = activeDueEvents.first(where: { $0.id == eventID }),
               let sid = evt.seedID else { return nil }
-        return seeds.first(where: { $0.id == sid })
+        return activeSeeds.first(where: { $0.id == sid })
     }
 
     // MARK: - Margin handwritten note
@@ -354,7 +406,7 @@ private struct TodayQueryView: View {
 
     private var marginEntry: LocalJournalEntry? {
         guard let householdID = appEnv.activeGardenHouseholdID else { return nil }
-        return recentJournal.first { $0.householdID == householdID }
+        return activeRecentJournal.first { $0.householdID == householdID }
     }
 }
 
