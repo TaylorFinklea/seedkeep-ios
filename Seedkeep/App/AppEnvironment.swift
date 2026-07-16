@@ -406,10 +406,23 @@ public final class AppEnvironment {
         do {
             let flow = SeedkeepShareFlow()
             let zoneID = try await flow.acceptZoneWideShare(metadata)
-            HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+            let coordinator = cloudCoordinator ?? {
+                guard case .signedIn(_, let household) = auth.state else { return nil }
+                return ensureCloudCoordinator(household: household)
+            }()
+            if let coordinator {
+                coordinator.wipeAndClear()
+                guard !coordinator.requiresWipeRetry else {
+                    if let message = coordinator.lastHumanizedError { presentBanner(message) }
+                    PendingShareInbox.shared.deposit(metadata)
+                    return
+                }
+            } else {
+                try HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+            }
             // Reset the shared-zone token so the rebuilt participant coordinator does a FULL re-fetch
             // (re-adopting a previously-left share would otherwise resume a stale cursor → empty store).
-            HouseholdCloudCoordinator.resetStateToken(
+            try HouseholdCloudCoordinator.resetStateToken(
                 at: HouseholdCloudCoordinator.participantStateTokenURL(ownerZoneID: zoneID)
             )
             saveParticipantMarker(ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
@@ -427,14 +440,37 @@ public final class AppEnvironment {
     /// Leave the shared household: clear the marker + wipe the shared local data + drop the participant
     /// coordinator so the next sync rebuilds the OWNER coordinator (the user's own zone re-syncs).
     func leaveSharedHousehold() async {
-        clearParticipantMarker()
-        HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+        let signedInHousehold: HouseholdDTO?
+        if case .signedIn(_, let household) = auth.state { signedInHousehold = household }
+        else { signedInHousehold = nil }
+        let coordinator = cloudCoordinator ?? signedInHousehold.map { ensureCloudCoordinator(household: $0) }
+        if let coordinator {
+            coordinator.wipeAndClear()
+            guard !coordinator.requiresWipeRetry else {
+                if let message = coordinator.lastHumanizedError { presentBanner(message) }
+                return
+            }
+        } else {
+            do {
+                try HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+            } catch {
+                surfaceError(error)
+                return
+            }
+        }
         // Reset the OWNER token so the rebuilt owner coordinator does a FULL re-fetch — re-downloading
         // the user's own (parked, intact) CloudKit zone into the just-wiped SwiftData. Without this, the
         // resumed cursor sees no changes since adopt and the user's own garden would stay empty locally.
-        if case .signedIn(_, let household) = auth.state {
-            HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
+        do {
+            if let household = signedInHousehold {
+                try HouseholdCloudCoordinator.resetStateToken(
+                    at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
+            }
+        } catch {
+            surfaceError(error)
+            return
         }
+        clearParticipantMarker()
         cloudCoordinator = nil; cloudCoordinatorKey = nil
         await syncIfPossible()
     }

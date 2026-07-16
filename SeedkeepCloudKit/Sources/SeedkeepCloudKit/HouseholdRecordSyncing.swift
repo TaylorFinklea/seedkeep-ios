@@ -36,6 +36,10 @@ public protocol HouseholdRecordSyncing: AnyObject, Sendable {
     /// coordinator drain leftover pending changes (e.g. a transient failure re-enqueued last pass) even
     /// when this pass staged nothing new.
     var hasPendingRecordChanges: Bool { get }
+    /// Drops queued records and zone changes that belong to an abandoned iCloud account or garden.
+    func discardPendingChanges()
+    /// Re-enables staging only after the coordinator has completed the replacement account's wipe.
+    func activateForCurrentAccount()
 
     func save(_ record: CKRecord)
     func delete(_ recordID: CKRecord.ID)

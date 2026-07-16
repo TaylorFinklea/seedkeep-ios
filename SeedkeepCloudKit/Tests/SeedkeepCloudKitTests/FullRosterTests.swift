@@ -18,6 +18,22 @@ func deleteFailurePolicy() {
     #expect(HouseholdSyncEngine.deleteFailureDisposition(for: .permissionFailure) == .surface)
 }
 
+@Test("account lifecycle gate rejects work until explicitly reactivated")
+func accountLifecycleGate() {
+    let gate = HouseholdEngineLifecycleGate()
+    var executions = 0
+
+    #expect(gate.withActive { executions += 1 } != nil)
+    #expect(gate.retireIfActive(when: { true }, perform: {}) == true)
+    #expect(gate.withActive { executions += 1 } == nil)
+    #expect(executions == 1)
+
+    gate.activate()
+
+    #expect(gate.withActive { executions += 1 } != nil)
+    #expect(executions == 2)
+}
+
 // MARK: - Default LWW merge (all non-custom types)
 
 private func record(_ type: String, name: String, updatedAt: Int?, displayName: String) -> CKRecord {

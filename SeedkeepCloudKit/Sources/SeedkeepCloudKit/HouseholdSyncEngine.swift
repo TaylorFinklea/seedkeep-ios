@@ -20,6 +20,8 @@ public enum SyncEngineError: Error {
     /// `sendUntilDrained` ran its full budget with record changes still pending (a conflict storm or
     /// a persistent failure). Thrown so the caller treats the pass as incomplete, not a false success.
     case drainIncomplete
+    /// The coordinator retired this engine generation at an account/garden boundary.
+    case accountInvalidated
 }
 
 public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing {
@@ -48,6 +50,8 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private let log = Logger(subsystem: "app.seedkeep.cloud", category: "HouseholdSync")
 
     private var syncEngine: CKSyncEngine!
+    private let automaticSync: Bool
+    private let lifecycleGate = HouseholdEngineLifecycleGate()
     private var zoneEnsured = false
 
     /// Optional field-merger. When set, records whose type it `handles` are field-merged
@@ -105,6 +109,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         self.zoneID   = zoneID
         self.store    = store
         self.stateURL = stateURL
+        self.automaticSync = automaticSync
 
         var configuration = CKSyncEngine.Configuration(
             database: database,
@@ -116,20 +121,33 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
 
     // MARK: - Public mutation API
 
+    private func makeSyncEngine(stateSerialization: CKSyncEngine.State.Serialization?) -> CKSyncEngine {
+        var configuration = CKSyncEngine.Configuration(
+            database: database,
+            stateSerialization: stateSerialization,
+            delegate: self)
+        configuration.automaticallySync = automaticSync
+        return CKSyncEngine(configuration)
+    }
+
     /// Stage a record save: write it locally, then tell the engine it's pending.
     /// The zone is created lazily on the first save.
     public func save(_ record: CKRecord) {
-        store.setRecord(record)
-        if !zoneEnsured {
-            syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-            zoneEnsured = true
+        lifecycleGate.withActive {
+            store.setRecord(record)
+            if !zoneEnsured {
+                syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
+                zoneEnsured = true
+            }
+            syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
         }
-        syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
     }
 
     public func delete(_ recordID: CKRecord.ID) {
-        store.removeRecord(recordID)
-        syncEngine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+        lifecycleGate.withActive {
+            store.removeRecord(recordID)
+            syncEngine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+        }
     }
 
     /// Delete a record AND sweep its local CASCADE subtree (G5: CloudKit's `.deleteSelf`
@@ -150,15 +168,70 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
 
     /// Fetch remote changes then push local ones. Manual drive for deterministic tests.
     public func sync() async throws {
-        try await syncEngine.fetchChanges()
-        try await syncEngine.sendChanges()
+        let engine = try currentActiveEngine()
+        try await engine.fetchChanges()
+        try ensureCurrent(engine)
+        try await engine.sendChanges()
+        try ensureCurrent(engine)
     }
 
-    public func fetchChanges() async throws { try await syncEngine.fetchChanges() }
-    public func sendChanges() async throws { try await syncEngine.sendChanges() }
+    public func fetchChanges() async throws {
+        let engine = try currentActiveEngine()
+        try await engine.fetchChanges()
+        try ensureCurrent(engine)
+    }
+
+    public func sendChanges() async throws {
+        let engine = try currentActiveEngine()
+        try await engine.sendChanges()
+        try ensureCurrent(engine)
+    }
 
     public var hasPendingRecordChanges: Bool {
-        !syncEngine.state.pendingRecordZoneChanges.isEmpty
+        lifecycleGate.withActive { !syncEngine.state.pendingRecordZoneChanges.isEmpty } ?? false
+    }
+
+    /// Discard the outbound state that was staged for an account or shared-garden scope that is no
+    /// longer active. The coordinator has already erased its SwiftData source rows, so retaining these
+    /// IDs would let a later drain send deletes or saves into the replacement account.
+    public func discardPendingChanges() {
+        _ = retirePendingChanges(originatingFrom: nil)
+    }
+
+    public func activateForCurrentAccount() { lifecycleGate.activate() }
+
+    private func currentActiveEngine() throws -> CKSyncEngine {
+        guard let engine = lifecycleGate.withActive({ syncEngine! }) else {
+            throw SyncEngineError.accountInvalidated
+        }
+        return engine
+    }
+
+    private func ensureCurrent(_ engine: CKSyncEngine) throws {
+        guard lifecycleGate.withActive({ engine === syncEngine }) == true else {
+            throw SyncEngineError.accountInvalidated
+        }
+    }
+
+    @discardableResult
+    private func retirePendingChanges(originatingFrom origin: CKSyncEngine?) -> Bool {
+        lifecycleGate.retireIfActive(
+            when: { origin == nil || origin === self.syncEngine },
+            perform: {
+                let retiringEngine = self.syncEngine!
+                retiringEngine.state.remove(
+                    pendingRecordZoneChanges: retiringEngine.state.pendingRecordZoneChanges)
+                retiringEngine.state.remove(
+                    pendingDatabaseChanges: retiringEngine.state.pendingDatabaseChanges)
+                // A delegate event from the retiring engine can arrive after its queue was cleared.
+                // Replacing the engine plus the lifecycle gate makes every such callback inert.
+                self.syncEngine = self.makeSyncEngine(stateSerialization: nil)
+                self.zoneEnsured = false
+                self.failLock.lock()
+                self.attemptCounts.removeAll()
+                self.surfacedFailure = nil
+                self.failLock.unlock()
+            })
     }
 
     /// Send repeatedly until nothing is pending (G11: a serverRecordChanged re-enqueues
@@ -167,19 +240,28 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// budget is exhausted with changes still pending, so the caller does NOT report a false success
     /// or advance its watermark past records CloudKit never confirmed.
     public func sendUntilDrained(maxPasses: Int = 6) async throws {
+        let engine = try currentActiveEngine()
         failLock.lock(); surfacedFailure = nil; failLock.unlock()
         var lastError: Error?
         for pass in 0..<maxPasses {
             do {
-                try await syncEngine.sendChanges()
+                try await engine.sendChanges()
+                try ensureCurrent(engine)
                 // A permanent per-record failure is reported via the .sentRecordZoneChanges event
                 // (processed during sendChanges, NOT thrown) — surface it instead of a false success.
                 if let surfaced = takeSurfacedFailure() { throw surfaced }
-                if !hasPendingRecordChanges { return }
+                let pending = lifecycleGate.withActive {
+                    engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
+                } ?? false
+                if !pending { return }
             } catch {
                 lastError = error
+                try ensureCurrent(engine)
                 if let surfaced = takeSurfacedFailure() { throw surfaced }
-                if !hasPendingRecordChanges { throw error }
+                let pending = lifecycleGate.withActive {
+                    engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
+                } ?? false
+                if !pending { throw error }
                 if pass < maxPasses - 1 {
                     let hint = (error as? CKError)?.retryAfterSeconds ?? 0.5
                     let delay = min(max(0, hint), 2)   // cap so a foreground sync can't hang for long
@@ -187,8 +269,12 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                 }
             }
         }
+        try ensureCurrent(engine)
         if let surfaced = takeSurfacedFailure() { throw surfaced }
-        if hasPendingRecordChanges {
+        let pending = lifecycleGate.withActive {
+            engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
+        } ?? false
+        if pending {
             log.error("sendUntilDrained exhausted \(maxPasses, privacy: .public) passes — record changes STILL pending")
             throw lastError ?? SyncEngineError.drainIncomplete
         }
@@ -200,15 +286,31 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         _ context: CKSyncEngine.SendChangesContext,
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
-        let pending = syncEngine.state.pendingRecordZoneChanges.filter {
-            context.options.scope.contains($0)
-        }
-        return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { recordID in
+        guard let pending = lifecycleGate.withActive({
+            guard syncEngine === self.syncEngine else { return [CKSyncEngine.PendingRecordZoneChange]() }
+            return syncEngine.state.pendingRecordZoneChanges.filter {
+                context.options.scope.contains($0)
+            }
+        }), !pending.isEmpty else { return nil }
+        let batch = await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { recordID in
             self.store.record(for: recordID)
         }
+        guard lifecycleGate.withActive({ syncEngine === self.syncEngine }) == true else { return nil }
+        return batch
     }
 
     public func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
+        if case .accountChange(let change) = event {
+            handleAccountChange(change, originatingFrom: syncEngine)
+            return
+        }
+        lifecycleGate.withActive {
+            guard syncEngine === self.syncEngine else { return }
+            handleCurrentEvent(event, syncEngine: syncEngine)
+        }
+    }
+
+    private func handleCurrentEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) {
         switch event {
         case .stateUpdate(let update):
             Self.saveState(update.stateSerialization, to: stateURL)
@@ -280,8 +382,8 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             // pre-merge values forever (it authored the last write, so it never re-fetches them).
             if !saved.isEmpty { onFetchedChanges?(saved, []) }
 
-        case .accountChange(let change):
-            handleAccountChange(change)
+        case .accountChange:
+            break
 
         case .willFetchChanges, .didFetchChanges,
              .willSendChanges, .didSendChanges,
@@ -424,15 +526,21 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         }
     }
 
-    private func handleAccountChange(_ change: CKSyncEngine.Event.AccountChange) {
+    private func handleAccountChange(
+        _ change: CKSyncEngine.Event.AccountChange,
+        originatingFrom engine: CKSyncEngine
+    ) {
         switch change.changeType {
         case .signOut:
+            guard retirePendingChanges(originatingFrom: engine) else { return }
             store.removeAll()
             onAccountChange?(.signOut)
         case .switchAccounts:
+            guard retirePendingChanges(originatingFrom: engine) else { return }
             store.removeAll()
             onAccountChange?(.switchAccounts)
         case .signIn:
+            guard lifecycleGate.withActive({ engine === syncEngine }) == true else { return }
             onAccountChange?(.signIn)
         @unknown default:
             break
@@ -449,6 +557,37 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private static func saveState(_ serialization: CKSyncEngine.State.Serialization, to url: URL) {
         guard let data = try? JSONEncoder().encode(serialization) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+/// Serializes the narrow synchronous boundary where an account event retires one CKSyncEngine and
+/// the coordinator later rearms its replacement. No lock is held across an `await`.
+final class HouseholdEngineLifecycleGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = true
+
+    @discardableResult
+    func withActive<T>(_ body: () -> T) -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard active else { return nil }
+        return body()
+    }
+
+    @discardableResult
+    func retireIfActive(when predicate: () -> Bool, perform: () -> Void) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard active, predicate() else { return false }
+        active = false
+        perform()
+        return true
+    }
+
+    func activate() {
+        lock.lock()
+        active = true
+        lock.unlock()
     }
 }
 #endif

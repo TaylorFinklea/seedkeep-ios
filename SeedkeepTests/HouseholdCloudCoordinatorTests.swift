@@ -29,22 +29,35 @@ struct HouseholdCloudCoordinatorTests {
         private(set) var sendUntilDrainedCallCount = 0
         var pendingFetch: ([CKRecord], [CKRecord.ID]) = ([], [])
         var hasPendingRecordChanges = false
+        private var acceptsChanges = true
         var drainGate: DrainGate?
+        var fetchGate: FetchGate?
         var drainFailuresRemaining = 0
         /// Number of leading fetchChanges() calls that should throw `fetchError` (simulating a
         /// transient hiccup that clears on retry). Decrements per throw.
         var fetchFailuresRemaining = 0
         var fetchError: Error = URLError(.timedOut)
 
-        func save(_ record: CKRecord) { store.setRecord(record); savedRecords.append(record) }
+        func save(_ record: CKRecord) {
+            guard acceptsChanges else { return }
+            store.setRecord(record)
+            savedRecords.append(record)
+        }
         func delete(_ recordID: CKRecord.ID) {
+            guard acceptsChanges else { return }
             store.removeRecord(recordID)
             deletedIDs.append(recordID)
             hasPendingRecordChanges = true
         }
+        func discardPendingChanges() {
+            acceptsChanges = false
+            hasPendingRecordChanges = false
+        }
+        func activateForCurrentAccount() { acceptsChanges = true }
         func fetchChanges() async throws {
             fetchChangesCallCount += 1
             if fetchFailuresRemaining > 0 { fetchFailuresRemaining -= 1; throw fetchError }
+            if let fetchGate { await fetchGate.waitForFetch() }
             let (mods, dels) = pendingFetch
             pendingFetch = ([], [])
             guard !mods.isEmpty || !dels.isEmpty else { return }
@@ -63,6 +76,36 @@ struct HouseholdCloudCoordinatorTests {
         }
 
         var savedTypes: [String] { savedRecords.map(\.recordType) }
+    }
+
+    actor FetchGate {
+        private var started = false
+        private var released = false
+        private var startWaiter: CheckedContinuation<Void, Never>?
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        func waitForFetch() async {
+            started = true
+            startWaiter?.resume()
+            startWaiter = nil
+            guard !released else { return }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                releaseWaiter = continuation
+            }
+        }
+
+        func waitUntilStarted() async {
+            guard !started else { return }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                startWaiter = continuation
+            }
+        }
+
+        func release() {
+            released = true
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
     }
 
     actor DrainGate {
@@ -92,6 +135,18 @@ struct HouseholdCloudCoordinatorTests {
         }
     }
 
+    enum WipeFailure: Error, Sendable { case fetch, save }
+
+    @MainActor
+    final class WipeFault {
+        var failure: WipeFailure?
+
+        func wipe(_ container: ModelContainer) throws {
+            if let failure { throw failure }
+            try HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+        }
+    }
+
     // MARK: Helpers
 
     private func makeContainer() -> ModelContainer {
@@ -99,7 +154,9 @@ struct HouseholdCloudCoordinatorTests {
     }
 
     private func makeCoordinator(
-        engine: FakeEngine, container: ModelContainer, householdID: String
+        engine: FakeEngine, container: ModelContainer, householdID: String,
+        stateURL: URL? = nil,
+        wipeOperation: ((ModelContainer) throws -> Void)? = nil
     ) -> HouseholdCloudCoordinator {
         let zoneID = CKRecordZone.ID(
             zoneName: SeedkeepZoneProvisioner.zoneName(householdID: householdID),
@@ -107,7 +164,7 @@ struct HouseholdCloudCoordinatorTests {
         return HouseholdCloudCoordinator(
             engine: engine, zoneID: zoneID, householdID: householdID, householdName: "Test House",
             householdCreatedAt: 1, householdUpdatedAt: 1, container: container,
-            provisioner: nil, stateURL: nil)   // provisioner nil → skip live provisioning
+            provisioner: nil, stateURL: stateURL, wipeOperation: wipeOperation)   // provisioner nil → skip live provisioning
     }
 
     private func zoneID(_ householdID: String) -> CKRecordZone.ID {
@@ -856,6 +913,235 @@ struct HouseholdCloudCoordinatorTests {
 
     // MARK: - Account change (AC5)
 
+    @Test("owner: an old-account fetch held across a switch cannot repopulate SwiftData")
+    func ownerGatedFetchDoesNotRepopulateAfterAccountSwitch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+
+        engine.pendingFetch = ([remoteSeed(id: "old", householdID: hid, name: "Old account", updatedAt: 500)], [])
+        let gate = FetchGate()
+        engine.fetchGate = gate
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+
+        coordinator.handleAccountChange(.switchAccounts)
+        await gate.release()
+        _ = await syncTask.value
+        await coordinator.sync()
+
+        #expect(fetchSeed(ModelContext(container), "old") == nil,
+                "a fetch that began for the old account must not repopulate the wiped store")
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:old" } == false,
+                "an old-account record must never be exported after the switch")
+    }
+
+    @Test("participant: an old-account fetch held across a switch cannot repopulate SwiftData")
+    func participantGatedFetchDoesNotRepopulateAfterAccountSwitch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let ownerZone = CKRecordZone.ID(
+            zoneName: SeedkeepZoneProvisioner.zoneName(householdID: hid), ownerName: "owner-record-name")
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = HouseholdCloudCoordinator(
+            engine: engine, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        await coordinator.sync()
+
+        engine.pendingFetch = ([remoteSeed(id: "old", householdID: hid, name: "Old account", updatedAt: 500)], [])
+        let gate = FetchGate()
+        engine.fetchGate = gate
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+
+        coordinator.handleAccountChange(.switchAccounts)
+        await gate.release()
+        _ = await syncTask.value
+        await coordinator.sync()
+
+        #expect(fetchSeed(ModelContext(container), "old") == nil,
+                "a shared-zone fetch that began for the old account must not repopulate the wiped store")
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:old" } == false,
+                "an old-account shared-zone record must never be exported after the switch")
+    }
+
+    @Test("injected local wipe failures block sync until a successful retry", arguments: [WipeFailure.fetch, .save])
+    func failedWipeBlocksSyncUntilRetry(_ failure: WipeFailure) async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let fault = WipeFault()
+        let coordinator = makeCoordinator(
+            engine: engine, container: container, householdID: hid, wipeOperation: fault.wipe)
+        await coordinator.sync()
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(
+            id: "old", householdID: hid, state: .active, packetCount: 1,
+            source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        let fetchesBeforeFailure = engine.fetchChangesCallCount
+        let savesBeforeFailure = engine.savedRecords.count
+        fault.failure = failure
+
+        coordinator.handleAccountChange(.switchAccounts)
+        #expect(coordinator.requiresWipeRetry == true)
+        #expect(coordinator.lastHumanizedError != nil,
+                "the existing Settings error surface must make the retry requirement visible")
+
+        #expect(await coordinator.sync() == false,
+                "a failed cleanup retry must report that no sync pass ran")
+        #expect(engine.fetchChangesCallCount == fetchesBeforeFailure,
+                "an incomplete wipe must block replacement-account fetches")
+        #expect(engine.savedRecords.count == savesBeforeFailure,
+                "an incomplete wipe must block migration and push")
+
+        fault.failure = nil
+        engine.pendingFetch = ([remoteSeed(id: "replacement", householdID: hid, name: "New account", updatedAt: 600)], [])
+        await coordinator.sync()
+
+        #expect(coordinator.requiresWipeRetry == false)
+        #expect(fetchSeed(ModelContext(container), "old") == nil,
+                "a successful retry must remove the abandoned account's local rows")
+        #expect(fetchSeed(ModelContext(container), "replacement")?.customName == "New account",
+                "a successful retry must restore normal replacement-account sync")
+    }
+
+    @Test("a pending account cleanup survives relaunch and blocks CloudKit until retry succeeds")
+    func pendingAccountCleanupSurvivesRelaunch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let fault = WipeFault()
+        fault.failure = .fetch
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seedkeep-account-cleanup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stateURL = directory.appendingPathComponent("engine-state.json")
+        let cleanupMarkerURL = stateURL.appendingPathExtension("cleanup-pending")
+        try Data().write(to: cleanupMarkerURL, options: .atomic)
+
+        let coordinator = makeCoordinator(
+            engine: engine, container: container, householdID: hid,
+            stateURL: stateURL, wipeOperation: fault.wipe)
+
+        #expect(await coordinator.sync() == false,
+                "a relaunched coordinator must retry cleanup before any CloudKit pass")
+        #expect(coordinator.requiresWipeRetry == true)
+        #expect(engine.fetchChangesCallCount == 0)
+        #expect(FileManager.default.fileExists(atPath: cleanupMarkerURL.path))
+
+        fault.failure = nil
+        #expect(await coordinator.sync() == true)
+        #expect(coordinator.requiresWipeRetry == false)
+        #expect(engine.fetchChangesCallCount > 0)
+        #expect(FileManager.default.fileExists(atPath: cleanupMarkerURL.path) == false,
+                "the durable latch clears only after cleanup succeeds")
+    }
+
+    @Test("account cleanup discards queued engine changes before a replacement participant sync")
+    func accountCleanupDiscardsQueuedEngineChanges() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let ownerZone = CKRecordZone.ID(
+            zoneName: SeedkeepZoneProvisioner.zoneName(householdID: hid), ownerName: "owner-record-name")
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = HouseholdCloudCoordinator(
+            engine: engine, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        await coordinator.sync()
+        let drainsBeforeSwitch = engine.sendUntilDrainedCallCount
+        engine.hasPendingRecordChanges = true
+
+        coordinator.handleAccountChange(.switchAccounts)
+        #expect(engine.hasPendingRecordChanges == false,
+                "a replacement account must never inherit the old engine's queued record changes")
+
+        await coordinator.sync()
+        #expect(engine.sendUntilDrainedCallCount == drainsBeforeSwitch,
+                "a replacement participant sync must not drain an abandoned old-account queue")
+    }
+
+    @Test("a retired record-sync seam rejects staging until replacement-account cleanup completes")
+    func retiredRecordSyncSeamRejectsStagingUntilRearmed() {
+        let hid = "hh-\(UUID().uuidString)"
+        let engine = FakeEngine()
+        let abandoned = remoteSeed(
+            id: "abandoned", householdID: hid, name: "Old account", updatedAt: 500)
+
+        engine.discardPendingChanges()
+        engine.save(abandoned)
+
+        #expect(engine.savedRecords.isEmpty)
+        #expect(engine.store.record(for: abandoned.recordID) == nil,
+                "the MainActor wipe has not completed, so old rows must not stage into the replacement engine")
+        #expect(engine.hasPendingRecordChanges == false)
+
+        engine.activateForCurrentAccount()
+        engine.save(abandoned)
+
+        #expect(engine.savedRecords.map(\.recordID) == [abandoned.recordID],
+                "the coordinator must be able to rearm staging after cleanup completes")
+        #expect(engine.store.record(for: abandoned.recordID) != nil)
+    }
+
+    @Test("an account switch during migration does not record the old pass as complete")
+    func midMigrationAccountSwitchDoesNotMarkOldPassComplete() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "old", householdID: hid, state: .active, packetCount: 1,
+                               source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        let gate = DrainGate()
+        engine.drainGate = gate
+
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+        coordinator.handleAccountChange(.switchAccounts)
+        await gate.release()
+        _ = await syncTask.value
+
+        #expect(coordinator.initialUploadComplete == false,
+                "a migration that drained after an account switch must not mark the replacement account migrated")
+        #expect(fetchSeed(ModelContext(container), "old") == nil)
+    }
+
+    @Test("an account switch during migration drain does not restore migration state")
+    func midMigrationAccountSwitchDoesNotRestoreMigrationState() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(
+            id: "old", householdID: hid, state: .active, packetCount: 1,
+            source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        let stateURL = HouseholdCloudCoordinator.ownerSyncedStateURL(householdID: hid)
+        let gate = DrainGate()
+        engine.drainGate = gate
+
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+        coordinator.handleAccountChange(.switchAccounts)
+        await gate.release()
+        _ = await syncTask.value
+
+        #expect(coordinator.initialUploadComplete == false,
+                "an abandoned migration must not write its durable receipt marker after the wipe")
+        #expect(FileManager.default.fileExists(atPath: stateURL.path) == false,
+                "an abandoned migration must not recreate synced state after the wipe")
+        #expect(fetchSeed(ModelContext(container), "old") == nil)
+    }
+
     @Test("a stable drain commits synced state")
     func stableDrainCommitsSyncedState() async throws {
         let hid = "hh-\(UUID().uuidString)"
@@ -930,6 +1216,23 @@ struct HouseholdCloudCoordinatorTests {
         #expect((try? c.fetch(FetchDescriptor<LocalBed>()))?.isEmpty == true)
         #expect((try? c.fetch(FetchDescriptor<LocalCloudKitDeletion>()))?.isEmpty == true,
                 "an old account's unconfirmed delete must never replay into a replacement account")
+    }
+
+    @Test("a sign-in notification does not invalidate the active account epoch")
+    func signInNotificationKeepsCurrentEpoch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+
+        engine.onAccountChange?(.signIn)
+        engine.pendingFetch = ([remoteSeed(
+            id: "signed-in", householdID: hid, name: "Still active", updatedAt: 500)], [])
+
+        #expect(await coordinator.sync() == true)
+        #expect(fetchSeed(ModelContext(container), "signed-in")?.customName == "Still active",
+                "sign-in is not an abandonment boundary and must not poison future fetches")
     }
 
     @Test("wipeAndClear removes the durable per-record synced-state file")

@@ -35,11 +35,15 @@ final class HouseholdCloudCoordinator {
     private let householdCreatedAt: Int64
     private let householdUpdatedAt: Int64
     private let container: ModelContainer
+    private let wipeOperation: (ModelContainer) throws -> Void
     /// Live provisioner — nil in tests AND for a participant (the owner owns the zone; a participant
     /// never provisions or runs the iCloud-availability gate against its own private DB).
     private let provisioner: SeedkeepZoneProvisioner?
     /// Durable engine-state token URL (Application Support); deleted on account-change. nil in tests.
     private let stateURL: URL?
+    /// Write-ahead latch for account cleanup. If the process dies after an account event or during a
+    /// partial wipe, the next coordinator must finish cleanup before it can fetch or stage records.
+    private let cleanupMarkerURL: URL?
     /// Participant mode: the engine runs on the OWNER's shared zone (sharedCloudDatabase). A
     /// participant imports NOTHING (no migration) — it only reconciles the owner's zone into SwiftData.
     private let isParticipant: Bool
@@ -54,6 +58,9 @@ final class HouseholdCloudCoordinator {
     /// Raw error detail (CKError code / description) for the diagnostics row — distinct from the
     /// humanized banner string, mirroring SyncEngine.lastError. nil when the last pass succeeded.
     private(set) var lastErrorDetail: String?
+    /// True after an account-change cleanup fails; suppresses all CloudKit work until a subsequent
+    /// Sync now invocation completes the wipe.
+    private(set) var requiresWipeRetry = false
     /// Records currently mirrored in the CloudKit zone (in-memory store) — a rough "data is there"
     /// signal. NOTE: the store is rehydrated from CloudKit each launch, so it reads 0 until the first
     /// fetch this session (the Settings label says "this session" so 0 isn't misread as data loss).
@@ -87,7 +94,8 @@ final class HouseholdCloudCoordinator {
         container: ModelContainer,
         provisioner: SeedkeepZoneProvisioner?,
         stateURL: URL?,
-        isParticipant: Bool = false
+        isParticipant: Bool = false,
+        wipeOperation: ((ModelContainer) throws -> Void)? = nil
     ) {
         self.engine = engine
         self.zoneID = zoneID
@@ -96,12 +104,19 @@ final class HouseholdCloudCoordinator {
         self.householdCreatedAt = householdCreatedAt
         self.householdUpdatedAt = householdUpdatedAt
         self.container = container
+        self.wipeOperation = wipeOperation ?? Self.wipeHouseholdSwiftData
         self.provisioner = provisioner
         self.stateURL = stateURL
+        self.cleanupMarkerURL = stateURL.map(Self.accountCleanupMarkerURL(forStateURL:))
         self.isParticipant = isParticipant
         self.scopeID = isParticipant
             ? Self.participantScopeID(ownerZoneID: zoneID)
             : Self.ownerScopeID(householdID: householdID)
+        if let cleanupMarkerURL, FileManager.default.fileExists(atPath: cleanupMarkerURL.path) {
+            requiresWipeRetry = true
+            lastErrorDetail = "Pending CloudKit account cleanup from a previous launch."
+            lastHumanizedError = "CloudKit account cleanup is incomplete — tap Sync now to retry."
+        }
     }
 
     /// Production factory: real `HouseholdSyncEngine` on the owner's private DB, durable state token.
@@ -196,6 +211,10 @@ final class HouseholdCloudCoordinator {
     @discardableResult
     func sync() async -> Bool {
         guard !isSyncing else { return false }
+        if requiresWipeRetry {
+            wipeAndClear()
+            guard !requiresWipeRetry else { return false }
+        }
         isSyncing = true
         let passEpoch = epoch
         // Always reset the per-pass echo set, even if a stage throws before pushDirty clears it —
@@ -214,13 +233,13 @@ final class HouseholdCloudCoordinator {
                 // Don't record a fresh success for a pass the account-change abandoned mid-flight
                 // (runPass returns cleanly on epoch change) — that would stamp lastSyncedAt + clear a
                 // real prior error after the data was wiped.
-                guard passEpoch == epoch else { return true }
+                guard isCurrent(passEpoch) else { return true }
                 lastHumanizedError = nil
                 lastErrorDetail = nil
                 lastSyncedAt = Date()
                 return true
             } catch {
-                guard passEpoch == epoch else { return true }   // account changed mid-pass → abandon quietly
+                guard isCurrent(passEpoch) else { return true }   // account changed mid-pass → abandon quietly
                 if Self.isTransient(error), attempt < maxAttempts - 1 {
                     let delay = min(max(0, (error as? CKError)?.retryAfterSeconds ?? 0.5), 5)
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -236,66 +255,92 @@ final class HouseholdCloudCoordinator {
 
     /// One reconcile pass. Returns early (no throw) if the account changed mid-pass.
     private func runPass(_ passEpoch: Int) async throws {
-        try await ensureStarted()
-        guard passEpoch == epoch else { return }
-        try await pullAndApply()
-        guard passEpoch == epoch else { return }
+        guard isCurrent(passEpoch) else { return }
+        try await ensureStarted(passEpoch)
+        guard isCurrent(passEpoch) else { return }
+        try await pullAndApply(passEpoch)
+        guard isCurrent(passEpoch) else { return }
         // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
         // children locally so pushDirty propagates the tombstones (no server to cascade for us).
         try HouseholdCascade.apply(in: ModelContext(container), now: Int64(Date().timeIntervalSince1970 * 1000))
         try await pushDirty(passEpoch)
-        guard passEpoch == epoch else { return }
+        guard isCurrent(passEpoch) else { return }
         // Project any send-path merge results (serverRecordChanged → merged re-save) buffered during
         // pushDirty's drain into SwiftData this pass rather than waiting for the next.
-        try drainPendingApplies()
+        try drainPendingApplies(passEpoch)
     }
 
     // MARK: - Lifecycle
 
-    private func ensureStarted() async throws {
+    private func ensureStarted(_ passEpoch: Int) async throws {
         guard !started else { return }
         if let provisioner {
             let status = await accountStatus(provisioner.container)
+            guard isCurrent(passEpoch) else { return }
             accountStatusText = Self.describe(status)
             guard status == .available else { throw CoordinatorError.iCloudUnavailable(status ?? .couldNotDetermine) }
             try await provisioner.ensureZone(householdID: householdID)
+            guard isCurrent(passEpoch) else { return }
             let root = try await provisioner.ensureHousehold(householdID: householdID, name: householdName)
+            guard isCurrent(passEpoch) else { return }
             _ = try await provisioner.ensureShare(for: root, title: householdName)
+            guard isCurrent(passEpoch) else { return }
         }
+        guard isCurrent(passEpoch) else { return }
+        engine.activateForCurrentAccount()
         engine.merger = SeedkeepRecordMerger()
-        engine.onFetchedChanges = { [buffer] mods, dels in buffer.append(mods, dels) }
-        engine.onAccountChange = { [weak self] change in
+        engine.onFetchedChanges = { [buffer] mods, dels in buffer.append(mods, dels, epoch: passEpoch) }
+        let cleanupMarkerURL = cleanupMarkerURL
+        engine.onAccountChange = { [weak self, buffer] change in
+            switch change {
+            case .signOut, .switchAccounts:
+                // Persist before the MainActor hop. A process death in that scheduling window must
+                // relaunch into cleanup, never into a replacement-account fetch over old local rows.
+                if let cleanupMarkerURL {
+                    try? HouseholdCloudCoordinator.markAccountCleanupPending(at: cleanupMarkerURL)
+                }
+                buffer.invalidate(epoch: passEpoch)
+            case .signIn:
+                break
+            }
             Task { @MainActor in self?.handleAccountChange(change) }
         }
         try await engine.fetchChanges()
-        try drainPendingApplies()
+        guard isCurrent(passEpoch) else { return }
+        try drainPendingApplies(passEpoch)
         if isParticipant {
             // Accept-race close (SimmerSmith's participantInitialFetch): right after accept the server
             // often hasn't materialized the shared zone yet and the accepting device gets no push — so
             // fetch once more after a short backoff so the first sync doesn't leave an empty garden.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard isCurrent(passEpoch) else { return }
             try await engine.fetchChanges()
-            try drainPendingApplies()
+            guard isCurrent(passEpoch) else { return }
+            try drainPendingApplies(passEpoch)
             // drainPendingApplies records synced-state for every fetched record, so it carries AC6
             // for participants across relaunch. A full-graph reseed here would suppress an unpushed
             // local edit (uxc.3).
         } else {
             // A participant imports NOTHING; migration (export + receipt) is the OWNER's one-time job.
-            try await migrateIfNeeded()
+            try await migrateIfNeeded(passEpoch)
         }
+        guard isCurrent(passEpoch) else { return }
         started = true
     }
 
     /// Pull remote changes then project the buffered records into SwiftData.
-    private func pullAndApply() async throws {
+    private func pullAndApply(_ passEpoch: Int) async throws {
+        guard isCurrent(passEpoch) else { return }
         try await engine.fetchChanges()
-        try drainPendingApplies()
+        guard isCurrent(passEpoch) else { return }
+        try drainPendingApplies(passEpoch)
     }
 
     // MARK: - Project fetched remote → SwiftData (with the updatedAt-LWW gate)
 
-    private func drainPendingApplies() throws {
-        let (mods, dels) = buffer.drain()
+    private func drainPendingApplies(_ passEpoch: Int) throws {
+        guard isCurrent(passEpoch) else { return }
+        let (mods, dels) = buffer.drain(for: passEpoch)
         guard !mods.isEmpty || !dels.isEmpty else { return }
         let context = ModelContext(container)
         let activeScopeID = scopeID
@@ -343,7 +388,7 @@ final class HouseholdCloudCoordinator {
     /// No shared ceiling var, so a peer's clock can never raise a threshold that strands a later
     /// genuine local edit at a lower clock (the clock-skew-poisoning fix, expressed per-record).
     private func pushDirty(_ passEpoch: Int) async throws {
-        guard passEpoch == epoch else { return }
+        guard isCurrent(passEpoch) else { return }
         let context = ModelContext(container)
         let activeScopeID = scopeID
         let deletionIntents = try context.fetch(
@@ -384,7 +429,7 @@ final class HouseholdCloudCoordinator {
         if pushed > 0 || !deletionIntents.isEmpty || engine.hasPendingRecordChanges {
             try await engine.sendUntilDrained(maxPasses: 6)
         }
-        guard passEpoch == epoch else { return }
+        guard isCurrent(passEpoch) else { return }
         if !deletionIntents.isEmpty {
             for intent in deletionIntents {
                 HouseholdApplyGate.deleteLocal(recordName: intent.recordName, into: context)
@@ -417,7 +462,8 @@ final class HouseholdCloudCoordinator {
 
     // MARK: - One-time migration (AC3)
 
-    private func migrateIfNeeded() async throws {
+    private func migrateIfNeeded(_ passEpoch: Int) async throws {
+        guard isCurrent(passEpoch) else { return }
         // DURABLE relaunch guard: the executor's receipt check reads the engine's IN-MEMORY store,
         // which an incremental fetch never re-populates on relaunch — so without this, the whole graph
         // would re-export on every launch. The marker (UserDefaults, per household) survives relaunch.
@@ -430,6 +476,7 @@ final class HouseholdCloudCoordinator {
         let plan = HouseholdMigrationPlanner.plan(input, completedAt: now)
         let result = try await HouseholdMigrationExecutor.run(
             into: engine, zoneID: zoneID, householdID: householdID, plan: plan)
+        guard isCurrent(passEpoch) else { return }
         // Migrated now (or the receipt was already present from a peer) → never migrate again on this
         // device for this household. (Cleared on account change in wipeAndClear.)
         hasMigratedDurable = true
@@ -455,50 +502,77 @@ final class HouseholdCloudCoordinator {
     /// an account SWITCH additionally rebuilds this coordinator (different householdID → fresh state
     /// token + synced-state file in `AppEnvironment.ensureCloudCoordinator`).
     func wipeAndClear() {
-        Self.wipeHouseholdSwiftData(container: container)
-        let context = ModelContext(container)
-        let activeScopeID = scopeID
-        if let intents = try? context.fetch(
-            FetchDescriptor<LocalCloudKitDeletion>(predicate: #Predicate {
-                $0.scopeID == activeScopeID
-            })
-        ) {
-            for intent in intents { context.delete(intent) }
-            try? context.save()
+        var markerError: Error?
+        if let cleanupMarkerURL {
+            do { try Self.markAccountCleanupPending(at: cleanupMarkerURL) }
+            catch { markerError = error }
         }
-        if let stateURL { try? FileManager.default.removeItem(at: stateURL) }
-        try? FileManager.default.removeItem(at: syncedStateURL)
-        syncedStateCache = [:]
-        hasMigratedDurable = false
-        _ = buffer.drain()
+        epoch += 1   // invalidate every in-flight CloudKit boundary before local cleanup begins
+        engine.discardPendingChanges()
+        buffer.discardAll()
         appliedSinceLastPush.removeAll()
         started = false
         pushDebounceTask?.cancel()
         pushDebounceTask = nil
-        epoch += 1   // invalidate any in-flight sync() pass that resumes after this wipe
+
+        if let markerError {
+            recordCleanupFailure(markerError)
+            return
+        }
+
+        do {
+            try wipeOperation(container)
+            let context = ModelContext(container)
+            let activeScopeID = scopeID
+            let intents = try context.fetch(
+                FetchDescriptor<LocalCloudKitDeletion>(predicate: #Predicate {
+                    $0.scopeID == activeScopeID
+                })
+            )
+            for intent in intents { context.delete(intent) }
+            try context.save()
+            if let stateURL { try Self.removeItemIfPresent(at: stateURL) }
+            try Self.removeItemIfPresent(at: syncedStateURL)
+            if let cleanupMarkerURL { try Self.removeItemIfPresent(at: cleanupMarkerURL) }
+            syncedStateCache = [:]
+            hasMigratedDurable = false
+            requiresWipeRetry = false
+        } catch {
+            recordCleanupFailure(error)
+        }
+    }
+
+    private func recordCleanupFailure(_ error: Error) {
+        requiresWipeRetry = true
+        lastErrorDetail = Self.errorDetail(error)
+        lastHumanizedError = "CloudKit account cleanup is incomplete — tap Sync now to retry."
     }
 
     /// Delete every household-zone-mirrored SwiftData row (the 10 garden types). Standalone + static so
     /// the share-adopt / leave flows can clean-swap the local store without an existing coordinator.
     /// Device-local-only models (LocalForecastSnapshot / LocalPetMoodSnapshot) are intentionally left.
-    static func wipeHouseholdSwiftData(container: ModelContainer) {
+    static func wipeHouseholdSwiftData(container: ModelContainer) throws {
         let context = ModelContext(container)
-        wipeAll(LocalSeed.self, context)
-        wipeAll(LocalLocation.self, context)
-        wipeAll(LocalTag.self, context)
-        wipeAll(LocalSeedPhoto.self, context)
-        wipeAll(LocalBed.self, context)
-        wipeAll(LocalPlantingEvent.self, context)
-        wipeAll(LocalJournalEntry.self, context)
-        wipeAll(LocalJournalEntryPhoto.self, context)
-        wipeAll(LocalJournalChecklistItem.self, context)
-        wipeAll(LocalPetDeparture.self, context)
-        try? context.save()
+        try wipeAll(LocalSeed.self, context)
+        try wipeAll(LocalLocation.self, context)
+        try wipeAll(LocalTag.self, context)
+        try wipeAll(LocalSeedPhoto.self, context)
+        try wipeAll(LocalBed.self, context)
+        try wipeAll(LocalPlantingEvent.self, context)
+        try wipeAll(LocalJournalEntry.self, context)
+        try wipeAll(LocalJournalEntryPhoto.self, context)
+        try wipeAll(LocalJournalChecklistItem.self, context)
+        try wipeAll(LocalPetDeparture.self, context)
+        try context.save()
     }
 
-    private static func wipeAll<T: PersistentModel>(_ type: T.Type, _ context: ModelContext) {
-        let all = (try? context.fetch(FetchDescriptor<T>())) ?? []
-        for m in all { context.delete(m) }
+    private static func wipeAll<T: PersistentModel>(_ type: T.Type, _ context: ModelContext) throws {
+        for model in try context.fetch(FetchDescriptor<T>()) { context.delete(model) }
+    }
+
+    private static func removeItemIfPresent(at url: URL) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
     }
 
     // MARK: - Persisted per-household state (survives relaunch)
@@ -555,6 +629,10 @@ final class HouseholdCloudCoordinator {
     /// Seed synced-state for every record in the local graph with its REAL tombstoned bit (not always
     /// false — a pre-migration soft-delete would otherwise re-push immediately). Used only for the
     /// owner's genuine one-time migration export; participants seed through the apply-path writer.
+    private func isCurrent(_ passEpoch: Int) -> Bool {
+        passEpoch == epoch && !buffer.isInvalidated(epoch: passEpoch)
+    }
+
     private func seedSyncedState(from input: HouseholdMigrationPlanner.Input) {
         var seed: [String: SyncedRecordState] = [:]
         for d in dirtyRecords(from: input) {
@@ -592,6 +670,12 @@ final class HouseholdCloudCoordinator {
             "engine-state-shared-\(durableScopeComponent(participantScopeID(ownerZoneID: ownerZoneID))).json"
         )
     }
+    nonisolated static func accountCleanupMarkerURL(forStateURL stateURL: URL) -> URL {
+        stateURL.appendingPathExtension("cleanup-pending")
+    }
+    nonisolated private static func markAccountCleanupPending(at url: URL) throws {
+        try Data("pending".utf8).write(to: url, options: .atomic)
+    }
     static func ownerSyncedStateURL(householdID: String) -> URL {
         householdSyncDir().appendingPathComponent("synced-state-\(cloudKitEnvironmentTag)-\(householdID).json")
     }
@@ -622,7 +706,7 @@ final class HouseholdCloudCoordinator {
     /// Delete a durable state token so the next coordinator on that scope does a FULL re-fetch. Used by
     /// adopt/leave: those wipe local SwiftData, so the rebuilt coordinator must re-download (an
     /// incremental fetch on the parked token would return nothing → an empty local store).
-    static func resetStateToken(at url: URL) { try? FileManager.default.removeItem(at: url) }
+    static func resetStateToken(at url: URL) throws { try removeItemIfPresent(at: url) }
 
     /// A CloudKit error worth auto-retrying inline (transient infra) vs surfacing (permanent).
     static func isTransient(_ error: Error) -> Bool {
@@ -726,22 +810,45 @@ private final class ResumeOnce: @unchecked Sendable {
 /// Off-main, thread-safe staging buffer for records the engine fetch callback hands over (the
 /// callback fires on CKSyncEngine's queue; ModelContext is @MainActor). Drained on the main actor.
 final class PendingApplyBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var mods: [CKRecord] = []
-    private var dels: [CKRecord.ID] = []
-
-    func append(_ newMods: [CKRecord], _ newDels: [CKRecord.ID]) {
-        lock.lock(); defer { lock.unlock() }
-        mods += newMods
-        dels += newDels
+    private struct Batch {
+        let epoch: Int
+        let mods: [CKRecord]
+        let dels: [CKRecord.ID]
     }
 
-    func drain() -> (mods: [CKRecord], dels: [CKRecord.ID]) {
+    private let lock = NSLock()
+    private var batches: [Batch] = []
+
+    private var invalidatedEpochs = Set<Int>()
+
+    func append(_ newMods: [CKRecord], _ newDels: [CKRecord.ID], epoch: Int) {
         lock.lock(); defer { lock.unlock() }
-        let result = (mods, dels)
-        mods = []
-        dels = []
-        return result
+        guard !invalidatedEpochs.contains(epoch) else { return }
+        batches.append(Batch(epoch: epoch, mods: newMods, dels: newDels))
+    }
+
+    /// Synchronously fences callbacks before the MainActor receives the account-change task.
+    func invalidate(epoch: Int) {
+        lock.lock(); defer { lock.unlock() }
+        invalidatedEpochs.insert(epoch)
+        batches.removeAll { $0.epoch == epoch }
+    }
+
+    func isInvalidated(epoch: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return invalidatedEpochs.contains(epoch)
+    }
+
+    func drain(for epoch: Int) -> (mods: [CKRecord], dels: [CKRecord.ID]) {
+        lock.lock(); defer { lock.unlock() }
+        let matching = batches.filter { $0.epoch == epoch }
+        batches.removeAll()
+        return (matching.flatMap(\.mods), matching.flatMap(\.dels))
+    }
+
+    func discardAll() {
+        lock.lock(); defer { lock.unlock() }
+        batches.removeAll()
     }
 }
 #endif
