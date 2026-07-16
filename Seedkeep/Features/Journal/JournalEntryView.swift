@@ -196,26 +196,24 @@ struct JournalEntryView: View {
                let local = try? modelContext.fetch(
                 FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == id })
                ).first {
-                // PATCH existing entry. Use `.some(value)` (including
-                // `.some(nil)` to clear) so the encoder actually emits
-                // the field — plain `nil` would mean "omit / no change".
-                var patch = SeedkeepClient.UpdateJournalEntryInput()
-                patch.occurredOn = dateStr
-                patch.body = entryBody
-                patch.seedId = .some(seedID)
-                patch.bedId = .some(bedID)
-                patch.plantingEventId = .some(plantingEventID)
-                let dto = try await appEnv.client.updateJournalEntry(local.id, patch)
-                dto.apply(to: local)
-                try modelContext.save()
+                try await appEnv.journal.update(
+                    local,
+                    occurredOn: dateStr,
+                    body: entryBody,
+                    seedID: seedID,
+                    bedID: bedID,
+                    plantingEventID: plantingEventID,
+                    householdID: appEnv.activeGardenHouseholdID
+                )
             } else {
-                // Create new entry via the store.
                 _ = try await appEnv.journal.create(
                     occurredOn: dateStr,
                     body: entryBody,
                     seedID: seedID,
                     bedID: bedID,
-                    plantingEventID: plantingEventID)
+                    plantingEventID: plantingEventID,
+                    householdID: appEnv.activeGardenHouseholdID
+                )
             }
             dismiss()
         } catch {
@@ -265,9 +263,11 @@ struct JournalEntryView: View {
         let text = newItemText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
         do {
-            let dto = try await appEnv.client.addChecklistItem(entryId: entryID, text: text)
-            modelContext.insert(dto.makeLocal())
-            try modelContext.save()
+            _ = try await appEnv.journal.addChecklistItem(
+                entryID: entryID,
+                text: text,
+                householdID: appEnv.activeGardenHouseholdID
+            )
             newItemText = ""
         } catch {
             errorMessage = error.localizedDescription
@@ -277,11 +277,11 @@ struct JournalEntryView: View {
     private func toggle(_ item: LocalJournalChecklistItem) async {
         let newCompleted = !item.completed
         do {
-            var patch = SeedkeepClient.UpdateChecklistItemInput()
-            patch.completed = newCompleted
-            let dto = try await appEnv.client.updateChecklistItem(item.id, patch)
-            dto.apply(to: item)
-            try modelContext.save()
+            try await appEnv.journal.updateChecklistItem(
+                item,
+                completed: newCompleted,
+                householdID: appEnv.activeGardenHouseholdID
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -289,9 +289,10 @@ struct JournalEntryView: View {
 
     private func deleteItem(_ item: LocalJournalChecklistItem) async {
         do {
-            try await appEnv.client.deleteChecklistItem(item.id)
-            modelContext.delete(item)
-            try modelContext.save()
+            try await appEnv.journal.deleteChecklistItem(
+                item,
+                householdID: appEnv.activeGardenHouseholdID
+            )
         } catch {
             errorMessage = error.localizedDescription
         }

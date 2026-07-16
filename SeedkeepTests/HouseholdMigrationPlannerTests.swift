@@ -73,15 +73,59 @@ func fetchInputCrossHouseholdIsolation() throws {
     context.insert(LocalSeed(id: "stale", householdID: "hh-stale", state: .active, packetCount: 9, source: .store, createdAt: 1, updatedAt: 2))
     context.insert(LocalBed(id: "b1", householdID: "hh1", name: "North", createdAt: 1, updatedAt: 2))
     context.insert(LocalBed(id: "bStale", householdID: "hh-stale", name: "Foreign", createdAt: 1, updatedAt: 2))
+    context.insert(LocalPlantingEvent(
+        id: "pe1", householdID: "hh1", kindRaw: "sowing", plannedFor: "2026-07-15",
+        createdAt: 1, updatedAt: 2
+    ))
+    context.insert(LocalPlantingEvent(
+        id: "peStale", householdID: "hh-stale", kindRaw: "sowing", plannedFor: "2026-07-15",
+        createdAt: 1, updatedAt: 2
+    ))
+    context.insert(LocalJournalEntry(
+        id: "je1", householdID: "hh1", occurredOn: "2026-07-15", body: "Active",
+        seedID: nil, bedID: nil, plantingEventID: nil, createdAt: 1, updatedAt: 2, deletedAt: nil
+    ))
+    context.insert(LocalJournalEntry(
+        id: "jeStale", householdID: "hh-stale", occurredOn: "2026-07-15", body: "Parked",
+        seedID: nil, bedID: nil, plantingEventID: nil, createdAt: 1, updatedAt: 2, deletedAt: nil
+    ))
+    context.insert(LocalJournalChecklistItem(
+        id: "ci1", entryID: "je1", text: "Active", completed: false, sortOrder: 0, updatedAt: 2
+    ))
+    context.insert(LocalJournalChecklistItem(
+        id: "ciStale", entryID: "jeStale", text: "Parked", completed: false, sortOrder: 0, updatedAt: 2
+    ))
+    context.insert(LocalJournalEntryPhoto(
+        id: "jp1", entryID: "je1", storageKey: "active", sortOrder: 0,
+        width: nil, height: nil, createdAt: 1, updatedAt: 2
+    ))
+    context.insert(LocalJournalEntryPhoto(
+        id: "jpStale", entryID: "jeStale", storageKey: "parked", sortOrder: 0,
+        width: nil, height: nil, createdAt: 1, updatedAt: 2
+    ))
+    context.insert(LocalPetDeparture(
+        plantingEventID: "pe1", reason: "active", createdAt: 1, updatedAt: 2, departedAt: 2
+    ))
+    context.insert(LocalPetDeparture(
+        plantingEventID: "peStale", reason: "parked", createdAt: 1, updatedAt: 2, departedAt: 2
+    ))
     try context.save()
 
     let input = HouseholdMigrationPlanner.fetchInput(
         from: context, householdID: "hh1", householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 2)
     #expect(input.seeds.map(\.id) == ["s1"], "the stale household's seed must not be pulled")
     #expect(input.beds.map(\.id) == ["b1"], "the stale household's bed must not be pulled")
+    #expect(input.journalEntries.map(\.id) == ["je1"])
+    #expect(input.checklistItems.map(\.id) == ["ci1"])
+    #expect(input.journalEntryPhotos.map(\.id) == ["jp1"])
+    #expect(input.petDepartures.map(\.plantingEventID) == ["pe1"])
     let plan = HouseholdMigrationPlanner.plan(input, completedAt: 1)
     #expect(!plan.contains { $0.recordName == "seed:stale" })
     #expect(!plan.contains { $0.recordName == "bed:bStale" })
+    #expect(!plan.contains { $0.recordName == "journalEntry:jeStale" })
+    #expect(!plan.contains { $0.recordName == "journalChecklistItem:ciStale" })
+    #expect(!plan.contains { $0.recordName == "journalEntryPhoto:jpStale" })
+    #expect(!plan.contains { $0.recordName == "petDeparture:peStale" })
 }
 
 @Test("plan: cascade children are ordered AFTER their parents")

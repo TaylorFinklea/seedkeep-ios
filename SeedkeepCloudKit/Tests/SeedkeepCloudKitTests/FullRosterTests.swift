@@ -9,6 +9,15 @@ import CloudKit
 
 private let zoneID = CKRecordZone.ID(zoneName: "test-zone", ownerName: CKCurrentUserDefaultName)
 
+@Test("delete failure policy retries transient errors, accepts absence, and surfaces permanent failures")
+func deleteFailurePolicy() {
+    #expect(HouseholdSyncEngine.deleteFailureDisposition(for: .unknownItem) == .confirmedAbsent)
+    #expect(HouseholdSyncEngine.deleteFailureDisposition(for: .zoneNotFound) == .confirmedAbsent)
+    #expect(HouseholdSyncEngine.deleteFailureDisposition(for: .networkFailure) == .retry)
+    #expect(HouseholdSyncEngine.deleteFailureDisposition(for: .batchRequestFailed) == .retry)
+    #expect(HouseholdSyncEngine.deleteFailureDisposition(for: .permissionFailure) == .surface)
+}
+
 // MARK: - Default LWW merge (all non-custom types)
 
 private func record(_ type: String, name: String, updatedAt: Int?, displayName: String) -> CKRecord {

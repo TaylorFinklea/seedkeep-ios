@@ -62,7 +62,10 @@ struct RetrospectiveCard: View {
 
     private func load() async {
         do {
-            response = try await appEnv.journal.retrospective(on: Self.todayAnchor)
+            response = try await appEnv.journal.retrospective(
+                on: Self.todayAnchor,
+                householdID: appEnv.activeGardenHouseholdID
+            )
         } catch {
             response = nil
         }

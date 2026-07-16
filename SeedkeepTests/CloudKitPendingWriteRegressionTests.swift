@@ -3,6 +3,7 @@ import SwiftData
 import Testing
 @testable import Seedkeep
 import SeedkeepKit
+import SeedkeepCloudKit
 
 @MainActor
 @Suite("CloudKit household sync pending writes", .serialized)
@@ -287,6 +288,253 @@ struct CloudKitPendingWriteRegressionTests {
         }
     }
 
+    @Test("CloudKit journal and checklist mutations stay local under the active garden")
+    func cloudKitJournalAndChecklistMutationsStayLocal() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let container = makeTestContainer(name: "cloudKitLocalJournalMutations")
+        let store = JournalStore(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var saveSignals = 0
+        store.onLocalHouseholdMutation = { saveSignals += 1 }
+        let activeGardenID = "owner-active-garden"
+        let activeScopeID = HouseholdCloudCoordinator.ownerScopeID(householdID: activeGardenID)
+        store.cloudKitScopeIDProvider = { activeScopeID }
+        let previousYear = Calendar.current.component(.year, from: Date()) - 1
+
+        await store.refresh()
+        let entry = try await store.create(
+            occurredOn: "\(previousYear)-07-15",
+            body: "Created locally",
+            householdID: activeGardenID
+        )
+        try await store.update(
+            entry,
+            occurredOn: "\(previousYear)-07-15",
+            body: "Updated locally",
+            seedID: nil,
+            bedID: nil,
+            plantingEventID: nil,
+            householdID: activeGardenID
+        )
+        let checklist = try await store.addChecklistItem(
+            entryID: entry.id,
+            text: "Water",
+            householdID: activeGardenID
+        )
+        try await store.updateChecklistItem(
+            checklist,
+            completed: true,
+            householdID: activeGardenID
+        )
+
+        let retrospective = try await store.retrospective(on: "07-15", householdID: activeGardenID)
+        #expect(retrospective.years.map(\.year) == [previousYear])
+        #expect(retrospective.years.first?.entries.map(\.body) == ["Updated locally"])
+
+        try await store.deleteChecklistItem(checklist, householdID: activeGardenID)
+        try await store.softDelete(entry, householdID: activeGardenID)
+        let retrospectiveAfterDelete = try await store.retrospective(
+            on: "07-15",
+            householdID: activeGardenID
+        )
+
+        let context = ModelContext(container)
+        let entryID = entry.id
+        let savedEntry = try #require(
+            context.fetch(FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == entryID })).first
+        )
+        #expect(savedEntry.householdID == activeGardenID)
+        #expect(savedEntry.deletedAt != nil)
+        #expect(retrospectiveAfterDelete.years.isEmpty)
+        #expect(try context.fetch(FetchDescriptor<LocalJournalChecklistItem>()).isEmpty)
+        let deletionIntents = try context.fetch(FetchDescriptor<LocalCloudKitDeletion>())
+        #expect(deletionIntents.count == 1)
+        #expect(deletionIntents.first?.householdID == activeGardenID)
+        #expect(deletionIntents.first?.scopeID == activeScopeID)
+        #expect(deletionIntents.first?.recordName == SeedkeepRecordNames.journalChecklistItem(checklist.id))
+        #expect(saveSignals == 6)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty,
+                "CloudKit journal/checklist mutations and refreshes must not hit the legacy server")
+    }
+
+    @Test("journal creates use the active owner, participant, and rollback garden IDs")
+    func journalCreateFollowsActiveGardenModes() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        let modes: [(signedIn: String, zone: String?, cloudKit: Bool, active: String)] = [
+            ("owner-server-household", nil, true, "owner-server-household"),
+            ("participant-server-household", "seedkeep-owner-shared-household", true, "owner-shared-household"),
+            ("participant-server-household", "seedkeep-owner-shared-household", false, "participant-server-household")
+        ]
+
+        for (index, mode) in modes.enumerated() {
+            FeatureFlags.setCloudKitHouseholdSync(mode.cloudKit)
+            let active = ActiveGardenContext.householdID(
+                signedInHouseholdID: mode.signedIn,
+                participantZoneName: mode.zone,
+                cloudKitSyncEnabled: mode.cloudKit
+            )
+            #expect(active == mode.active)
+            let response = Data(#"{"ok":true,"data":{"entry":{"id":"server-entry","householdId":"participant-server-household","occurredOn":"2026-07-15","body":"Rollback","seedId":null,"bedId":null,"plantingEventId":null,"createdAt":1,"updatedAt":1,"deletedAt":null}}}"#.utf8)
+            let session = CatalogRouterMockURLProtocol.makeSession(
+                routes: ["POST /api/journal": response],
+                fallbackBody: Data(),
+                fallbackStatus: mode.cloudKit ? 500 : 200
+            )
+            let store = JournalStore(
+                client: SeedkeepClient(
+                    configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                    bearerToken: "test"
+                ),
+                container: makeTestContainer(name: "journalActiveGardenMode-\(index)")
+            )
+
+            let entry = try await store.create(
+                occurredOn: "2026-07-15",
+                body: "Mode",
+                householdID: active
+            )
+
+            #expect(entry.householdID == mode.active)
+            #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty == mode.cloudKit)
+        }
+    }
+
+    @Test("CloudKit journal mutations reject parked-household rows")
+    func cloudKitJournalMutationsRejectParkedRows() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let container = makeTestContainer(name: "cloudKitJournalParkedRows")
+        let context = ModelContext(container)
+        let parked = LocalJournalEntry(
+            id: "parked-entry", householdID: "parked-solo-household",
+            occurredOn: "2026-07-15", body: "Parked",
+            seedID: nil, bedID: nil, plantingEventID: nil,
+            createdAt: 1, updatedAt: 2, deletedAt: nil
+        )
+        let parkedItem = LocalJournalChecklistItem(
+            id: "parked-item", entryID: parked.id, text: "Parked",
+            completed: false, sortOrder: 0, updatedAt: 2
+        )
+        context.insert(parked)
+        context.insert(parkedItem)
+        try context.save()
+
+        let store = JournalStore(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var mutationSignals = 0
+        store.onLocalHouseholdMutation = { mutationSignals += 1 }
+
+        await Self.expectInactiveGarden {
+            try await store.update(
+                parked,
+                occurredOn: parked.occurredOn,
+                body: "Wrong garden",
+                seedID: nil,
+                bedID: nil,
+                plantingEventID: nil,
+                householdID: "active-shared-household"
+            )
+        }
+        await Self.expectInactiveGarden {
+            try await store.deleteChecklistItem(
+                parkedItem,
+                householdID: "active-shared-household"
+            )
+        }
+
+        #expect(mutationSignals == 0)
+        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalJournalChecklistItem>()).count == 1)
+        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalCloudKitDeletion>()).isEmpty)
+    }
+
+    @Test("flag OFF preserves every journal and checklist server mutation path")
+    func flagOffPreservesJournalAndChecklistServerPaths() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(false)
+
+        let entry = #"{"id":"entry-1","householdId":"server-household","occurredOn":"2025-07-15","body":"Server entry","seedId":null,"bedId":null,"plantingEventId":null,"createdAt":1,"updatedAt":2,"deletedAt":null}"#
+        let updated = #"{"id":"entry-1","householdId":"server-household","occurredOn":"2025-07-15","body":"Updated","seedId":null,"bedId":null,"plantingEventId":null,"createdAt":1,"updatedAt":3,"deletedAt":null}"#
+        let item = #"{"id":"item-1","entryId":"entry-1","text":"Water","completed":false,"sortOrder":0,"updatedAt":2}"#
+        let completed = #"{"id":"item-1","entryId":"entry-1","text":"Water","completed":true,"sortOrder":0,"updatedAt":3}"#
+        let routes: [String: Data] = [
+            "POST /api/journal": Data("{\"ok\":true,\"data\":{\"entry\":\(entry)}}".utf8),
+            "PATCH /api/journal/entry-1": Data("{\"ok\":true,\"data\":{\"entry\":\(updated)}}".utf8),
+            "POST /api/journal/entry-1/checklist": Data("{\"ok\":true,\"data\":{\"item\":\(item)}}".utf8),
+            "PATCH /api/journal/checklist/item-1": Data("{\"ok\":true,\"data\":{\"item\":\(completed)}}".utf8),
+            "DELETE /api/journal/checklist/item-1": Data(#"{"ok":true,"data":{"id":"item-1"}}"#.utf8),
+            "GET /api/journal/retrospective": Data("{\"ok\":true,\"data\":{\"anchor\":\"07-15\",\"years\":[{\"year\":2025,\"entries\":[\(updated)]}]}}".utf8),
+            "DELETE /api/journal/entry-1": Data(#"{"ok":true,"data":{"id":"entry-1"}}"#.utf8)
+        ]
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            routes: routes,
+            fallbackBody: Data(),
+            fallbackStatus: 200
+        )
+        let container = makeTestContainer(name: "flagOffJournalPaths")
+        let store = JournalStore(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var localSignals = 0
+        store.onLocalHouseholdMutation = { localSignals += 1 }
+
+        let localEntry = try await store.create(
+            occurredOn: "2025-07-15",
+            body: "Server entry",
+            householdID: "ignored-active-garden"
+        )
+        try await store.update(
+            localEntry,
+            occurredOn: "2025-07-15",
+            body: "Updated",
+            seedID: nil,
+            bedID: nil,
+            plantingEventID: nil,
+            householdID: "ignored-active-garden"
+        )
+        let localItem = try await store.addChecklistItem(entryID: localEntry.id, text: "Water")
+        try await store.updateChecklistItem(localItem, completed: true)
+        let retrospective = try await store.retrospective(on: "07-15", householdID: "ignored-active-garden")
+        try await store.deleteChecklistItem(localItem)
+        try await store.softDelete(localEntry)
+
+        #expect(retrospective.years.first?.entries.first?.body == "Updated")
+        #expect(localSignals == 0)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths() == [
+            "/api/journal",
+            "/api/journal/entry-1",
+            "/api/journal/entry-1/checklist",
+            "/api/journal/checklist/item-1",
+            "/api/journal/retrospective",
+            "/api/journal/checklist/item-1",
+            "/api/journal/entry-1"
+        ])
+    }
+
     @Test("flag OFF preserves assistant key refresh")
     func flagOffPreservesAssistantKeyRefresh() async throws {
         let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
@@ -340,6 +588,19 @@ struct CloudKitPendingWriteRegressionTests {
             #expect(error.message == FeatureFlags.cloudKitPhotoCapabilityMessage)
         } catch {
             Issue.record("Unexpected photo gate error: \(error)")
+        }
+    }
+
+    private static func expectInactiveGarden(
+        _ operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            Issue.record("Parked-household journal mutation unexpectedly succeeded")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "inactive_garden_entry")
+        } catch {
+            Issue.record("Unexpected active-garden error: \(error)")
         }
     }
 

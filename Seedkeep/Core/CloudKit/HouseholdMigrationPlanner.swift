@@ -77,12 +77,18 @@ enum HouseholdMigrationPlanner {
         input.beds           = fetch(FetchDescriptor<LocalBed>(predicate: #Predicate { $0.householdID == hid }))
         input.plantingEvents = fetch(FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.householdID == hid }))
         input.journalEntries = fetch(FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.householdID == hid }))
-        // The journal/pet CHILDREN have no householdID — they're constrained by their parent FK
-        // (entryID/plantingEventID), which points at parents that ARE scoped above, so they cannot
-        // leak independently. Fetch all (single-household-per-user, R1 locked).
+        // Journal children carry no householdID. Scope them through the active-garden parent set;
+        // a participant also retains a parked solo household locally, so fetching every child would
+        // export that parked graph into the adopted owner's CloudKit zone.
+        let journalEntryIDs = Set(input.journalEntries.map(\.id))
         input.journalEntryPhotos = fetch(FetchDescriptor<LocalJournalEntryPhoto>())
-        input.checklistItems     = fetch(FetchDescriptor<LocalJournalChecklistItem>())
-        input.petDepartures      = fetch(FetchDescriptor<LocalPetDeparture>())
+            .filter { journalEntryIDs.contains($0.entryID) }
+        input.checklistItems = fetch(FetchDescriptor<LocalJournalChecklistItem>())
+            .filter { journalEntryIDs.contains($0.entryID) }
+        // PetDeparture is likewise parent-scoped rather than household-bearing.
+        let plantingEventIDs = Set(input.plantingEvents.map(\.id))
+        input.petDepartures = fetch(FetchDescriptor<LocalPetDeparture>())
+            .filter { plantingEventIDs.contains($0.plantingEventID) }
         return input
     }
 

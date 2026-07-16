@@ -43,6 +43,7 @@ final class HouseholdCloudCoordinator {
     /// Participant mode: the engine runs on the OWNER's shared zone (sharedCloudDatabase). A
     /// participant imports NOTHING (no migration) — it only reconciles the owner's zone into SwiftData.
     private let isParticipant: Bool
+    let scopeID: String
 
     // MARK: Observable state (parity with SyncEngine for the banner + spinners)
     private(set) var isSyncing = false
@@ -98,6 +99,9 @@ final class HouseholdCloudCoordinator {
         self.provisioner = provisioner
         self.stateURL = stateURL
         self.isParticipant = isParticipant
+        self.scopeID = isParticipant
+            ? Self.participantScopeID(ownerZoneID: zoneID)
+            : Self.ownerScopeID(householdID: householdID)
     }
 
     /// Production factory: real `HouseholdSyncEngine` on the owner's private DB, durable state token.
@@ -143,7 +147,7 @@ final class HouseholdCloudCoordinator {
         let householdID = SeedkeepRecordNames.householdID(fromZoneName: ownerZoneID.zoneName)
         // Separate token from the owner scope so the shared-zone change cursor never corrupts the
         // (parked) solo owner zone's.
-        let stateURL = participantStateTokenURL(zoneName: ownerZoneID.zoneName)
+        let stateURL = participantStateTokenURL(ownerZoneID: ownerZoneID)
 
         let engine = HouseholdSyncEngine(
             database: database, zoneID: ownerZoneID, store: HouseholdLocalStore(),
@@ -294,9 +298,16 @@ final class HouseholdCloudCoordinator {
         let (mods, dels) = buffer.drain()
         guard !mods.isEmpty || !dels.isEmpty else { return }
         let context = ModelContext(container)
+        let activeScopeID = scopeID
+        let pendingDeletionNames = Set(try context.fetch(
+            FetchDescriptor<LocalCloudKitDeletion>(predicate: #Predicate {
+                $0.scopeID == activeScopeID
+            })
+        ).map(\.recordName))
         var updates: [String: SyncedRecordState] = [:]
         var removals: Set<String> = []
         for record in mods {
+            guard !pendingDeletionNames.contains(record.recordID.recordName) else { continue }
             guard let type = SeedkeepRecordType.type(forRecordTypeName: record.recordType) else { continue }
             let value = SeedkeepRecordCodec.decode(record, as: type)
             guard HouseholdApplyGate.shouldApply(value, into: context) else { continue }
@@ -334,12 +345,23 @@ final class HouseholdCloudCoordinator {
     private func pushDirty(_ passEpoch: Int) async throws {
         guard passEpoch == epoch else { return }
         let context = ModelContext(container)
+        let activeScopeID = scopeID
+        let deletionIntents = try context.fetch(
+            FetchDescriptor<LocalCloudKitDeletion>(predicate: #Predicate {
+                $0.scopeID == activeScopeID
+            })
+        )
+        let deletionRecordNames = Set(deletionIntents.map(\.recordName))
+        for recordName in deletionRecordNames {
+            engine.delete(CKRecord.ID(recordName: recordName, zoneID: zoneID))
+        }
         let input = HouseholdMigrationPlanner.fetchInput(
             from: context, householdID: householdID, householdName: householdName,
             householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
         var staged: [String: SyncedRecordState] = [:]
         var pushed = 0
         for d in dirtyRecords(from: input) {
+            guard !deletionRecordNames.contains(d.recordName) else { continue }
             guard !appliedSinceLastPush.contains(d.recordName) else { continue }   // applied from remote this pass
             let isLocalTombstone = d.value.scalars["deletedAt"] != nil
             if let known = syncedState(for: d.recordName) {
@@ -359,11 +381,18 @@ final class HouseholdCloudCoordinator {
         // automaticSync:false the coordinator is the only drain driver). sendUntilDrained THROWS on an
         // incomplete drain, so the commit below is skipped → an unconfirmed record is NOT marked
         // synced; it retries next pass (invariant 3).
-        if pushed > 0 || engine.hasPendingRecordChanges {
+        if pushed > 0 || !deletionIntents.isEmpty || engine.hasPendingRecordChanges {
             try await engine.sendUntilDrained(maxPasses: 6)
         }
         guard passEpoch == epoch else { return }
-        commitSyncedState(staged)
+        if !deletionIntents.isEmpty {
+            for intent in deletionIntents {
+                HouseholdApplyGate.deleteLocal(recordName: intent.recordName, into: context)
+                context.delete(intent)
+            }
+            try context.save()
+        }
+        commitSyncedState(staged, removing: deletionRecordNames)
     }
 
     private struct Dirty { let recordName: String; let clock: Int64; let value: CloudKitRecordValue }
@@ -427,6 +456,16 @@ final class HouseholdCloudCoordinator {
     /// token + synced-state file in `AppEnvironment.ensureCloudCoordinator`).
     func wipeAndClear() {
         Self.wipeHouseholdSwiftData(container: container)
+        let context = ModelContext(container)
+        let activeScopeID = scopeID
+        if let intents = try? context.fetch(
+            FetchDescriptor<LocalCloudKitDeletion>(predicate: #Predicate {
+                $0.scopeID == activeScopeID
+            })
+        ) {
+            for intent in intents { context.delete(intent) }
+            try? context.save()
+        }
         if let stateURL { try? FileManager.default.removeItem(at: stateURL) }
         try? FileManager.default.removeItem(at: syncedStateURL)
         syncedStateCache = [:]
@@ -482,7 +521,7 @@ final class HouseholdCloudCoordinator {
     /// built against the same household (the relaunch tests) resolves to the same file.
     private var syncedStateURL: URL {
         isParticipant
-            ? Self.participantSyncedStateURL(zoneName: zoneID.zoneName)
+            ? Self.participantSyncedStateURL(ownerZoneID: zoneID)
             : Self.ownerSyncedStateURL(householdID: householdID)
     }
 
@@ -548,14 +587,37 @@ final class HouseholdCloudCoordinator {
     static func ownerStateTokenURL(householdID: String) -> URL {
         householdSyncDir().appendingPathComponent("engine-state-\(cloudKitEnvironmentTag)-\(householdID).json")
     }
-    static func participantStateTokenURL(zoneName: String) -> URL {
-        householdSyncDir().appendingPathComponent("engine-state-shared-\(cloudKitEnvironmentTag)-\(zoneName).json")
+    static func participantStateTokenURL(ownerZoneID: CKRecordZone.ID) -> URL {
+        householdSyncDir().appendingPathComponent(
+            "engine-state-shared-\(durableScopeComponent(participantScopeID(ownerZoneID: ownerZoneID))).json"
+        )
     }
     static func ownerSyncedStateURL(householdID: String) -> URL {
         householdSyncDir().appendingPathComponent("synced-state-\(cloudKitEnvironmentTag)-\(householdID).json")
     }
-    static func participantSyncedStateURL(zoneName: String) -> URL {
-        householdSyncDir().appendingPathComponent("synced-state-shared-\(cloudKitEnvironmentTag)-\(zoneName).json")
+    static func participantSyncedStateURL(ownerZoneID: CKRecordZone.ID) -> URL {
+        householdSyncDir().appendingPathComponent(
+            "synced-state-shared-\(durableScopeComponent(participantScopeID(ownerZoneID: ownerZoneID))).json"
+        )
+    }
+    static func ownerScopeID(householdID: String) -> String {
+        let zoneID = CKRecordZone.ID(
+            zoneName: SeedkeepZoneProvisioner.zoneName(householdID: householdID),
+            ownerName: CKCurrentUserDefaultName
+        )
+        return scopeID(database: "private", zoneID: zoneID)
+    }
+    static func participantScopeID(ownerZoneID: CKRecordZone.ID) -> String {
+        scopeID(database: "shared", zoneID: ownerZoneID)
+    }
+    private static func scopeID(database: String, zoneID: CKRecordZone.ID) -> String {
+        "\(cloudKitEnvironmentTag)|\(database)|\(zoneID.zoneName)|\(zoneID.ownerName)"
+    }
+    private static func durableScopeComponent(_ scopeID: String) -> String {
+        Data(scopeID.utf8).base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
     }
     /// Delete a durable state token so the next coordinator on that scope does a FULL re-fetch. Used by
     /// adopt/leave: those wipe local SwiftData, so the rebuilt coordinator must re-download (an

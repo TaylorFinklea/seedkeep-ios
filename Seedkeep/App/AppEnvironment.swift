@@ -135,6 +135,11 @@ public final class AppEnvironment {
         self.subscriptions = subscriptions
         self.weatherWarnings = weatherWarnings
         sync.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
+        journal.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
+        journal.cloudKitScopeIDProvider = { [weak self] in
+            guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
+            return self.ensureCloudCoordinator(household: household).scopeID
+        }
         // Phase 4C — wire `NotificationCenter.default` observers
         // (active-plantings debounce + system-timezone-change). The
         // service is idempotent so a second start() is a no-op.
@@ -286,8 +291,8 @@ public final class AppEnvironment {
     }
 
     // R1 — the CloudKit household coordinator, built lazily on first use when the flag is on and a
-    // household is known. The cache key is the OWNER householdID, or for a participant the shared
-    // zone name (so an account switch / share adopt rebuilds). nil/unused when the flag is off.
+    // household is known. The cache key is the complete CloudKit database/zone/owner scope so an
+    // account switch or same-named share from another owner always rebuilds. nil/unused when off.
     @ObservationIgnored private var cloudCoordinator: HouseholdCloudCoordinator?
     @ObservationIgnored private var cloudCoordinatorKey: String?
 
@@ -313,13 +318,15 @@ public final class AppEnvironment {
     /// participant and never orphan-mints a solo zone.
     private func ensureCloudCoordinator(household: HouseholdDTO) -> HouseholdCloudCoordinator {
         if let marker = loadParticipantMarker() {
-            if let existing = cloudCoordinator, cloudCoordinatorKey == marker.zoneName { return existing }
+            let key = HouseholdCloudCoordinator.participantScopeID(ownerZoneID: marker.zoneID)
+            if let existing = cloudCoordinator, cloudCoordinatorKey == key { return existing }
             let coordinator = HouseholdCloudCoordinator.participant(ownerZoneID: marker.zoneID, container: container)
             cloudCoordinator = coordinator
-            cloudCoordinatorKey = marker.zoneName
+            cloudCoordinatorKey = key
             return coordinator
         }
-        if let existing = cloudCoordinator, cloudCoordinatorKey == household.id { return existing }
+        let key = HouseholdCloudCoordinator.ownerScopeID(householdID: household.id)
+        if let existing = cloudCoordinator, cloudCoordinatorKey == key { return existing }
         let coordinator = HouseholdCloudCoordinator.live(
             householdID: household.id,
             householdName: household.name,
@@ -328,7 +335,7 @@ public final class AppEnvironment {
             container: container
         )
         cloudCoordinator = coordinator
-        cloudCoordinatorKey = household.id
+        cloudCoordinatorKey = key
         return coordinator
     }
 
@@ -402,7 +409,9 @@ public final class AppEnvironment {
             HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
             // Reset the shared-zone token so the rebuilt participant coordinator does a FULL re-fetch
             // (re-adopting a previously-left share would otherwise resume a stale cursor → empty store).
-            HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.participantStateTokenURL(zoneName: zoneID.zoneName))
+            HouseholdCloudCoordinator.resetStateToken(
+                at: HouseholdCloudCoordinator.participantStateTokenURL(ownerZoneID: zoneID)
+            )
             saveParticipantMarker(ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
             cloudCoordinator = nil; cloudCoordinatorKey = nil   // force rebuild as participant
             await syncIfPossible()

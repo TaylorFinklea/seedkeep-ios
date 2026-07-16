@@ -18,7 +18,7 @@ struct JournalView: View {
     }
 
     let filterParent: EntityScopedJournalSection.Parent?
-    @Query private var entries: [LocalJournalEntry]
+    @Query private var allEntries: [LocalJournalEntry]
 
     init(filterParent: EntityScopedJournalSection.Parent? = nil) {
         self.filterParent = filterParent
@@ -33,7 +33,12 @@ struct JournalView: View {
         case .plantingEvent(let id):
             predicate = #Predicate<LocalJournalEntry> { $0.plantingEventID == id && $0.deletedAt == nil }
         }
-        _entries = Query(filter: predicate, sort: \.occurredOn, order: .reverse)
+        _allEntries = Query(filter: predicate, sort: \.occurredOn, order: .reverse)
+    }
+
+    private var entries: [LocalJournalEntry] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return allEntries.filter { $0.householdID == householdID }
     }
 
     var body: some View {

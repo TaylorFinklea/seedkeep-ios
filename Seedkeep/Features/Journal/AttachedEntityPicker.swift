@@ -5,16 +5,33 @@ import SwiftData
 /// a Planting event. Backing storage is three nullable IDs on the
 /// LocalJournalEntry — exactly one (or zero) is set at a time.
 struct AttachedEntityPicker: View {
+    @Environment(AppEnvironment.self) private var appEnv
+
     @Binding var seedID: String?
     @Binding var bedID: String?
     @Binding var plantingEventID: String?
 
     @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil },
-           sort: \.customName) private var seeds: [LocalSeed]
+           sort: \.customName) private var allSeeds: [LocalSeed]
     @Query(filter: #Predicate<LocalBed> { $0.deletedAt == nil },
-           sort: \.sortOrder) private var beds: [LocalBed]
+           sort: \.sortOrder) private var allBeds: [LocalBed]
     @Query(filter: #Predicate<LocalPlantingEvent> { $0.deletedAt == nil },
-           sort: \.plannedFor, order: .reverse) private var events: [LocalPlantingEvent]
+           sort: \.plannedFor, order: .reverse) private var allEvents: [LocalPlantingEvent]
+
+    private var seeds: [LocalSeed] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return allSeeds.filter { $0.householdID == householdID }
+    }
+
+    private var beds: [LocalBed] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return allBeds.filter { $0.householdID == householdID }
+    }
+
+    private var events: [LocalPlantingEvent] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return allEvents.filter { $0.householdID == householdID }
+    }
 
     enum Choice: Hashable {
         case none

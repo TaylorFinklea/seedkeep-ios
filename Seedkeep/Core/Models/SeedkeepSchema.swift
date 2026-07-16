@@ -25,6 +25,7 @@ enum SeedkeepSchema {
         LocalPlantingEvent.self,
         LocalSyncCursor.self,
         LocalPendingWrite.self,
+        LocalCloudKitDeletion.self,
         LocalRecommendation.self,
         LocalJournalEntry.self,
         LocalJournalEntryPhoto.self,

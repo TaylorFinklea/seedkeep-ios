@@ -30,13 +30,18 @@ struct HouseholdCloudCoordinatorTests {
         var pendingFetch: ([CKRecord], [CKRecord.ID]) = ([], [])
         var hasPendingRecordChanges = false
         var drainGate: DrainGate?
+        var drainFailuresRemaining = 0
         /// Number of leading fetchChanges() calls that should throw `fetchError` (simulating a
         /// transient hiccup that clears on retry). Decrements per throw.
         var fetchFailuresRemaining = 0
         var fetchError: Error = URLError(.timedOut)
 
         func save(_ record: CKRecord) { store.setRecord(record); savedRecords.append(record) }
-        func delete(_ recordID: CKRecord.ID) { store.removeRecord(recordID); deletedIDs.append(recordID) }
+        func delete(_ recordID: CKRecord.ID) {
+            store.removeRecord(recordID)
+            deletedIDs.append(recordID)
+            hasPendingRecordChanges = true
+        }
         func fetchChanges() async throws {
             fetchChangesCallCount += 1
             if fetchFailuresRemaining > 0 { fetchFailuresRemaining -= 1; throw fetchError }
@@ -49,7 +54,12 @@ struct HouseholdCloudCoordinatorTests {
         }
         func sendUntilDrained(maxPasses: Int) async throws {
             sendUntilDrainedCallCount += 1
+            if drainFailuresRemaining > 0 {
+                drainFailuresRemaining -= 1
+                throw fetchError
+            }
             if let drainGate { await drainGate.waitForDrain() }
+            hasPendingRecordChanges = false
         }
 
         var savedTypes: [String] { savedRecords.map(\.recordType) }
@@ -304,6 +314,182 @@ struct HouseholdCloudCoordinatorTests {
                 "a burst of nudges must run one reconcile pass")
         #expect(engine.sendUntilDrainedCallCount == baselineDrains + 1,
                 "a burst of nudges must drain once")
+    }
+
+    @Test("durable checklist deletion drains once and is not resurrected as a save")
+    func durableChecklistDeletionDrainsExactlyOnce() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        coordinator.pushDebounceIntervalNanoseconds = 0
+        await coordinator.sync()
+
+        let setup = ModelContext(container)
+        setup.insert(LocalJournalEntry(
+            id: "entry-1", householdID: hid, occurredOn: "2026-07-15", body: "Entry",
+            seedID: nil, bedID: nil, plantingEventID: nil,
+            createdAt: 1, updatedAt: 500, deletedAt: nil
+        ))
+        setup.insert(LocalJournalChecklistItem(
+            id: "item-1", entryID: "entry-1", text: "Water",
+            completed: false, sortOrder: 0, updatedAt: 500
+        ))
+        try setup.save()
+        await coordinator.sync()
+        let baselineChecklistSaves = engine.savedRecords.filter {
+            $0.recordID.recordName == SeedkeepRecordNames.journalChecklistItem("item-1")
+        }.count
+        let baselineDrains = engine.sendUntilDrainedCallCount
+
+        let recordName = SeedkeepRecordNames.journalChecklistItem("item-1")
+        let deletionContext = ModelContext(container)
+        let itemID = "item-1"
+        let item = try #require(deletionContext.fetch(
+            FetchDescriptor<LocalJournalChecklistItem>(predicate: #Predicate { $0.id == itemID })
+        ).first)
+        deletionContext.insert(LocalCloudKitDeletion(
+            scopeID: HouseholdCloudCoordinator.ownerScopeID(householdID: hid), householdID: hid,
+            recordName: recordName,
+            createdAt: 600
+        ))
+        deletionContext.delete(item)
+        try deletionContext.save()
+        await coordinator.sync()
+
+        #expect(engine.deletedIDs.map(\.recordName) == [recordName])
+        #expect(engine.sendUntilDrainedCallCount == baselineDrains + 1)
+        #expect(engine.savedRecords.filter { $0.recordID.recordName == recordName }.count == baselineChecklistSaves,
+                "an absent hard-deleted checklist item must not be re-saved")
+        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalCloudKitDeletion>()).isEmpty,
+                "the intent clears only after the CloudKit drain succeeds")
+    }
+
+    @Test("a pending hard delete suppresses remote re-import before its drain")
+    func pendingHardDeleteSuppressesRemoteReimport() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+
+        let recordName = SeedkeepRecordNames.journalChecklistItem("item-1")
+        let setup = ModelContext(container)
+        setup.insert(LocalCloudKitDeletion(
+            scopeID: HouseholdCloudCoordinator.ownerScopeID(householdID: hid),
+            householdID: hid, recordName: recordName, createdAt: 500
+        ))
+        try setup.save()
+        let remoteItem = LocalJournalChecklistItem(
+            id: "item-1", entryID: "entry-1", text: "Remote",
+            completed: false, sortOrder: 0, updatedAt: 400
+        )
+        engine.pendingFetch = ([SeedkeepRecordCodec.encode(remoteItem.cloudKitValue, zoneID: zoneID(hid))], [])
+        let gate = DrainGate()
+        engine.drainGate = gate
+
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+
+        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalJournalChecklistItem>()).isEmpty,
+                "a queued local delete must win while the CloudKit delete is still draining")
+
+        await gate.release()
+        _ = await syncTask.value
+    }
+
+    @Test("a failed hard-delete drain survives coordinator relaunch")
+    func failedHardDeleteDrainSurvivesRelaunch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine1 = FakeEngine()
+        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
+        await coordinator1.sync()
+
+        let recordName = SeedkeepRecordNames.journalChecklistItem("item-1")
+        let setup = ModelContext(container)
+        setup.insert(LocalCloudKitDeletion(
+            scopeID: HouseholdCloudCoordinator.ownerScopeID(householdID: hid),
+            householdID: hid, recordName: recordName, createdAt: 500
+        ))
+        try setup.save()
+        engine1.drainFailuresRemaining = 2
+
+        await coordinator1.sync()
+
+        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalCloudKitDeletion>()).count == 1,
+                "an unconfirmed delete must remain durable after the retry budget is exhausted")
+
+        let engine2 = FakeEngine()
+        let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
+        await coordinator2.sync()
+
+        #expect(engine2.deletedIDs.map(\.recordName) == [recordName])
+        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalCloudKitDeletion>()).isEmpty)
+    }
+
+    @Test("participant hard deletes target the owner's shared zone")
+    func participantHardDeleteUsesOwnerZone() async throws {
+        let ownerZone = CKRecordZone.ID(zoneName: "seedkeep-shared-garden", ownerName: "owner-record-name")
+        let hid = SeedkeepRecordNames.householdID(fromZoneName: ownerZone.zoneName)
+        let container = makeContainer()
+        let setup = ModelContext(container)
+        let recordName = SeedkeepRecordNames.journalChecklistItem("item-1")
+        let participantScope = HouseholdCloudCoordinator.participantScopeID(ownerZoneID: ownerZone)
+        setup.insert(LocalCloudKitDeletion(
+            scopeID: participantScope, householdID: hid, recordName: recordName, createdAt: 500
+        ))
+        try setup.save()
+        let engine = FakeEngine()
+        let coordinator = HouseholdCloudCoordinator(
+            engine: engine, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true
+        )
+
+        await coordinator.sync()
+
+        #expect(engine.deletedIDs.map(\.zoneID) == [ownerZone])
+    }
+
+    @Test("participant hard-delete outboxes are isolated by owner identity")
+    func participantHardDeleteScopesIncludeOwnerIdentity() async throws {
+        let zoneName = "seedkeep-shared-garden"
+        let ownerA = CKRecordZone.ID(zoneName: zoneName, ownerName: "owner-a")
+        let ownerB = CKRecordZone.ID(zoneName: zoneName, ownerName: "owner-b")
+        let hid = SeedkeepRecordNames.householdID(fromZoneName: zoneName)
+        let recordName = SeedkeepRecordNames.journalChecklistItem("item-1")
+        let container = makeContainer()
+        let setup = ModelContext(container)
+        setup.insert(LocalCloudKitDeletion(
+            scopeID: HouseholdCloudCoordinator.participantScopeID(ownerZoneID: ownerA),
+            householdID: hid, recordName: recordName, createdAt: 500
+        ))
+        setup.insert(LocalCloudKitDeletion(
+            scopeID: HouseholdCloudCoordinator.participantScopeID(ownerZoneID: ownerB),
+            householdID: hid, recordName: recordName, createdAt: 501
+        ))
+        try setup.save()
+        let engine = FakeEngine()
+        let coordinator = HouseholdCloudCoordinator(
+            engine: engine, zoneID: ownerA, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true
+        )
+
+        await coordinator.sync()
+
+        #expect(engine.deletedIDs.map(\.zoneID) == [ownerA])
+        let remaining = try ModelContext(container).fetch(FetchDescriptor<LocalCloudKitDeletion>())
+        #expect(remaining.map(\.scopeID) == [HouseholdCloudCoordinator.participantScopeID(ownerZoneID: ownerB)])
+        #expect(
+            HouseholdCloudCoordinator.participantStateTokenURL(ownerZoneID: ownerA)
+                != HouseholdCloudCoordinator.participantStateTokenURL(ownerZoneID: ownerB)
+        )
+        #expect(
+            HouseholdCloudCoordinator.participantSyncedStateURL(ownerZoneID: ownerA)
+                != HouseholdCloudCoordinator.participantSyncedStateURL(ownerZoneID: ownerB)
+        )
     }
 
     @Test("wipe cancels a pending save nudge")
@@ -728,6 +914,11 @@ struct HouseholdCloudCoordinatorTests {
         let setup = ModelContext(container)
         setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 1))
         setup.insert(LocalBed(id: "b1", householdID: hid, name: "North", createdAt: 1, updatedAt: 1))
+        setup.insert(LocalCloudKitDeletion(
+            scopeID: HouseholdCloudCoordinator.ownerScopeID(householdID: hid), householdID: hid,
+            recordName: SeedkeepRecordNames.journalChecklistItem("pending"),
+            createdAt: 1
+        ))
         try setup.save()
 
         coordinator.handleAccountChange(.signIn)
@@ -737,6 +928,8 @@ struct HouseholdCloudCoordinatorTests {
         let c = ModelContext(container)
         #expect((try? c.fetch(FetchDescriptor<LocalSeed>()))?.isEmpty == true)
         #expect((try? c.fetch(FetchDescriptor<LocalBed>()))?.isEmpty == true)
+        #expect((try? c.fetch(FetchDescriptor<LocalCloudKitDeletion>()))?.isEmpty == true,
+                "an old account's unconfirmed delete must never replay into a replacement account")
     }
 
     @Test("wipeAndClear removes the durable per-record synced-state file")

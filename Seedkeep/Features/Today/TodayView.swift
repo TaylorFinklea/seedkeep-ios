@@ -353,7 +353,8 @@ private struct TodayQueryView: View {
     }
 
     private var marginEntry: LocalJournalEntry? {
-        recentJournal.first
+        guard let householdID = appEnv.activeGardenHouseholdID else { return nil }
+        return recentJournal.first { $0.householdID == householdID }
     }
 }
 

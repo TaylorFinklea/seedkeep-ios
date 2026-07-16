@@ -23,6 +23,24 @@ public enum SyncEngineError: Error {
 }
 
 public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing {
+    enum DeleteFailureDisposition: Equatable {
+        case confirmedAbsent
+        case retry
+        case surface
+    }
+
+    static func deleteFailureDisposition(for code: CKError.Code) -> DeleteFailureDisposition {
+        switch code {
+        case .unknownItem, .zoneNotFound, .userDeletedZone:
+            return .confirmedAbsent
+        case .batchRequestFailed, .zoneBusy, .serviceUnavailable,
+             .requestRateLimited, .networkFailure, .networkUnavailable, .serverResponseLost:
+            return .retry
+        default:
+            return .surface
+        }
+    }
+
     public let database: CKDatabase
     public let zoneID: CKRecordZone.ID
     public let store: HouseholdLocalStore
@@ -247,6 +265,15 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                 note("FAILED \(failure.record.recordID.recordName) code=\(failure.error.code.rawValue)")
                 handleFailedSave(failure)
             }
+            for recordID in sent.deletedRecordIDs {
+                store.removeRecord(recordID)
+                clearAttempts(recordID)
+                note("deleted \(recordID.recordName)")
+            }
+            for (recordID, error) in sent.failedRecordDeletes {
+                note("FAILED DELETE \(recordID.recordName) code=\(error.code.rawValue)")
+                handleFailedDelete(recordID, error: error)
+            }
             // Project the SAVED records back to SwiftData. For a serverRecordChanged conflict, the
             // re-saved record IS the merged result (packetCount-min / tagIDs-union / sticky-deletedAt)
             // produced in handleFailedSave — without this, the editing device's SwiftData keeps its
@@ -300,6 +327,19 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         } else {
             log.error("giving up on \(recordID.recordName, privacy: .public) after \(n, privacy: .public) re-enqueues: \(error, privacy: .public)")
+            surface(error)
+            clearAttempts(recordID)
+        }
+    }
+    private func reEnqueueDelete(_ recordID: CKRecord.ID, after error: CKError) {
+        failLock.lock()
+        let n = (attemptCounts[recordID.recordName] ?? 0) + 1
+        attemptCounts[recordID.recordName] = n
+        failLock.unlock()
+        if n <= Self.maxReEnqueues {
+            syncEngine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+        } else {
+            log.error("giving up deleting \(recordID.recordName, privacy: .public) after \(n, privacy: .public) re-enqueues: \(error, privacy: .public)")
             surface(error)
             clearAttempts(recordID)
         }
@@ -366,6 +406,20 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             // real error instead of a false success, and the watermark doesn't advance past it.
             log.error("save permanently failed for \(recordID.recordName, privacy: .public): \(failure.error, privacy: .public)")
             surface(failure.error)
+            clearAttempts(recordID)
+        }
+    }
+
+    private func handleFailedDelete(_ recordID: CKRecord.ID, error: CKError) {
+        switch Self.deleteFailureDisposition(for: error.code) {
+        case .confirmedAbsent:
+            store.removeRecord(recordID)
+            clearAttempts(recordID)
+        case .retry:
+            reEnqueueDelete(recordID, after: error)
+        case .surface:
+            log.error("delete permanently failed for \(recordID.recordName, privacy: .public): \(error, privacy: .public)")
+            surface(error)
             clearAttempts(recordID)
         }
     }
