@@ -3,6 +3,7 @@ import SeedkeepCloudKit
 
 enum ActiveGardenContext {
     static let participantZoneNameDefaultsKey = "seedkeep.sharing.participant.zoneName"
+    static let participantOwnerNameDefaultsKey = "seedkeep.sharing.participant.ownerName"
 
     static func householdID(
         signedInHouseholdID: String,
@@ -16,6 +17,10 @@ enum ActiveGardenContext {
     }
 
     static func participantZoneName(in defaults: UserDefaults = .standard) -> String? {
-        defaults.string(forKey: participantZoneNameDefaultsKey)
+        guard let zoneName = defaults.string(forKey: participantZoneNameDefaultsKey),
+              !zoneName.isEmpty,
+              let ownerName = defaults.string(forKey: participantOwnerNameDefaultsKey),
+              !ownerName.isEmpty else { return nil }
+        return zoneName
     }
 }

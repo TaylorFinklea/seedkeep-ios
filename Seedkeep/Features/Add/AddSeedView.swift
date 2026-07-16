@@ -412,11 +412,7 @@ struct AddSeedView: View {
             // which serially drains EVERY queued write, causing the
             // confirm-seed screen to hang multi-seconds whenever older
             // pending writes were still in the queue (logged 7945ms freeze).
-            if FeatureFlags.cloudKitHouseholdSyncEnabled {
-                Task { await appEnv.syncIfPossible() }
-            } else {
-                Task { try? await appEnv.sync.flushPending() }
-            }
+            Task { try? await appEnv.sync.flushPending() }
             dismiss()
         } catch {
             saveError = error.localizedDescription

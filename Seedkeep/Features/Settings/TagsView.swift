@@ -17,6 +17,11 @@ struct TagsView: View {
     @State private var renamingID: String?
     @State private var renameText = ""
 
+    private var activeTags: [LocalTag] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return tags.filter { $0.householdID == householdID }
+    }
+
     private let palette: [(name: String, color: Color, hex: String)] = [
         ("Olive",  Color(red: 0.49, green: 0.62, blue: 0.24), "#7d9e3d"),
         ("Earth",  Color(red: 0.49, green: 0.37, blue: 0.24), "#7d5e3c"),
@@ -27,7 +32,7 @@ struct TagsView: View {
 
     var body: some View {
         Group {
-            if tags.isEmpty {
+            if activeTags.isEmpty {
                 ContentUnavailableView(
                     "no tags yet",
                     systemImage: "tag",
@@ -35,7 +40,7 @@ struct TagsView: View {
                 )
             } else {
                 List {
-                    ForEach(tags) { tag in
+                    ForEach(activeTags) { tag in
                         Button {
                             renamingID = tag.id
                             renameText = tag.name
@@ -117,7 +122,7 @@ struct TagsView: View {
 
     private func delete(at offsets: IndexSet) {
         for index in offsets {
-            let tag = tags[index]
+            let tag = activeTags[index]
             do {
                 try appEnv.sync.enqueueDeleteTag(id: tag.id)
             } catch {

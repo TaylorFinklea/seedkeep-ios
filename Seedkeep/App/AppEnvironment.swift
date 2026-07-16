@@ -270,7 +270,7 @@ public final class AppEnvironment {
             // current household snapshot. iOS preserves the next-fire
             // date when re-scheduling with the same identifier + same
             // DateComponents shape, so this is cheap to call every sync.
-            await rescheduleWeeklyPetRoundup()
+            await rescheduleWeeklyPetRoundup(householdID: activeGardenHouseholdID)
             // Phase 4C: refresh weather warnings if stale. Honors the
             // 2h staleness gate when called with `.foreground` so a
             // tab-back-in doesn't burn a WeatherKit fetch.
@@ -337,7 +337,7 @@ public final class AppEnvironment {
         var zoneID: CKRecordZone.ID { CKRecordZone.ID(zoneName: zoneName, ownerName: ownerName) }
     }
     @ObservationIgnored private let markerZoneKey = ActiveGardenContext.participantZoneNameDefaultsKey
-    @ObservationIgnored private let markerOwnerKey = "seedkeep.sharing.participant.ownerName"
+    @ObservationIgnored private let markerOwnerKey = ActiveGardenContext.participantOwnerNameDefaultsKey
 
     func loadParticipantMarker() -> ParticipantMarker? {
         let d = UserDefaults.standard
@@ -392,8 +392,7 @@ public final class AppEnvironment {
         do {
             let flow = SeedkeepShareFlow()
             let zoneID = try await flow.acceptZoneWideShare(metadata)
-            // Keep the signed-in household's local rows parked while the shared
-            // garden is active; all garden reads use activeGardenHouseholdID.
+            HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
             // Reset the shared-zone token so the rebuilt participant coordinator does a FULL re-fetch
             // (re-adopting a previously-left share would otherwise resume a stale cursor → empty store).
             HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.participantStateTokenURL(zoneName: zoneID.zoneName))
@@ -413,9 +412,10 @@ public final class AppEnvironment {
     /// coordinator so the next sync rebuilds the OWNER coordinator (the user's own zone re-syncs).
     func leaveSharedHousehold() async {
         clearParticipantMarker()
-        // Reset the OWNER token so the rebuilt owner coordinator does a FULL re-fetch. The user's
-        // own rows were parked during shared-garden participation, so the shared rows remain filtered
-        // out instead of being destructively erased.
+        HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+        // Reset the OWNER token so the rebuilt owner coordinator does a FULL re-fetch — re-downloading
+        // the user's own (parked, intact) CloudKit zone into the just-wiped SwiftData. Without this, the
+        // resumed cursor sees no changes since adopt and the user's own garden would stay empty locally.
         if case .signedIn(_, let household) = auth.state {
             HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
         }
@@ -426,7 +426,7 @@ public final class AppEnvironment {
     /// Phase 5.1.4 — recompute the Sunday-8am pet roundup body from the
     /// current household snapshot. Gated server-side by the Settings
     /// toggle; this function is safe to call regardless.
-    private func rescheduleWeeklyPetRoundup() async {
+    private func rescheduleWeeklyPetRoundup(householdID: String) async {
         let context = ModelContext(container)
         // 3-condition predicates trip the SwiftData macro type-checker;
         // gate the two cheap server-side flags here + filter petSeed in code.
@@ -436,7 +436,7 @@ public final class AppEnvironment {
             }
         )
         guard let fetched = try? context.fetch(descriptor) else { return }
-        let candidates = fetched.filter { $0.petSeed != nil }
+        let candidates = fetched.filter { $0.householdID == householdID && $0.petSeed != nil }
         var thriving = 0
         var wilting = 0
         await MainActor.run {

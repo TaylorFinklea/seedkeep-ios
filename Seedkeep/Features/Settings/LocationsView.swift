@@ -16,6 +16,11 @@ struct LocationsView: View {
     @State private var renamingID: String?
     @State private var renameText = ""
 
+    private var activeLocations: [LocalLocation] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return locations.filter { $0.householdID == householdID }
+    }
+
     var body: some View {
         listContent
             .navigationTitle("Locations")
@@ -35,7 +40,7 @@ struct LocationsView: View {
 
     @ViewBuilder
     private var listContent: some View {
-        if locations.isEmpty {
+        if activeLocations.isEmpty {
             ContentUnavailableView(
                 "no locations yet",
                 systemImage: "tray",
@@ -43,7 +48,7 @@ struct LocationsView: View {
             )
         } else {
             List {
-                ForEach(locations) { loc in
+                ForEach(activeLocations) { loc in
                     locationRow(loc)
                 }
                 .onDelete(perform: delete)
@@ -93,7 +98,7 @@ struct LocationsView: View {
         do {
             _ = try appEnv.sync.enqueueCreateLocation(
                 name: trimmed,
-                sortOrder: locations.count,
+                sortOrder: activeLocations.count,
                 householdID: appEnv.activeGardenHouseholdID ?? household.id
             )
             Task { try? await appEnv.sync.flushPending() }
@@ -116,7 +121,7 @@ struct LocationsView: View {
 
     private func delete(at offsets: IndexSet) {
         for index in offsets {
-            let loc = locations[index]
+            let loc = activeLocations[index]
             do {
                 try appEnv.sync.enqueueDeleteLocation(id: loc.id)
             } catch {
