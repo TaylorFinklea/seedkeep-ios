@@ -210,7 +210,7 @@ final class HouseholdCloudCoordinator {
         // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
         // children locally so pushDirty propagates the tombstones (no server to cascade for us).
         try HouseholdCascade.apply(in: ModelContext(container), now: Int64(Date().timeIntervalSince1970 * 1000))
-        try await pushDirty()
+        try await pushDirty(passEpoch)
         guard passEpoch == epoch else { return }
         // Project any send-path merge results (serverRecordChanged → merged re-save) buffered during
         // pushDirty's drain into SwiftData this pass rather than waiting for the next.
@@ -313,7 +313,8 @@ final class HouseholdCloudCoordinator {
     ///    of clock — a peer's live edit must never strand our delete (sticky-deletedAt keeps it converged).
     /// No shared ceiling var, so a peer's clock can never raise a threshold that strands a later
     /// genuine local edit at a lower clock (the clock-skew-poisoning fix, expressed per-record).
-    private func pushDirty() async throws {
+    private func pushDirty(_ passEpoch: Int) async throws {
+        guard passEpoch == epoch else { return }
         let context = ModelContext(container)
         let input = HouseholdMigrationPlanner.fetchInput(
             from: context, householdID: householdID, householdName: householdName,
@@ -343,6 +344,7 @@ final class HouseholdCloudCoordinator {
         if pushed > 0 || engine.hasPendingRecordChanges {
             try await engine.sendUntilDrained(maxPasses: 6)
         }
+        guard passEpoch == epoch else { return }
         commitSyncedState(staged)
     }
 

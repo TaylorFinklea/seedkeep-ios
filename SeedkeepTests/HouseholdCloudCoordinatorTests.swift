@@ -27,6 +27,7 @@ struct HouseholdCloudCoordinatorTests {
         private(set) var deletedIDs: [CKRecord.ID] = []
         var pendingFetch: ([CKRecord], [CKRecord.ID]) = ([], [])
         var hasPendingRecordChanges = false
+        var drainGate: DrainGate?
         /// Number of leading fetchChanges() calls that should throw `fetchError` (simulating a
         /// transient hiccup that clears on retry). Decrements per throw.
         var fetchFailuresRemaining = 0
@@ -43,9 +44,38 @@ struct HouseholdCloudCoordinatorTests {
             for d in dels { store.removeRecord(d) }
             onFetchedChanges?(mods, dels)
         }
-        func sendUntilDrained(maxPasses: Int) async throws {}
+        func sendUntilDrained(maxPasses: Int) async throws {
+            if let drainGate { await drainGate.waitForDrain() }
+        }
 
         var savedTypes: [String] { savedRecords.map(\.recordType) }
+    }
+
+    actor DrainGate {
+        private var started = false
+        private var startWaiter: CheckedContinuation<Void, Never>?
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        func waitForDrain() async {
+            started = true
+            startWaiter?.resume()
+            startWaiter = nil
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                releaseWaiter = continuation
+            }
+        }
+
+        func waitUntilStarted() async {
+            guard !started else { return }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                startWaiter = continuation
+            }
+        }
+
+        func release() {
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
     }
 
     // MARK: Helpers
@@ -477,6 +507,55 @@ struct HouseholdCloudCoordinatorTests {
     }
 
     // MARK: - Account change (AC5)
+
+    @Test("a stable drain commits synced state")
+    func stableDrainCommitsSyncedState() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        let gate = DrainGate()
+        engine.drainGate = gate
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+        await gate.release()
+        _ = await syncTask.value
+
+        let url = HouseholdCloudCoordinator.ownerSyncedStateURL(householdID: hid)
+        let data = try Data(contentsOf: url)
+        let state = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(state["seed:s1"] != nil, "a stable push must commit the staged record")
+    }
+
+    @Test("a mid-drain account wipe does not commit stale synced state")
+    func midDrainAccountWipeDoesNotCommitStaleSyncedState() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1, source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        let url = HouseholdCloudCoordinator.ownerSyncedStateURL(householdID: hid)
+        let gate = DrainGate()
+        engine.drainGate = gate
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+
+        coordinator.handleAccountChange(.signOut)
+        await gate.release()
+        _ = await syncTask.value
+
+        #expect(FileManager.default.fileExists(atPath: url.path) == false,
+                "a stale push must not recreate synced state after an account wipe")
+    }
 
     @Test("signOut wipes household SwiftData; signIn does not")
     func accountWipe() async throws {
