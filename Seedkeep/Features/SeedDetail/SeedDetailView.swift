@@ -99,7 +99,8 @@ struct SeedDetailView: View {
                 .task(id: seed.id) {
                     // Refresh photos on first appearance so the grid is
                     // current even if the local store predates new uploads.
-                    if case .signedIn(_, let household) = appEnv.auth.state {
+                    if !PhotoFeatureGate.isRestricted,
+                       case .signedIn(_, let household) = appEnv.auth.state {
                         try? await appEnv.sync.refreshSeedPhotos(seedID: seed.id, householdID: household.id)
                     }
                     // Fetch the catalog entry for the growing-info section.
@@ -220,7 +221,11 @@ struct SeedDetailView: View {
     @ViewBuilder
     private func photosSection(_ seed: LocalSeed) -> some View {
         Section {
-            if photoQuery.isEmpty {
+            if PhotoFeatureGate.isRestricted {
+                Text(FeatureFlags.cloudKitPhotoCapabilityMessage)
+                    .font(.footnote)
+                    .foregroundStyle(HerbColor.inkSoft)
+            } else if photoQuery.isEmpty {
                 Text("No photos yet")
                     .font(HerbFont.bodyItalic(size: 12))
                     .foregroundStyle(HerbColor.inkSoft)
@@ -246,17 +251,19 @@ struct SeedDetailView: View {
                     .padding(.vertical, 4)
                 }
             }
-            HStack {
-                PhotosPicker(
-                    selection: $pickedPhoto,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    Label(uploadingPhoto ? "Uploading…" : "Add photo", systemImage: "photo.badge.plus")
-                }
-                .disabled(uploadingPhoto)
-                if uploadingPhoto {
-                    ProgressView().controlSize(.small).herbProgressStyle()
+            if !PhotoFeatureGate.isRestricted {
+                HStack {
+                    PhotosPicker(
+                        selection: $pickedPhoto,
+                        matching: .images,
+                        photoLibrary: .shared()
+                    ) {
+                        Label(uploadingPhoto ? "Uploading…" : "Add photo", systemImage: "photo.badge.plus")
+                    }
+                    .disabled(uploadingPhoto)
+                    if uploadingPhoto {
+                        ProgressView().controlSize(.small).herbProgressStyle()
+                    }
                 }
             }
             if let uploadError {
@@ -275,6 +282,12 @@ struct SeedDetailView: View {
 
     private func uploadPicked(_ item: PhotosPickerItem, seedID: String) async {
         uploadingPhoto = true
+        guard !PhotoFeatureGate.isRestricted else {
+            uploadError = FeatureFlags.cloudKitPhotoCapabilityMessage
+            uploadingPhoto = false
+            pickedPhoto = nil
+            return
+        }
         uploadError = nil
         defer { uploadingPhoto = false; pickedPhoto = nil }
 

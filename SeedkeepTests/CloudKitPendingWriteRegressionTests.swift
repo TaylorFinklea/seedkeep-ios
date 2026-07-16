@@ -172,6 +172,121 @@ struct CloudKitPendingWriteRegressionTests {
                 "CloudKit mode must block every coordinator and detail-refresh request")
     }
 
+    @Test("CloudKit photo capability blocks server photo operations with preservation copy")
+    func cloudKitModeBlocksServerPhotoCapability() throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        #expect(PhotoFeatureGate.isRestricted)
+        #expect(FeatureFlags.cloudKitPhotoCapabilityMessage.contains("temporarily unavailable"))
+        #expect(FeatureFlags.cloudKitPhotoCapabilityMessage.contains("preserved"))
+        do {
+            try PhotoFeatureGate.requireAvailable()
+            Issue.record("CloudKit photo operation unexpectedly allowed")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "cloudkit_feature_unavailable")
+            #expect(error.message == FeatureFlags.cloudKitPhotoCapabilityMessage)
+        }
+    }
+
+    @Test("CloudKit mode blocks every photo byte operation before any server request")
+    func cloudKitModeBlocksEveryPhotoByteOperationBeforeServerRequest() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "test"
+        )
+        let engine = SyncEngine(
+            client: client,
+            container: makeTestContainer(name: "cloudKitPhotoOperationGate")
+        )
+
+        await Self.expectPhotoBlocked {
+            try await engine.refreshSeedPhotos(seedID: "seed", householdID: "household")
+        }
+        await Self.expectPhotoBlocked {
+            try await engine.uploadPhoto(
+                seedID: "seed",
+                role: .extra,
+                jpegData: Data("jpeg".utf8),
+                householdID: "household")
+        }
+        await Self.expectPhotoBlocked {
+            _ = try await engine.fetchSeedPhotoData(photoID: "seed-photo")
+        }
+        await Self.expectPhotoBlocked {
+            _ = try await engine.uploadJournalPhoto(
+                entryId: "entry",
+                jpegData: Data("jpeg".utf8),
+                width: 10,
+                height: 20)
+        }
+        await Self.expectPhotoBlocked {
+            try await engine.deleteJournalPhoto("journal-photo")
+        }
+        await Self.expectPhotoBlocked {
+            _ = try await engine.journalPhotoData(photoId: "journal-photo")
+        }
+
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("flag OFF preserves the server photo byte path")
+    func flagOffPreservesServerPhotoBytePath() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(false)
+
+        let bytes = Data("jpeg".utf8)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: bytes,
+            fallbackStatus: 200
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "test"
+        )
+        let engine = SyncEngine(
+            client: client,
+            container: makeTestContainer(name: "flagOffPhotoBytePath")
+        )
+
+        #expect(!PhotoFeatureGate.isRestricted)
+        try PhotoFeatureGate.requireAvailable()
+        #expect(try await engine.fetchSeedPhotoData(photoID: "legacy-photo") == bytes)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths() == ["/api/photos/legacy-photo"])
+    }
+
+    @Test("photo capability follows owner, participant, and rollback garden modes")
+    func photoCapabilityFollowsActiveGardenModes() {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        let modes: [(household: String, zone: String?, cloudKit: Bool, activeID: String, restricted: Bool)] = [
+            ("owner-household", nil, true, "owner-household", true),
+            ("participant-household", "seedkeep-owner-household", true, "owner-household", true),
+            ("participant-household", "seedkeep-owner-household", false, "participant-household", false)
+        ]
+
+        for mode in modes {
+            FeatureFlags.setCloudKitHouseholdSync(mode.cloudKit)
+            let activeHouseholdID = ActiveGardenContext.householdID(
+                signedInHouseholdID: mode.household,
+                participantZoneName: mode.zone,
+                cloudKitSyncEnabled: mode.cloudKit
+            )
+            #expect(activeHouseholdID == mode.activeID)
+            #expect(PhotoFeatureGate.isRestricted == mode.restricted)
+        }
+    }
+
     @Test("flag OFF preserves assistant key refresh")
     func flagOffPreservesAssistantKeyRefresh() async throws {
         let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
@@ -211,6 +326,20 @@ struct CloudKitPendingWriteRegressionTests {
             #expect(error.message == FeatureFlags.cloudKitGardenCapabilityMessage)
         } catch {
             Issue.record("Unexpected gate error: \(error)")
+        }
+    }
+
+    private static func expectPhotoBlocked(
+        _ operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            Issue.record("CloudKit-gated photo operation unexpectedly succeeded")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "cloudkit_feature_unavailable")
+            #expect(error.message == FeatureFlags.cloudKitPhotoCapabilityMessage)
+        } catch {
+            Issue.record("Unexpected photo gate error: \(error)")
         }
     }
 

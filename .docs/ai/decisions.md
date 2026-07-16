@@ -153,3 +153,11 @@
 **Alternatives considered**: (a) a dirty boolean per Local* model — rejected (SwiftData schema migration + touch every mutation site). (b) UserDefaults-backed map — rejected: a years-old garden is thousands of entries and `UserDefaults.standard` rewrites the whole shared plist per write. (c) keeping two parallel structures (`syncedClocks` + a tombstone `Set`) — rejected: a single `{clock, tombstoned}` struct also compares tombstone clocks (a re-tombstone at a higher clock still pushes).
 
 **Rationale**: Smallest change that kills the residual without regressing convergence/tombstone/clock-skew invariants; stays entirely inside the coordinator (applier/gate/planner untouched); the derived (not injected) path is what makes the relaunch unit tests work. Deferred (pre-existing, bead 8ck.8): reseed-from-local-graph can mark an unpushed local edit as synced.
+
+## 2026-07-15 — Gate server photo bytes while CloudKit garden sync is active
+
+**Context**: CloudKit mirrors seed and journal photo metadata, but the existing server byte endpoints address the signed-in server household. Running those endpoints for an active owner or participant garden could refresh/delete local projections or create server objects outside the active CloudKit garden.
+
+**Decision**: Keep photo metadata models, CloudKit migration, apply, and deletion projection active so existing server objects remain preserved. Gate only server-backed photo refresh, upload, thumbnail, and delete seams behind the CloudKit household flag. Replace the photo galleries/actions with explicit temporary-limit copy; flag OFF follows the existing server paths unchanged.
+
+**Rationale**: This is reversible and preserves the CloudKit source-of-truth path without silently deleting or duplicating photo objects. The same flag follows owner, participant, and rollback active-garden resolution.

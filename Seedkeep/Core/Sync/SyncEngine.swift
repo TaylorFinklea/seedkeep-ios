@@ -1508,6 +1508,7 @@ public final class SyncEngine {
     /// a photo upload so the detail view sees the new entry. Cheap — the
     /// detail endpoint returns the seed plus its photos.
     public func refreshSeedPhotos(seedID: String, householdID: String) async throws {
+        try PhotoFeatureGate.requireAvailable()
         let detail = try await client.seed(id: seedID)
         let context = ModelContext(container)
 
@@ -1556,8 +1557,39 @@ public final class SyncEngine {
     /// the seed's photo list. Online-only in Phase 1; offline photo
     /// queueing is deferred (see `.docs/ai/roadmap.md`).
     public func uploadPhoto(seedID: String, role: PhotoRole, jpegData: Data, householdID: String) async throws {
+        try PhotoFeatureGate.requireAvailable()
         _ = try await client.uploadSeedPhoto(seedID: seedID, role: role, jpegData: jpegData)
         try await refreshSeedPhotos(seedID: seedID, householdID: householdID)
+    }
+
+    public func fetchSeedPhotoData(photoID: String) async throws -> Data {
+        try PhotoFeatureGate.requireAvailable()
+        return try await client.fetchSeedPhotoData(photoID: photoID)
+    }
+
+    public func uploadJournalPhoto(
+        entryId: String,
+        jpegData: Data,
+        width: Int? = nil,
+        height: Int? = nil
+    ) async throws -> JournalEntryPhotoDTO {
+        try PhotoFeatureGate.requireAvailable()
+        return try await client.uploadJournalPhoto(
+            entryId: entryId,
+            jpegData: jpegData,
+            width: width,
+            height: height
+        )
+    }
+
+    public func deleteJournalPhoto(_ photoId: String) async throws {
+        try PhotoFeatureGate.requireAvailable()
+        try await client.deleteJournalPhoto(photoId)
+    }
+
+    public func journalPhotoData(photoId: String) async throws -> Data {
+        try PhotoFeatureGate.requireAvailable()
+        return try await client.journalPhotoData(photoId: photoId)
     }
 
     private func upsertSeeds(_ items: [SeedDTO]) throws {

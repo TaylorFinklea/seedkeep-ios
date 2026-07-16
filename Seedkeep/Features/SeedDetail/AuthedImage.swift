@@ -21,7 +21,10 @@ struct AuthedImage: View {
 
     var body: some View {
         ZStack {
-            if let image {
+            if PhotoFeatureGate.isRestricted {
+                Image(systemName: "photo.slash")
+                    .foregroundStyle(.secondary)
+            } else if let image {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
@@ -38,8 +41,9 @@ struct AuthedImage: View {
     }
 
     private func load() async {
+        guard !PhotoFeatureGate.isRestricted else { return }
         do {
-            let data = try await appEnv.client.fetchSeedPhotoData(photoID: photoID)
+            let data = try await appEnv.sync.fetchSeedPhotoData(photoID: photoID)
             await MainActor.run {
                 self.image = UIImage(data: data)
                 if self.image == nil { self.failed = true }

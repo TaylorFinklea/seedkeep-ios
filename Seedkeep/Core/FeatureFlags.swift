@@ -44,8 +44,19 @@ enum FeatureFlags {
     static let cloudKitGardenCapabilityMessage =
         "Sprout and Claude/MCP connections are temporarily unavailable while CloudKit garden sync is active. Your shared garden stays on iCloud; these server-backed tools will return with a CloudKit-aware bridge."
 
+    /// Temporary R1 limit for server-backed photo bytes. CloudKit mirrors photo metadata and
+    /// preserves the existing server objects, but the server photo APIs cannot address the active
+    /// CloudKit household yet.
+    static let cloudKitPhotoCapabilityMessage =
+        "Photos are temporarily unavailable while your active garden uses CloudKit. Existing seed and journal photos are preserved; uploads, galleries, and deletes return when CloudKit photo support is ready."
+
     /// True when server-backed household features must not be exposed.
     static var serverGardenFeaturesRestricted: Bool {
+        cloudKitHouseholdSyncEnabled
+    }
+
+    /// True when server-backed photo bytes must not be exposed.
+    static var serverPhotoFeaturesRestricted: Bool {
         cloudKitHouseholdSyncEnabled
     }
 

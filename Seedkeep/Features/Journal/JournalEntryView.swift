@@ -79,7 +79,11 @@ struct JournalEntryView: View {
             }
 
             Section {
-                if photos.isEmpty && entryID == nil {
+                if PhotoFeatureGate.isRestricted {
+                    Text(FeatureFlags.cloudKitPhotoCapabilityMessage)
+                        .font(.footnote)
+                        .foregroundStyle(HerbColor.inkSoft)
+                } else if photos.isEmpty && entryID == nil {
                     Text("Save the entry before adding photos")
                         .font(.footnote)
                         .foregroundStyle(HerbColor.inkSoft)
@@ -296,6 +300,12 @@ struct JournalEntryView: View {
     @MainActor
     private func uploadPicked(_ items: [PhotosPickerItem], entryID: String) async {
         uploadingPhotos = true
+        guard !PhotoFeatureGate.isRestricted else {
+            errorMessage = FeatureFlags.cloudKitPhotoCapabilityMessage
+            uploadingPhotos = false
+            photosPickerItems = []
+            return
+        }
         defer {
             uploadingPhotos = false
             photosPickerItems = []
@@ -307,7 +317,7 @@ struct JournalEntryView: View {
                 let jpegData = await Self.resizedJPEG(rawData, maxDimension: 2048, quality: 0.85) ?? rawData
                 // Decode width/height for the server's optional X-Photo-* headers.
                 let (width, height) = await Self.imageDimensions(jpegData)
-                let dto = try await appEnv.client.uploadJournalPhoto(
+                let dto = try await appEnv.sync.uploadJournalPhoto(
                     entryId: entryID,
                     jpegData: jpegData,
                     width: width,
@@ -322,7 +332,7 @@ struct JournalEntryView: View {
 
     private func deletePhoto(_ photo: LocalJournalEntryPhoto) async {
         do {
-            try await appEnv.client.deleteJournalPhoto(photo.id)
+            try await appEnv.sync.deleteJournalPhoto(photo.id)
             modelContext.delete(photo)
             try modelContext.save()
         } catch {
@@ -387,7 +397,10 @@ private struct JournalPhotoThumbnail: View {
 
     var body: some View {
         Group {
-            if let image {
+            if PhotoFeatureGate.isRestricted {
+                Image(systemName: "photo.slash")
+                    .foregroundStyle(.secondary)
+            } else if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -397,9 +410,9 @@ private struct JournalPhotoThumbnail: View {
             }
         }
         .task {
-            guard image == nil else { return }
+            guard image == nil, !PhotoFeatureGate.isRestricted else { return }
             do {
-                let data = try await appEnv.client.journalPhotoData(photoId: photoId)
+                let data = try await appEnv.sync.journalPhotoData(photoId: photoId)
                 self.image = UIImage(data: data)
             } catch {
                 // Silent — thumbnail just stays as a spinner.
