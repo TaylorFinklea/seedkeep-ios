@@ -243,25 +243,14 @@ final class HouseholdCloudCoordinator {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             try await engine.fetchChanges()
             try drainPendingApplies()
-            // Seed the per-record synced-state past the imported graph so a relaunch doesn't
-            // re-upload the entire shared zone (a participant has no migration step to seed it).
-            seedSyncedStateFromLocalGraph()
+            // drainPendingApplies records synced-state for every fetched record, so it carries AC6
+            // for participants across relaunch. A full-graph reseed here would suppress an unpushed
+            // local edit (uxc.3).
         } else {
             // A participant imports NOTHING; migration (export + receipt) is the OWNER's one-time job.
             try await migrateIfNeeded()
         }
         started = true
-    }
-
-    /// Seed the per-record synced-state from the current local graph — so pushDirty won't re-push
-    /// records the engine already holds (used after a participant's initial import, which has no
-    /// migrate step).
-    private func seedSyncedStateFromLocalGraph() {
-        let context = ModelContext(container)
-        let input = HouseholdMigrationPlanner.fetchInput(
-            from: context, householdID: householdID, householdName: householdName,
-            householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
-        seedSyncedState(from: input)
     }
 
     /// Pull remote changes then project the buffered records into SwiftData.
@@ -386,13 +375,10 @@ final class HouseholdCloudCoordinator {
         // Migrated now (or the receipt was already present from a peer) → never migrate again on this
         // device for this household. (Cleared on account change in wipeAndClear.)
         hasMigratedDurable = true
-        // Seed per-record synced-state past the local graph REGARDLESS of `alreadyMigrated`: on a retry
-        // after a transient migration-drain failure the receipt is already in the store (so the re-run
-        // reports alreadyMigrated), but the synced-state hasn't been seeded yet — leaving it unseeded
-        // would re-upload the whole graph on relaunch. Seeding is safe in both the first-migrate and
-        // the peer-already-migrated cases (the records reconcile via the merger either way).
-        _ = result
-        seedSyncedState(from: input)
+        // On .migrated, input is exactly what was just exported, so seeding is correct. On
+        // .alreadyMigrated, do not reseed the fresh graph: pushDirty pushes current state and records
+        // synced-state only after a clean drain, avoiding suppression of an unconfirmed local edit.
+        if !result.alreadyMigrated { seedSyncedState(from: input) }
     }
 
     // MARK: - Account change (AC5)
@@ -497,13 +483,8 @@ final class HouseholdCloudCoordinator {
     }
 
     /// Seed synced-state for every record in the local graph with its REAL tombstoned bit (not always
-    /// false — a pre-migration soft-delete would otherwise re-push immediately). Used after the
-    /// one-time migration (everything just exported) and after a participant's initial import (no
-    /// migrate step) so a relaunch doesn't re-push/re-upload the graph (AC6).
-    ///
-    /// DEFERRED (tracked separately, seedkeep-8ck.8 — not fixed here): this can mark a genuinely
-    /// unpushed local edit (force-quit before its first send) as synced and suppress it. The single
-    /// global push ceiling this replaces had the identical defect; reproduced faithfully, not fixed.
+    /// false — a pre-migration soft-delete would otherwise re-push immediately). Used only for the
+    /// owner's genuine one-time migration export; participants seed through the apply-path writer.
     private func seedSyncedState(from input: HouseholdMigrationPlanner.Input) {
         var seed: [String: SyncedRecordState] = [:]
         for d in dirtyRecords(from: input) {

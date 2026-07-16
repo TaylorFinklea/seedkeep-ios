@@ -499,6 +499,89 @@ struct HouseholdCloudCoordinatorTests {
         #expect(engine.savedTypes.contains("Household") == false, "a participant must not export the household root")
     }
 
+    @Test("participant relaunch pushes an unpushed local edit")
+    func participantRelaunchPushesUnpushedLocalEdit() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let ownerZone = CKRecordZone.ID(
+            zoneName: SeedkeepZoneProvisioner.zoneName(householdID: hid), ownerName: "_ownerRecordName")
+
+        let engine1 = FakeEngine()
+        engine1.pendingFetch = ([remoteSeed(id: "peer1", householdID: hid, name: "P", updatedAt: 100)], [])
+        let coordinator1 = HouseholdCloudCoordinator(
+            engine: engine1, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        await coordinator1.sync()
+
+        let setup = ModelContext(container)
+        let local = try #require(fetchSeed(setup, "peer1"))
+        local.customName = "Edited"
+        local.updatedAt = 200
+        try setup.save()
+
+        let engine2 = FakeEngine()
+        let coordinator2 = HouseholdCloudCoordinator(
+            engine: engine2, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        await coordinator2.sync()
+
+        let pushed = engine2.savedRecords.first { $0.recordID.recordName == "seed:peer1" }
+        #expect(pushed != nil, "a participant's unpushed local edit must survive relaunch")
+        #expect(pushed?["updatedAt"] as? Int == 200)
+    }
+
+    @Test("participant relaunch does not re-upload an imported record")
+    func participantRelaunchDoesNotReUploadImportedRecord() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let ownerZone = CKRecordZone.ID(
+            zoneName: SeedkeepZoneProvisioner.zoneName(householdID: hid), ownerName: "_ownerRecordName")
+
+        let engine1 = FakeEngine()
+        engine1.pendingFetch = ([remoteSeed(id: "peer1", householdID: hid, name: "P", updatedAt: 100)], [])
+        let coordinator1 = HouseholdCloudCoordinator(
+            engine: engine1, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        await coordinator1.sync()
+
+        let engine2 = FakeEngine()
+        let coordinator2 = HouseholdCloudCoordinator(
+            engine: engine2, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        await coordinator2.sync()
+
+        #expect(engine2.savedRecords.contains { $0.recordID.recordName == "seed:peer1" } == false,
+                "an imported participant record must not be re-uploaded on relaunch")
+    }
+
+    @Test("owner already-migrated path does not suppress an unpushed edit")
+    func ownerAlreadyMigratedDoesNotSuppressUnpushedEdit() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let setup = ModelContext(container)
+        let local = LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1,
+                              source: .store, createdAt: 1, updatedAt: 200)
+        local.customName = "Edited"
+        setup.insert(local)
+        try setup.save()
+
+        let engine = FakeEngine()
+        let receipt = CKRecord(
+            recordType: "MigrationReceipt",
+            recordID: CKRecord.ID(
+                recordName: SeedkeepRecordNames.migrationReceipt(hid), zoneID: zoneID(hid)))
+        engine.store.setRecord(receipt)
+
+        await makeCoordinator(engine: engine, container: container, householdID: hid).sync()
+
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" },
+                "an already-migrated retry must still push the current local edit")
+    }
+
     @Test("householdID derives from the (shared) zone name")
     func householdIDFromZoneName() {
         #expect(SeedkeepRecordNames.householdID(fromZoneName: "seedkeep-hh1") == "hh1")
