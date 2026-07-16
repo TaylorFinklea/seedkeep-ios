@@ -84,6 +84,11 @@ final class AIAssistantCoordinator {
 
     /// Refresh from the server. Call on app launch + after Settings changes.
     func refreshKeyStatus() async {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            keyConfigured = false
+            keyCheckError = FeatureFlags.cloudKitGardenCapabilityMessage
+            return
+        }
         do {
             let status = try await client.assistantKeyStatus()
             keyConfigured = status.providers.contains(where: { $0.provider == "anthropic" && $0.configured })
@@ -97,6 +102,7 @@ final class AIAssistantCoordinator {
 
     @discardableResult
     func createThread(title: String = "") async throws -> LocalAssistantThread {
+        try requireServerGardenFeatures()
         let dto = try await client.createAssistantThread(title: title, threadKind: "chat")
         let local = dto.makeLocal()
         let ctx = ModelContext(container)
@@ -106,6 +112,7 @@ final class AIAssistantCoordinator {
     }
 
     func deleteThread(_ id: String) async throws {
+        try requireServerGardenFeatures()
         try await client.deleteAssistantThread(id)
         let ctx = ModelContext(container)
         let descriptor = FetchDescriptor<LocalAssistantThread>(predicate: #Predicate { $0.id == id })
@@ -140,6 +147,7 @@ final class AIAssistantCoordinator {
         contextOverride: AIPageContext? = nil,
         attachment: SeedkeepClient.AssistantImageAttachment? = nil
     ) async throws {
+        try requireServerGardenFeatures()
         guard let threadID = currentThreadID else {
             throw NSError(domain: "Sprout", code: 0, userInfo: [NSLocalizedDescriptionKey: "No thread open"])
         }
@@ -192,6 +200,7 @@ final class AIAssistantCoordinator {
     /// from `/tool_calls/:id/confirm` that runs the deferred mutation and
     /// resumes the LLM conversation.
     func confirmToolCall(_ toolCallID: String) async throws {
+        try requireServerGardenFeatures()
         guard let threadID = currentThreadID else { return }
         guard case .awaitingConfirmation(let pending) = streamingState, pending == toolCallID else {
             // Already resolved or out of state — refresh from server to be safe.
@@ -207,6 +216,7 @@ final class AIAssistantCoordinator {
     /// Cancel a proposed destructive tool call. No stream — server returns
     /// the updated tool_call row directly.
     func cancelToolCall(_ toolCallID: String) async throws {
+        try requireServerGardenFeatures()
         guard let threadID = currentThreadID else { return }
         let updated = try await client.cancelAssistantToolCall(toolCallID)
         let ctx = ModelContext(container)
@@ -249,6 +259,15 @@ final class AIAssistantCoordinator {
     }
 
     // ── Internals ──────────────────────────────────────────────────────────
+
+    private func requireServerGardenFeatures() throws {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            throw SeedkeepError(
+                code: "cloudkit_feature_unavailable",
+                message: FeatureFlags.cloudKitGardenCapabilityMessage
+            )
+        }
+    }
 
     private func consumeStream(
         _ stream: AsyncThrowingStream<AssistantStreamEvent, Error>,

@@ -23,6 +23,10 @@ struct MCPSettingsView: View {
     @State private var generatingPair = false
 
     var body: some View {
+        Group {
+        if FeatureFlags.serverGardenFeaturesRestricted {
+            restrictedState
+        } else {
         ZStack {
             VellumBackground()
             Form {
@@ -102,10 +106,18 @@ struct MCPSettingsView: View {
             }
             .scrollContentBackground(.hidden)
         }
+        }
+        }
         .navigationTitle("Claude / MCP")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await refresh() }
-        .refreshable { await refresh() }
+        .task {
+            guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
+            await refresh()
+        }
+        .refreshable {
+            guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
+            await refresh()
+        }
         .sheet(isPresented: $showNewTokenSheet) {
             newTokenSheet
         }
@@ -115,6 +127,26 @@ struct MCPSettingsView: View {
         .sheet(item: $freshPairingCode) { code in
             PairingCodeSheet(code: code)
         }
+    }
+
+    @ViewBuilder
+    private var restrictedState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 36))
+                .foregroundStyle(HerbColor.sepia.opacity(0.65))
+            Text("Claude connections are temporarily unavailable")
+                .font(HerbFont.display(size: 22))
+                .foregroundStyle(HerbColor.ink)
+                .multilineTextAlignment(.center)
+            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .padding(.vertical, 48)
+        .padding(.horizontal, 24)
     }
 
     @ViewBuilder
@@ -195,6 +227,10 @@ struct MCPSettingsView: View {
     }
 
     private func refresh() async {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            return
+        }
         loading = true
         defer { loading = false }
         do {
@@ -208,6 +244,10 @@ struct MCPSettingsView: View {
     }
 
     private func create() async {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            return
+        }
         creating = true
         defer { creating = false }
         let trimmed = pendingLabel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -225,6 +265,10 @@ struct MCPSettingsView: View {
     }
 
     private func revoke(at offsets: IndexSet) {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            return
+        }
         let targets = offsets.map { tokens[$0] }
         Task {
             for token in targets {
@@ -244,6 +288,10 @@ struct MCPSettingsView: View {
     }
 
     private func pairBrowser() async {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            return
+        }
         generatingPair = true
         defer { generatingPair = false }
         do {

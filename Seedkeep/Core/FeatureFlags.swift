@@ -22,8 +22,8 @@ enum FeatureFlags {
     /// opt in ON-DEVICE (Settings ▸ Sync ▸ "CloudKit sync (beta)") without a new build, with an
     /// instant kill-switch, while the unit suite + production both run with the safe default (false).
     /// When ON, `SyncEngine.syncAll` skips the 7 household feeds + flushPending (else double-sync);
-    /// `catalogCorrections` (R3) + `assistantThreads` (R5) stay on the server regardless. See the
-    /// 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
+    /// `catalogCorrections` (R3) stays on the server; assistant threads are gated with Sprout while
+    /// CloudKit is active. See the 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
     /// (additive, reversible); flipping OFF returns to server sync.
     static let cloudKitHouseholdSyncKey = "seedkeep.flag.cloudKitHouseholdSync"
     /// DEFAULT ON (2026-06-29 cutover): CloudKit is now the default household-sync path. Resolution:
@@ -38,6 +38,17 @@ enum FeatureFlags {
     static func setCloudKitHouseholdSync(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)
     }
+
+    /// R1 capability copy for server-backed garden features that cannot yet
+    /// address the active CloudKit household.
+    static let cloudKitGardenCapabilityMessage =
+        "Sprout and Claude/MCP connections are temporarily unavailable while CloudKit garden sync is active. Your shared garden stays on iCloud; these server-backed tools will return with a CloudKit-aware bridge."
+
+    /// True when server-backed household features must not be exposed.
+    static var serverGardenFeaturesRestricted: Bool {
+        cloudKitHouseholdSyncEnabled
+    }
+
     /// True when the app is hosting a unit-test bundle (XCTest is linked + loaded only then).
     private static let isRunningUnitTests = NSClassFromString("XCTestCase") != nil
 }

@@ -83,26 +83,36 @@ struct SettingsContent: View {
                     Rubric(text: "garden")
                 }
 
-                Section {
-                    NavigationLink {
-                        AssistantKeySettingsView()
-                    } label: {
-                        Label("AI assistant key", systemImage: "sparkles")
+                if FeatureFlags.serverGardenFeaturesRestricted {
+                    Section {
+                        Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+                            .font(HerbFont.bodyItalic(size: 12))
+                            .foregroundStyle(HerbColor.inkSoft)
+                    } header: {
+                        Rubric(text: "sprout · temporarily unavailable")
                     }
-                    NavigationLink {
-                        MCPSettingsView()
-                    } label: {
-                        Label("Connect Claude / MCP", systemImage: "link")
+                } else {
+                    Section {
+                        NavigationLink {
+                            AssistantKeySettingsView()
+                        } label: {
+                            Label("AI assistant key", systemImage: "sparkles")
+                        }
+                        NavigationLink {
+                            MCPSettingsView()
+                        } label: {
+                            Label("Connect Claude / MCP", systemImage: "link")
+                        }
+                        Toggle(isOn: $sparkleOnEveryPage) {
+                            Label("Sparkle on every page", systemImage: "wand.and.stars")
+                        }
+                    } header: {
+                        Rubric(text: "sprout · the scribe")
+                    } footer: {
+                        Text("When on, a sparkle button sits in the bottom-right of every primary page and opens Sprout with the current page's context attached.")
+                            .font(HerbFont.bodyItalic(size: 11))
+                            .foregroundStyle(HerbColor.inkSoft)
                     }
-                    Toggle(isOn: $sparkleOnEveryPage) {
-                        Label("Sparkle on every page", systemImage: "wand.and.stars")
-                    }
-                } header: {
-                    Rubric(text: "sprout · the scribe")
-                } footer: {
-                    Text("When on, a sparkle button sits in the bottom-right of every primary page and opens Sprout with the current page's context attached.")
-                        .font(HerbFont.bodyItalic(size: 11))
-                        .foregroundStyle(HerbColor.inkSoft)
                 }
 
                 Section {

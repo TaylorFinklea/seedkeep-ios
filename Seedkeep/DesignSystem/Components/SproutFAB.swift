@@ -25,7 +25,9 @@ struct SproutFAB: View {
     var trailingPadding: CGFloat = 20
 
     var body: some View {
-        if sparkleOnEveryPage {
+        if FeatureFlags.serverGardenFeaturesRestricted {
+            EmptyView()
+        } else if sparkleOnEveryPage {
             fabButton
         } else {
             EmptyView()

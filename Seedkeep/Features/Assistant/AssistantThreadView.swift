@@ -35,6 +35,9 @@ struct AssistantThreadView: View {
     var body: some View {
         ZStack {
             VellumBackground()
+            if FeatureFlags.serverGardenFeaturesRestricted {
+                restrictedState
+            } else {
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -83,16 +86,38 @@ struct AssistantThreadView: View {
 
                 composer
             }
+            }
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
             appEnv.assistant.openThread(threadID)
             // Pull canonical state from the server so cross-device updates
             // land — also picks up the rows the placeholder-message logic
             // inserted on the server during streaming.
             try? await appEnv.sync.refreshAssistantThread(threadID)
         }
+    }
+
+    @ViewBuilder
+    private var restrictedState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 36))
+                .foregroundStyle(HerbColor.sepia.opacity(0.65))
+            Text("This conversation is temporarily unavailable")
+                .font(HerbFont.display(size: 22))
+                .foregroundStyle(HerbColor.ink)
+                .multilineTextAlignment(.center)
+            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
     }
 
     // MARK: - Composer

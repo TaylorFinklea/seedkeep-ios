@@ -52,10 +52,12 @@ struct YouView: View {
                         } label: {
                             Label("Settings", systemImage: "gearshape")
                         }
-                        NavigationLink {
-                            AssistantView()
-                        } label: {
-                            Label("Sprout · past conversations", systemImage: "sparkles")
+                        if !FeatureFlags.serverGardenFeaturesRestricted {
+                            NavigationLink {
+                                AssistantView()
+                            } label: {
+                                Label("Sprout · past conversations", systemImage: "sparkles")
+                            }
                         }
                     } header: {
                         Rubric(text: "the order")

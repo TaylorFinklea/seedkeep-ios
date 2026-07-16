@@ -11,10 +11,15 @@ struct SproutAssistantOverlay: View {
     var body: some View {
         @Bindable var coord = appEnv.assistant
 
-        Color.clear
-            .allowsHitTesting(false)
-            .sheet(isPresented: $coord.isSheetPresented) {
-                SproutAssistantSheetView()
-            }
+        if FeatureFlags.serverGardenFeaturesRestricted {
+            Color.clear
+                .onAppear { appEnv.assistant.dismissSheet() }
+        } else {
+            Color.clear
+                .allowsHitTesting(false)
+                .sheet(isPresented: $coord.isSheetPresented) {
+                    SproutAssistantSheetView()
+                }
+        }
     }
 }

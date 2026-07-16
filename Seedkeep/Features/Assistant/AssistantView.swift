@@ -30,6 +30,9 @@ struct AssistantView: View {
         NavigationStack(path: $path) {
             ZStack {
                 VellumBackground()
+                if FeatureFlags.serverGardenFeaturesRestricted {
+                    restrictedState
+                } else {
                 List {
                     Section {
                         headingBlock
@@ -61,6 +64,7 @@ struct AssistantView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .listStyle(.plain)
+                }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -68,17 +72,21 @@ struct AssistantView: View {
                 AssistantThreadView(threadID: id)
             }
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { Task { await createAndOpen() } } label: {
-                        Image(systemName: "square.and.pencil")
+                if !FeatureFlags.serverGardenFeaturesRestricted {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { Task { await createAndOpen() } } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .disabled(!appEnv.assistant.keyConfigured || creatingThread)
                     }
-                    .disabled(!appEnv.assistant.keyConfigured || creatingThread)
                 }
             }
             .task {
+                guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
                 await appEnv.assistant.refreshKeyStatus()
             }
             .refreshable {
+                guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
                 await appEnv.assistant.refreshKeyStatus()
                 if case .signedIn(_, let household) = appEnv.auth.state {
                     await appEnv.sync.syncAll(householdID: household.id)
@@ -98,6 +106,31 @@ struct AssistantView: View {
     }
 
     // MARK: - Subviews
+
+    @ViewBuilder
+    private var restrictedState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 36))
+                .foregroundStyle(HerbColor.sepia.opacity(0.65))
+            Text("Sprout is temporarily unavailable")
+                .font(HerbFont.display(size: 22))
+                .foregroundStyle(HerbColor.ink)
+                .multilineTextAlignment(.center)
+            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Text("Existing conversations remain on this device and stay hidden while they could refer to a different garden.")
+                .font(HerbFont.bodyItalic(size: 11))
+                .foregroundStyle(HerbColor.inkFaint)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
 
     @ViewBuilder
     private var headingBlock: some View {

@@ -216,17 +216,16 @@ public final class AppEnvironment {
             let activeGardenHouseholdID = self.activeGardenHouseholdID ?? household.id
             // R1: route HOUSEHOLD garden data through the CloudKit coordinator when the flag is on,
             // else the legacy server feeds. Both share the identical post-sync orchestration below.
-            // (catalogCorrections + assistantThreads stay on the server SyncEngine regardless — they
-            // are R3/R5 — so when the flag is ON we additionally run those two server feeds. For this
-            // OFF-by-default phase that extra-feed wiring is deferred to the cutover; see the spec.)
+            // Catalog corrections stay on the server as the R3 personal feed. Assistant threads are
+            // gated while CloudKit is active because their server tools address the parked household.
             let banner: String?
             if FeatureFlags.cloudKitHouseholdSyncEnabled {
                 let coordinator = ensureCloudCoordinator(household: household)
                 let ran = await coordinator.sync()
                 guard ran else { return }
-                // Household data synced via CloudKit; still pull the non-household server feeds
-                // (catalog corrections R3 + assistant threads R5) — syncAll skips the 7 household
-                // feeds + flushPending when the flag is ON. Only fold in the server error when this
+                // Household data synced via CloudKit; still pull the catalog-corrections personal
+                // feed. syncAll skips household feeds, assistant history, and flushPending when the
+                // flag is ON. Only fold in the server error when this
                 // syncAll actually RAN (a skipped in-flight pass leaves a stale lastHumanizedError —
                 // surfacing it would be a phantom banner; same reasoning as the OFF branch's guard).
                 // SOURCE-TAG the banner so a legacy-server-feed hiccup isn't misread as a CloudKit

@@ -14,6 +14,10 @@ struct AssistantKeySettingsView: View {
     @State private var infoMessage: String?
 
     var body: some View {
+        Group {
+        if FeatureFlags.serverGardenFeaturesRestricted {
+            restrictedState
+        } else {
         Form {
             if appEnv.assistant.keyConfigured && !showingReplaceField {
                 Section {
@@ -73,15 +77,44 @@ struct AssistantKeySettingsView: View {
                 }
             }
         }
+        }
+        }
         .vellumForm()
         .navigationTitle("AI Assistant")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await appEnv.assistant.refreshKeyStatus() }
+        .task {
+            guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
+            await appEnv.assistant.refreshKeyStatus()
+        }
+    }
+
+    @ViewBuilder
+    private var restrictedState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 36))
+                .foregroundStyle(HerbColor.sepia.opacity(0.65))
+            Text("Sprout is temporarily unavailable")
+                .font(HerbFont.display(size: 22))
+                .foregroundStyle(HerbColor.ink)
+                .multilineTextAlignment(.center)
+            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
     }
 
     // MARK: - Actions
 
     private func save() async {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            return
+        }
         working = true
         defer { working = false }
         errorMessage = nil
@@ -100,6 +133,10 @@ struct AssistantKeySettingsView: View {
     }
 
     private func revoke() async {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else {
+            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            return
+        }
         working = true
         defer { working = false }
         errorMessage = nil

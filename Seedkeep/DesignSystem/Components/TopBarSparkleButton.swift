@@ -11,15 +11,19 @@ struct TopBarSparkleButton: View {
     @State private var working = false
 
     var body: some View {
-        Button {
-            Task { await launch() }
-        } label: {
-            Image(systemName: "sparkles")
-                .symbolRenderingMode(.hierarchical)
+        if FeatureFlags.serverGardenFeaturesRestricted {
+            EmptyView()
+        } else {
+            Button {
+                Task { await launch() }
+            } label: {
+                Image(systemName: "sparkles")
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .tint(HerbColor.sepia)
+            .disabled(working)
+            .accessibilityLabel("Ask Sprout")
         }
-        .tint(HerbColor.sepia)
-        .disabled(working)
-        .accessibilityLabel("Ask Sprout")
     }
 
     private func launch() async {

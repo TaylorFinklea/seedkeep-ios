@@ -83,4 +83,142 @@ struct CloudKitPendingWriteRegressionTests {
         try engine.enqueueDeletePlantingEvent(id: event.id)
         #expect(signalCount == 15)
     }
+
+    @Test("CloudKit mode makes no assistant key request")
+    func cloudKitModeSkipsAssistantKeyRequest() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let response = Data(#"{"ok":true,"data":{"providers":[{"provider":"anthropic","configured":true,"updated_at":1}]}}"#.utf8)
+        let emptyFeed = Data(#"{"ok":true,"data":{"items":[],"cursor":0,"has_more":false}}"#.utf8)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            routes: ["GET /api/households/me/assistant_key": response],
+            fallbackBody: emptyFeed,
+            fallbackStatus: 200
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "test"
+        )
+        let coordinator = AIAssistantCoordinator(
+            client: client,
+            container: makeTestContainer(name: "cloudKitAssistantKeyGate")
+        )
+
+        await coordinator.refreshKeyStatus()
+
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty,
+                "CloudKit mode must not ask the server for assistant capability")
+        #expect(coordinator.keyConfigured == false)
+        #expect(coordinator.keyCheckError == FeatureFlags.cloudKitGardenCapabilityMessage)
+    }
+
+    @Test("CloudKit mode skips the background assistant thread feed")
+    func cloudKitModeSkipsAssistantThreadFeed() async {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let emptyFeed = Data(#"{"ok":true,"data":{"items":[],"cursor":0,"has_more":false}}"#.utf8)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            routes: ["/api/assistant/threads": emptyFeed],
+            fallbackBody: emptyFeed,
+            fallbackStatus: 200
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "test"
+        )
+        let engine = SyncEngine(
+            client: client,
+            container: makeTestContainer(name: "cloudKitAssistantFeedGate")
+        )
+
+        _ = await engine.syncAll(householdID: "household-cloudkit")
+
+        #expect(!CatalogRouterMockURLProtocol.capturedPaths().contains("/api/assistant/threads"),
+                "CloudKit mode must not pull server-backed assistant history")
+    }
+
+    @Test("CloudKit mode blocks every coordinator assistant operation")
+    func cloudKitModeBlocksCoordinatorOperations() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let emptyFeed = Data(#"{"ok":true,"data":{"items":[],"cursor":0,"has_more":false}}"#.utf8)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: emptyFeed,
+            fallbackStatus: 200
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "test"
+        )
+        let container = makeTestContainer(name: "cloudKitAssistantOperationGate")
+        let coordinator = AIAssistantCoordinator(client: client, container: container)
+        let engine = SyncEngine(client: client, container: container)
+        coordinator.wireSync(engine)
+
+        await Self.expectCloudKitBlocked { _ = try await coordinator.createThread() }
+        await Self.expectCloudKitBlocked { try await coordinator.deleteThread("thread") }
+        await Self.expectCloudKitBlocked { try await coordinator.send(text: "hello") }
+        await Self.expectCloudKitBlocked { try await coordinator.confirmToolCall("tool") }
+        await Self.expectCloudKitBlocked { try await coordinator.cancelToolCall("tool") }
+        try await engine.refreshAssistantThread("thread")
+
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty,
+                "CloudKit mode must block every coordinator and detail-refresh request")
+    }
+
+    @Test("flag OFF preserves assistant key refresh")
+    func flagOffPreservesAssistantKeyRefresh() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(false)
+
+        let response = Data(#"{"ok":true,"data":{"providers":[{"provider":"anthropic","configured":true,"updated_at":1}]}}"#.utf8)
+        let emptyFeed = Data(#"{"ok":true,"data":{"items":[],"cursor":0,"has_more":false}}"#.utf8)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            routes: ["GET /api/households/me/assistant_key": response],
+            fallbackBody: emptyFeed,
+            fallbackStatus: 200
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "test"
+        )
+        let coordinator = AIAssistantCoordinator(
+            client: client,
+            container: makeTestContainer(name: "flagOffAssistantKeyGate")
+        )
+
+        await coordinator.refreshKeyStatus()
+
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().contains("/api/households/me/assistant_key"))
+        #expect(coordinator.keyConfigured)
+    }
+
+    private static func expectCloudKitBlocked(
+        _ operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            Issue.record("CloudKit-gated assistant operation unexpectedly succeeded")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "cloudkit_feature_unavailable")
+            #expect(error.message == FeatureFlags.cloudKitGardenCapabilityMessage)
+        } catch {
+            Issue.record("Unexpected gate error: \(error)")
+        }
+    }
+
+    private static func restoreCloudKitFlag(_ previous: Any?) {
+        if let previous {
+            UserDefaults.standard.set(previous, forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        }
+    }
 }

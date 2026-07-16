@@ -107,12 +107,11 @@ public final class SyncEngine {
 
         // R1: the 7 HOUSEHOLD feeds (+ the optimistic-write push queue) move to the CloudKit
         // coordinator when the flag is ON; the server stays the source of truth only while OFF. The
-        // 2 NON-household feeds (catalog corrections = R3, assistant threads = R5) stay on the server
-        // regardless. Flag OFF (shipping) runs all 9 feeds + flushPending exactly as before.
-        // Order is preserved EXACTLY vs the pre-flag sequence (flag OFF runs all 9 + flushPending in
-        // the original order: …pet_departures, catalog_corrections, journal_entries, assistant_threads,
-        // push). The household feeds are individually guarded in place so the flag-OFF order is
-        // byte-identical and flag-ON runs only catalog_corrections + assistant_threads.
+        // Catalog corrections (R3) stays on the server regardless. Assistant threads (R5) are
+        // server-backed garden history and are gated while CloudKit is active. Flag OFF (shipping)
+        // runs all 9 feeds + flushPending exactly as before. Order is preserved EXACTLY vs the
+        // pre-flag sequence (flag OFF runs all 9 + flushPending in the original order: …pet_departures,
+        // catalog_corrections, journal_entries, assistant_threads, push).
         let cloud = FeatureFlags.cloudKitHouseholdSyncEnabled
         if !cloud {
             do { try await pullLocations(householdID: householdID) } catch { record("locations", error) }
@@ -126,7 +125,9 @@ public final class SyncEngine {
         if !cloud {
             do { try await pullJournalEntries(householdID: householdID) } catch { record("journal_entries", error) }
         }
-        do { try await pullAssistantThreads(householdID: householdID) } catch { record("assistant_threads", error) }
+        if !cloud {
+            do { try await pullAssistantThreads(householdID: householdID) } catch { record("assistant_threads", error) }
+        }
         if !cloud {
             do { try await flushPending() } catch { record("push", error) }
         }
@@ -1481,6 +1482,7 @@ public final class SyncEngine {
     /// Called by AssistantThreadView on appear so cross-device updates land
     /// without waiting for the next syncAll sweep.
     public func refreshAssistantThread(_ threadID: String) async throws {
+        guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
         let detail = try await client.assistantThread(id: threadID)
         let context = ModelContext(container)
         // Update the thread row too in case its updated_at changed.
