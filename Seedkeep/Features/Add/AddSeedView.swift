@@ -105,13 +105,13 @@ struct AddSeedView: View {
                 Section {
                     Picker("Location", selection: $locationID) {
                         Text("None").tag(String?.none)
-                        ForEach(locations) { loc in
+                        ForEach(activeLocations) { loc in
                             Text(loc.name).tag(Optional(loc.id))
                         }
                     }
-                    if !tags.isEmpty {
+                    if !activeTags.isEmpty {
                         NavigationLink {
-                            TagPickerView(tags: tags, selection: $selectedTagIDs)
+                            TagPickerView(tags: activeTags, selection: $selectedTagIDs)
                         } label: {
                             HStack {
                                 Text("Tags")
@@ -167,6 +167,16 @@ struct AddSeedView: View {
                 }
             }
         }
+    }
+
+    private var activeLocations: [LocalLocation] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return locations.filter { $0.householdID == householdID }
+    }
+
+    private var activeTags: [LocalTag] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return tags.filter { $0.householdID == householdID }
     }
 
     private var canSave: Bool {
@@ -373,6 +383,7 @@ struct AddSeedView: View {
             return
         }
 
+        let activeGardenHouseholdID = appEnv.activeGardenHouseholdID ?? household.id
         let input = SeedkeepClient.CreateSeedInput(
             catalog_id: catalogID,
             state: state,
@@ -388,7 +399,7 @@ struct AddSeedView: View {
         )
 
         do {
-            let local = try appEnv.sync.enqueueCreateSeed(input, householdID: household.id)
+            let local = try appEnv.sync.enqueueCreateSeed(input, householdID: activeGardenHouseholdID)
             if let snapshot = buildGrowingInfoSnapshot(), snapshot.hasAny {
                 try? appEnv.sync.setLocalGrowingInfo(seedID: local.id, snapshot: snapshot)
             }
@@ -401,7 +412,11 @@ struct AddSeedView: View {
             // which serially drains EVERY queued write, causing the
             // confirm-seed screen to hang multi-seconds whenever older
             // pending writes were still in the queue (logged 7945ms freeze).
-            Task { try? await appEnv.sync.flushPending() }
+            if FeatureFlags.cloudKitHouseholdSyncEnabled {
+                Task { await appEnv.syncIfPossible() }
+            } else {
+                Task { try? await appEnv.sync.flushPending() }
+            }
             dismiss()
         } catch {
             saveError = error.localizedDescription

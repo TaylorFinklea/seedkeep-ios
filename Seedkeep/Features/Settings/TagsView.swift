@@ -95,7 +95,7 @@ struct TagsView: View {
             _ = try appEnv.sync.enqueueCreateTag(
                 name: trimmed,
                 color: hex,
-                householdID: household.id
+                householdID: appEnv.activeGardenHouseholdID ?? household.id
             )
             Task { try? await appEnv.sync.flushPending() }
         } catch {

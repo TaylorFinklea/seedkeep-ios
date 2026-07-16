@@ -83,7 +83,11 @@ public final class AppEnvironment {
             thresholds: .kc,
             householdIDProvider: { @MainActor [weak auth] in
                 guard case .signedIn(_, let household) = auth?.state else { return nil }
-                return household.id
+                return ActiveGardenContext.householdID(
+                    signedInHouseholdID: household.id,
+                    participantZoneName: ActiveGardenContext.participantZoneName(),
+                    cloudKitSyncEnabled: FeatureFlags.cloudKitHouseholdSyncEnabled
+                )
             },
             preferencesProvider: { @MainActor [weak prefs] in
                 (lat: prefs?.cachedLatitude, lon: prefs?.cachedLongitude)
@@ -208,6 +212,7 @@ public final class AppEnvironment {
     /// Phase 5.1.4 (the side-effect helper has the hook points stubbed).
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
+            let activeGardenHouseholdID = self.activeGardenHouseholdID ?? household.id
             // R1: route HOUSEHOLD garden data through the CloudKit coordinator when the flag is on,
             // else the legacy server feeds. Both share the identical post-sync orchestration below.
             // (catalogCorrections + assistantThreads stay on the server SyncEngine regardless — they
@@ -253,7 +258,7 @@ public final class AppEnvironment {
             // errors from strobing the UI.
             if let banner { presentBanner(banner) }
             let transitions = PetStateEngine.tickAll(
-                householdID: household.id,
+                householdID: activeGardenHouseholdID,
                 container: container
             )
             await PetStateEngine.performSideEffects(
@@ -282,6 +287,18 @@ public final class AppEnvironment {
     /// Read-only access to the live CloudKit coordinator for the Settings diagnostics panel
     /// (nil until the first sync after the flag is toggled on). Its @Observable state drives the UI.
     var cloudKit: HouseholdCloudCoordinator? { cloudCoordinator }
+
+    /// Household ID that scopes locally stored garden data. In a CloudKit shared
+    /// garden, the owner's zone is authoritative; server-only/rollback mode
+    /// deliberately remains on the signed-in household.
+    var activeGardenHouseholdID: String? {
+        guard case .signedIn(_, let household) = auth.state else { return nil }
+        return ActiveGardenContext.householdID(
+            signedInHouseholdID: household.id,
+            participantZoneName: loadParticipantMarker()?.zoneName,
+            cloudKitSyncEnabled: FeatureFlags.cloudKitHouseholdSyncEnabled
+        )
+    }
 
     /// Owner (private DB) coordinator for the user's own household, OR — if this device has adopted a
     /// shared household (participant marker present) — a participant coordinator on the owner's shared
@@ -319,7 +336,7 @@ public final class AppEnvironment {
         let ownerName: String
         var zoneID: CKRecordZone.ID { CKRecordZone.ID(zoneName: zoneName, ownerName: ownerName) }
     }
-    @ObservationIgnored private let markerZoneKey = "seedkeep.sharing.participant.zoneName"
+    @ObservationIgnored private let markerZoneKey = ActiveGardenContext.participantZoneNameDefaultsKey
     @ObservationIgnored private let markerOwnerKey = "seedkeep.sharing.participant.ownerName"
 
     func loadParticipantMarker() -> ParticipantMarker? {
@@ -375,7 +392,8 @@ public final class AppEnvironment {
         do {
             let flow = SeedkeepShareFlow()
             let zoneID = try await flow.acceptZoneWideShare(metadata)
-            HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+            // Keep the signed-in household's local rows parked while the shared
+            // garden is active; all garden reads use activeGardenHouseholdID.
             // Reset the shared-zone token so the rebuilt participant coordinator does a FULL re-fetch
             // (re-adopting a previously-left share would otherwise resume a stale cursor → empty store).
             HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.participantStateTokenURL(zoneName: zoneID.zoneName))
@@ -395,10 +413,9 @@ public final class AppEnvironment {
     /// coordinator so the next sync rebuilds the OWNER coordinator (the user's own zone re-syncs).
     func leaveSharedHousehold() async {
         clearParticipantMarker()
-        HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
-        // Reset the OWNER token so the rebuilt owner coordinator does a FULL re-fetch — re-downloading
-        // the user's own (parked, intact) CloudKit zone into the just-wiped SwiftData. Without this, the
-        // resumed cursor sees no changes since adopt and the user's own garden would stay empty locally.
+        // Reset the OWNER token so the rebuilt owner coordinator does a FULL re-fetch. The user's
+        // own rows were parked during shared-garden participation, so the shared rows remain filtered
+        // out instead of being destructively erased.
         if case .signedIn(_, let household) = auth.state {
             HouseholdCloudCoordinator.resetStateToken(at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
         }

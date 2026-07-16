@@ -43,6 +43,7 @@ struct LibraryView: View {
 
                         SpecimenGrid(
                             state: selectedState,
+                            householdID: appEnv.activeGardenHouseholdID,
                             searchText: searchText,
                             groupByType: groupByType
                         )
@@ -114,14 +115,19 @@ struct LibraryView: View {
                 .font(HerbFont.display(size: 42))
                 .foregroundStyle(HerbColor.ink)
                 .lineSpacing(0)
-            Text("\(allSeeds.count) \(allSeeds.count == 1 ? "specimen" : "specimens"), of which \(activeCount) in the active garden")
+            Text("\(activeSeeds.count) \(activeSeeds.count == 1 ? "specimen" : "specimens"), of which \(activeCount) in the active garden")
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
         }
     }
 
+    private var activeSeeds: [LocalSeed] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return allSeeds.filter { $0.householdID == householdID }
+    }
+
     private var activeCount: Int {
-        allSeeds.filter { $0.stateRaw == SeedState.active.rawValue }.count
+        activeSeeds.filter { $0.stateRaw == SeedState.active.rawValue }.count
     }
 
     // MARK: - Lifecycle filter
@@ -139,7 +145,7 @@ struct LibraryView: View {
     @ViewBuilder
     private func lifecycleButton(_ state: SeedState) -> some View {
         let active = state == selectedState
-        let count = allSeeds.filter { $0.stateRaw == state.rawValue }.count
+        let count = activeSeeds.filter { $0.stateRaw == state.rawValue }.count
         Button {
             selectedState = state
         } label: {
@@ -199,11 +205,12 @@ private struct SpecimenGrid: View {
     private let searchText: String
     private let groupByType: Bool
 
-    init(state: SeedState, searchText: String, groupByType: Bool) {
+    init(state: SeedState, householdID: String?, searchText: String, groupByType: Bool) {
         let raw = state.rawValue
+        let activeHouseholdID = householdID ?? ""
         _seeds = Query(
             filter: #Predicate<LocalSeed> { seed in
-                seed.deletedAt == nil && seed.stateRaw == raw
+                seed.deletedAt == nil && seed.stateRaw == raw && seed.householdID == activeHouseholdID
             },
             sort: \.updatedAt,
             order: .reverse)

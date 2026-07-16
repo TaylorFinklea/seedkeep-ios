@@ -653,7 +653,7 @@ public final class SyncEngine {
         )
         let context = ModelContext(container)
         context.insert(local)
-        context.insert(pending)
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled { context.insert(pending) }
         try context.save()
         return local
     }
@@ -666,10 +666,14 @@ public final class SyncEngine {
             if let sortOrder { local.sortOrder = sortOrder }
             local.updatedAt = now
         }
-        let payload = try JSONEncoder().encode(LocationUpdate(name: name, sort_order: sortOrder))
-        try enqueueOrCoalesceUpdate(
-            entityType: "location", entityID: id,
-            payload: payload, now: now, in: context)
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            try context.save()
+        } else {
+            let payload = try JSONEncoder().encode(LocationUpdate(name: name, sort_order: sortOrder))
+            try enqueueOrCoalesceUpdate(
+                entityType: "location", entityID: id,
+                payload: payload, now: now, in: context)
+        }
     }
 
     public func enqueueDeleteLocation(id: String) throws {
@@ -679,12 +683,14 @@ public final class SyncEngine {
             local.deletedAt = now
             local.updatedAt = now
         }
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "location", entityID: id, operation: "delete",
-            payloadJSON: "{}",
-            createdAt: now
-        ))
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+            context.insert(LocalPendingWrite(
+                id: "pw_\(UUID().uuidString)",
+                entityType: "location", entityID: id, operation: "delete",
+                payloadJSON: "{}",
+                createdAt: now
+            ))
+        }
         try context.save()
     }
 
@@ -701,7 +707,7 @@ public final class SyncEngine {
         )
         let context = ModelContext(container)
         context.insert(local)
-        context.insert(pending)
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled { context.insert(pending) }
         try context.save()
         return local
     }
@@ -714,13 +720,17 @@ public final class SyncEngine {
             if let color { local.color = color }
             local.updatedAt = now
         }
-        let payload = try JSONEncoder().encode(TagUpdate(
-            name: name,
-            color: color.flatMap { $0 }
-        ))
-        try enqueueOrCoalesceUpdate(
-            entityType: "tag", entityID: id,
-            payload: payload, now: now, in: context)
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            try context.save()
+        } else {
+            let payload = try JSONEncoder().encode(TagUpdate(
+                name: name,
+                color: color.flatMap { $0 }
+            ))
+            try enqueueOrCoalesceUpdate(
+                entityType: "tag", entityID: id,
+                payload: payload, now: now, in: context)
+        }
     }
 
     public func enqueueDeleteTag(id: String) throws {
@@ -730,12 +740,14 @@ public final class SyncEngine {
             local.deletedAt = now
             local.updatedAt = now
         }
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "tag", entityID: id, operation: "delete",
-            payloadJSON: "{}",
-            createdAt: now
-        ))
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+            context.insert(LocalPendingWrite(
+                id: "pw_\(UUID().uuidString)",
+                entityType: "tag", entityID: id, operation: "delete",
+                payloadJSON: "{}",
+                createdAt: now
+            ))
+        }
         try context.save()
     }
 
@@ -772,7 +784,7 @@ public final class SyncEngine {
         )
         let context = ModelContext(container)
         context.insert(local)
-        context.insert(pending)
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled { context.insert(pending) }
         try context.save()
         return local
     }
@@ -797,10 +809,14 @@ public final class SyncEngine {
             if let ids = patch.tag_ids { local.tagIDs = ids }
             local.updatedAt = now
         }
-        let payload = try JSONEncoder().encode(patch)
-        try enqueueOrCoalesceUpdate(
-            entityType: "seed", entityID: id,
-            payload: payload, now: now, in: context)
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            try context.save()
+        } else {
+            let payload = try JSONEncoder().encode(patch)
+            try enqueueOrCoalesceUpdate(
+                entityType: "seed", entityID: id,
+                payload: payload, now: now, in: context)
+        }
     }
 
     /// Updates the local-only growing-info snapshot on a seed. Not sent to
@@ -833,12 +849,14 @@ public final class SyncEngine {
             local.deletedAt = now
             local.updatedAt = now
         }
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "seed", entityID: id, operation: "delete",
-            payloadJSON: "{}",
-            createdAt: now
-        ))
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+            context.insert(LocalPendingWrite(
+                id: "pw_\(UUID().uuidString)",
+                entityType: "seed", entityID: id, operation: "delete",
+                payloadJSON: "{}",
+                createdAt: now
+            ))
+        }
         try context.save()
     }
 
@@ -865,12 +883,14 @@ public final class SyncEngine {
         let payload = try JSONEncoder().encode(input)
         let context = ModelContext(container)
         context.insert(local)
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "bed", entityID: id, operation: "create",
-            payloadJSON: String(decoding: payload, as: UTF8.self),
-            createdAt: now
-        ))
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+            context.insert(LocalPendingWrite(
+                id: "pw_\(UUID().uuidString)",
+                entityType: "bed", entityID: id, operation: "create",
+                payloadJSON: String(decoding: payload, as: UTF8.self),
+                createdAt: now
+            ))
+        }
         try context.save()
         return local
     }
@@ -886,10 +906,14 @@ public final class SyncEngine {
             if let o = patch.sort_order { local.sortOrder = o }
             local.updatedAt = now
         }
-        let payload = try JSONEncoder().encode(patch)
-        try enqueueOrCoalesceUpdate(
-            entityType: "bed", entityID: id,
-            payload: payload, now: now, in: context)
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            try context.save()
+        } else {
+            let payload = try JSONEncoder().encode(patch)
+            try enqueueOrCoalesceUpdate(
+                entityType: "bed", entityID: id,
+                payload: payload, now: now, in: context)
+        }
     }
 
     public func enqueueDeleteBed(id: String) throws {
@@ -899,12 +923,14 @@ public final class SyncEngine {
             local.deletedAt = now
             local.updatedAt = now
         }
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "bed", entityID: id, operation: "delete",
-            payloadJSON: "{}",
-            createdAt: now
-        ))
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+            context.insert(LocalPendingWrite(
+                id: "pw_\(UUID().uuidString)",
+                entityType: "bed", entityID: id, operation: "delete",
+                payloadJSON: "{}",
+                createdAt: now
+            ))
+        }
         try context.save()
     }
 
@@ -962,12 +988,14 @@ public final class SyncEngine {
         let payload = try JSONEncoder().encode(input)
         let context = ModelContext(container)
         context.insert(local)
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "planting_event", entityID: id, operation: "create",
-            payloadJSON: String(decoding: payload, as: UTF8.self),
-            createdAt: now
-        ))
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+            context.insert(LocalPendingWrite(
+                id: "pw_\(UUID().uuidString)",
+                entityType: "planting_event", entityID: id, operation: "create",
+                payloadJSON: String(decoding: payload, as: UTF8.self),
+                createdAt: now
+            ))
+        }
         try context.save()
         // Phase 4 C — schedule a local "Planned for today" reminder. No-op
         // when the user has notifications off; permission check happens
@@ -996,10 +1024,14 @@ public final class SyncEngine {
             if let y = patch.y_feet { local.yFeet = y }
             local.updatedAt = now
         }
-        let payload = try JSONEncoder().encode(patch)
-        try enqueueOrCoalesceUpdate(
-            entityType: "planting_event", entityID: id,
-            payload: payload, now: now, in: context)
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            try context.save()
+        } else {
+            let payload = try JSONEncoder().encode(patch)
+            try enqueueOrCoalesceUpdate(
+                entityType: "planting_event", entityID: id,
+                payload: payload, now: now, in: context)
+        }
         // Phase 4 C — reschedule (or cancel, if completed) the reminder.
         if let local = try fetchPlantingEvent(id: id, in: context) {
             if local.completedAt != nil {
@@ -1022,12 +1054,14 @@ public final class SyncEngine {
             local.deletedAt = now
             local.updatedAt = now
         }
-        context.insert(LocalPendingWrite(
-            id: "pw_\(UUID().uuidString)",
-            entityType: "planting_event", entityID: id, operation: "delete",
-            payloadJSON: "{}",
-            createdAt: now
-        ))
+        if !FeatureFlags.cloudKitHouseholdSyncEnabled {
+            context.insert(LocalPendingWrite(
+                id: "pw_\(UUID().uuidString)",
+                entityType: "planting_event", entityID: id, operation: "delete",
+                payloadJSON: "{}",
+                createdAt: now
+            ))
+        }
         try context.save()
         // Phase 4 C — drop any pending reminder for this event.
         // Phase 5.1.4 — also drop any pet notifications for this event.

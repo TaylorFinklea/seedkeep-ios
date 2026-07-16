@@ -24,12 +24,12 @@ struct GardenView: View {
                 VellumBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        FolioStrip(section: "Hortus", folio: max(beds.count, 1))
+                        FolioStrip(section: "Hortus", folio: max(activeBeds.count, 1))
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Abbey grounds")
                                 .font(HerbFont.display(size: 38))
                                 .foregroundStyle(HerbColor.ink)
-                            Text("\(beds.count) \(beds.count == 1 ? "plot" : "plots") in the household garden")
+                            Text("\(activeBeds.count) \(activeBeds.count == 1 ? "plot" : "plots") in the household garden")
                                 .font(HerbFont.bodyItalic(size: 12))
                                 .foregroundStyle(HerbColor.inkSoft)
                         }
@@ -56,11 +56,11 @@ struct GardenView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        if beds.isEmpty {
+                        if activeBeds.isEmpty {
                             emptyState
                         } else {
                             VStack(spacing: 0) {
-                                ForEach(Array(beds.enumerated()), id: \.element.id) { (idx, bed) in
+                                ForEach(Array(activeBeds.enumerated()), id: \.element.id) { (idx, bed) in
                                     NavigationLink(value: bed.id) {
                                         BedRow(bed: bed, romanIndex: idx + 1, openEvents: openEventsFor(bedID: bed.id))
                                     }
@@ -123,8 +123,18 @@ struct GardenView: View {
         }
     }
 
+    private var activeBeds: [LocalBed] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return beds.filter { $0.householdID == householdID }
+    }
+
+    private var activeOpenEvents: [LocalPlantingEvent] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return openEvents.filter { $0.householdID == householdID }
+    }
+
     private func openEventsFor(bedID: String) -> [LocalPlantingEvent] {
-        openEvents.filter { $0.bedID == bedID }
+        activeOpenEvents.filter { $0.bedID == bedID }
     }
 
     @ViewBuilder

@@ -90,6 +90,7 @@ struct AddBedView: View {
             error = "Not signed in."
             return
         }
+        let activeGardenHouseholdID = appEnv.activeGardenHouseholdID ?? household.id
         let input = SeedkeepClient.CreateBedInput(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             description: description.trimmedNonEmpty,
@@ -97,7 +98,7 @@ struct AddBedView: View {
             length_feet: Double(lengthFeet.trimmingCharacters(in: .whitespaces))
         )
         do {
-            _ = try appEnv.sync.enqueueCreateBed(input, householdID: household.id)
+            _ = try appEnv.sync.enqueueCreateBed(input, householdID: activeGardenHouseholdID)
             await appEnv.syncIfPossible()
             dismiss()
         } catch let err as SeedkeepError {

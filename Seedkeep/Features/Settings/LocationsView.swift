@@ -94,7 +94,7 @@ struct LocationsView: View {
             _ = try appEnv.sync.enqueueCreateLocation(
                 name: trimmed,
                 sortOrder: locations.count,
-                householdID: household.id
+                householdID: appEnv.activeGardenHouseholdID ?? household.id
             )
             Task { try? await appEnv.sync.flushPending() }
         } catch {

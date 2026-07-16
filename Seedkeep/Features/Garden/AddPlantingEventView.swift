@@ -154,13 +154,13 @@ struct AddPlantingEventView: View {
         Section {
             Picker("Bed", selection: $selectedBedID) {
                 Text("None").tag(String?.none)
-                ForEach(beds) { bed in
+                ForEach(activeBeds) { bed in
                     Text(bed.name).tag(Optional(bed.id))
                 }
             }
             Picker("Seed", selection: $selectedSeedID) {
                 Text("None").tag(String?.none)
-                ForEach(seeds) { seed in
+                ForEach(activeSeeds) { seed in
                     Text(seed.customName ?? "Unnamed seed").tag(Optional(seed.id))
                 }
             }
@@ -265,13 +265,23 @@ struct AddPlantingEventView: View {
 
     private var selectedBed: LocalBed? {
         guard let id = selectedBedID else { return nil }
-        return beds.first(where: { $0.id == id })
+        return activeBeds.first(where: { $0.id == id })
     }
 
     /// The catalog ID of the currently selected seed, or nil if none.
     private var selectedCatalogID: String? {
         guard let seedID = selectedSeedID else { return nil }
-        return seeds.first(where: { $0.id == seedID })?.catalogID
+        return activeSeeds.first(where: { $0.id == seedID })?.catalogID
+    }
+
+    private var activeBeds: [LocalBed] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return beds.filter { $0.householdID == householdID }
+    }
+
+    private var activeSeeds: [LocalSeed] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return seeds.filter { $0.householdID == householdID }
     }
 
     private func formatFt(_ v: Double) -> String {
@@ -308,6 +318,7 @@ struct AddPlantingEventView: View {
             error = "Not signed in."
             return
         }
+        let activeGardenHouseholdID = appEnv.activeGardenHouseholdID ?? household.id
         let input = SeedkeepClient.CreatePlantingEventInput(
             bed_id: selectedBedID,
             seed_id: selectedSeedID,
@@ -320,7 +331,7 @@ struct AddPlantingEventView: View {
             y_feet: hasPosition ? yFeet : nil
         )
         do {
-            _ = try appEnv.sync.enqueueCreatePlantingEvent(input, householdID: household.id)
+            _ = try appEnv.sync.enqueueCreatePlantingEvent(input, householdID: activeGardenHouseholdID)
             await appEnv.syncIfPossible()
             dismiss()
         } catch let err as SeedkeepError {
