@@ -1,30 +1,22 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Sheet that's auto-presented when a `seedkeep://invite/<code>` URL or
-/// the `applinks:seedkeep.app` universal link is opened. Calls
-/// `POST /api/invites/:code/accept` and refreshes the household state.
+/// Sheet that's auto-presented when a `seedkeep://invite/<code>` URL or the
+/// `applinks:seedkeep.app` universal link is opened. Server household invitations are retired
+/// (2026-07-13 "CKShare is the sole R1 invitation model" ADR) — CKShare is the only sharing model,
+/// so this no longer calls any accept endpoint; it just tells the user sharing moved to iCloud.
 struct InviteAcceptView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(AppEnvironment.self) private var appEnv
-    @Environment(AuthController.self) private var auth
 
+    /// Kept so the existing deep-link plumbing (the sheet in `SeedkeepApp`, fed by
+    /// `InviteURLRouter`) doesn't need to change — the code itself is no longer used.
     let code: String
-
-    enum Phase: Equatable {
-        case confirming
-        case accepting
-        case success(HouseholdDTO)
-        case failure(String)
-    }
-
-    @State private var phase: Phase = .confirming
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
                 Spacer()
-                content
+                InviteRetirementNotice()
                 Spacer()
             }
             .padding(.horizontal, 24)
@@ -32,116 +24,35 @@ struct InviteAcceptView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(phase == .accepting ? "" : "Close") { dismiss() }
-                        .disabled(phase == .accepting)
+                    Button("Close") { dismiss() }
                 }
             }
         }
     }
+}
 
-    @ViewBuilder
-    private var content: some View {
-        switch phase {
-        case .confirming:
-            confirmingView
-        case .accepting:
-            VStack(spacing: 12) {
-                ProgressView().controlSize(.large).herbProgressStyle()
-                Text("Joining household…").foregroundStyle(.secondary)
-            }
-        case .success(let household):
-            successView(household: household)
-        case .failure(let message):
-            failureView(message: message)
-        }
-    }
-
-    @ViewBuilder
-    private var confirmingView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "envelope.open")
-                .resizable()
-                .frame(width: 56, height: 56)
-                .foregroundStyle(.tint)
-            Text("Join a household")
-                .font(.title2.weight(.semibold))
-            Text("You've been invited to share a seed library. Joining replaces your current household.")
+/// Retired-capability notice, in the idiom of `AssistantView.restrictedState`: SF Symbol + display
+/// title + italic body. Shared by the signed-in (`InviteAcceptView`) and signed-out
+/// (`SeedkeepApp.signedOutInviteView`) deep-link landings so an old invite link always lands
+/// somewhere deliberate instead of a dead accept flow.
+struct InviteRetirementNotice: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "envelope.slash")
+                .font(.system(size: 36))
+                .foregroundStyle(HerbColor.sepia.opacity(0.65))
+            Text("Household invites have moved")
+                .font(HerbFont.display(size: 22))
+                .foregroundStyle(HerbColor.ink)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Text(code)
-                .font(.title3.monospaced())
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.secondary.opacity(0.12), in: .capsule)
-                .padding(.top, 4)
-            Button {
-                Task { await accept() }
-            } label: {
-                Text("Accept invite")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 8)
-        }
-    }
-
-    @ViewBuilder
-    private func successView(household: HouseholdDTO) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "checkmark.seal.fill")
-                .resizable()
-                .frame(width: 56, height: 56)
-                .foregroundStyle(HerbColor.sage)
-            Text("Joined \(household.name)")
-                .font(.title2.weight(.semibold))
-            Text("Pulling shared inventory…")
-                .foregroundStyle(.secondary)
-            Button("Done") { dismiss() }
-                .buttonStyle(.bordered)
-                .padding(.top, 4)
-        }
-    }
-
-    @ViewBuilder
-    private func failureView(message: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .resizable()
-                .frame(width: 56, height: 56)
-                .foregroundStyle(HerbColor.ochre)
-            Text("Couldn't join")
-                .font(.title2.weight(.semibold))
-            Text(message)
+            Text(FeatureFlags.legacyInviteRetirementMessage)
+                .font(HerbFont.bodyItalic(size: 12))
+                .foregroundStyle(HerbColor.inkSoft)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            HStack {
-                Button("Close") { dismiss() }
-                    .buttonStyle(.bordered)
-                Button("Try again") {
-                    phase = .confirming
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(.top, 4)
+                .padding(.horizontal, 24)
         }
-    }
-
-    private func accept() async {
-        phase = .accepting
-        do {
-            let res = try await appEnv.client.acceptInvite(code: code)
-            phase = .success(res.household)
-            // Refresh identity so the rest of the app sees the new household.
-            await auth.restoreSession()
-            // Pull the shared inventory so the Library reflects it.
-            await appEnv.syncIfPossible()
-        } catch let err as SeedkeepError {
-            phase = .failure(err.message)
-        } catch {
-            phase = .failure(error.localizedDescription)
-        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
     }
 }
 

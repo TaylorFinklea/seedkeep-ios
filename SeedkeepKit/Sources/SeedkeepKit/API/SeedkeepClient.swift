@@ -77,14 +77,6 @@ public actor SeedkeepClient {
         try await getJSON(path: "/api/households/me")
     }
 
-    public func createInvite() async throws -> WireResponses.Invite {
-        try await postJSON(path: "/api/households/me/invites", body: EmptyBody())
-    }
-
-    public func acceptInvite(code: String) async throws -> WireResponses.CreateOrFetchHousehold {
-        try await postJSON(path: "/api/invites/\(code)/accept", body: EmptyBody())
-    }
-
     // MARK: - Watering state (Phase 4C)
 
     /// Household-scoped last-watering-notification timestamp. The server

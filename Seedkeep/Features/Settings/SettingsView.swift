@@ -12,10 +12,6 @@ struct SettingsContent: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(AuthController.self) private var auth
 
-    @State private var inviteCode: String?
-    @State private var isCreatingInvite = false
-    @State private var inviteError: String?
-
     // R1 beta — CloudKit diagnostics
     @State private var iCloudStatus: String?
     @State private var checkingICloud = false
@@ -178,36 +174,6 @@ struct SettingsContent: View {
                         }
                     } header: {
                         Rubric(text: "household")
-                    }
-                    Section {
-                        if let code = inviteCode {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Share this code")
-                                    .font(HerbFont.smallCaps(size: 10))
-                                    .tracking(1.5)
-                                    .foregroundStyle(HerbColor.sepia)
-                                Text(code)
-                                    .font(.title3.monospaced())
-                                    .textSelection(.enabled)
-                            }
-                        } else {
-                            Button {
-                                Task { await createInvite() }
-                            } label: {
-                                HStack {
-                                    Text("Create invite link")
-                                    if isCreatingInvite { ProgressView().controlSize(.small).herbProgressStyle() }
-                                }
-                            }
-                            .disabled(isCreatingInvite)
-                        }
-                        if let inviteError {
-                            Text(inviteError)
-                                .font(.footnote)
-                                .foregroundStyle(HerbColor.rose)
-                        }
-                    } header: {
-                        Rubric(text: "invite")
                     }
                 }
 
@@ -432,19 +398,6 @@ struct SettingsContent: View {
         appEnv.preferences.cachedTier ?? "Tap to view"
     }
 
-    private func createInvite() async {
-        isCreatingInvite = true
-        inviteError = nil
-        defer { isCreatingInvite = false }
-        do {
-            let res = try await appEnv.client.createInvite()
-            inviteCode = res.invite.code
-        } catch let err as SeedkeepError {
-            inviteError = "\(err.code): \(err.message)"
-        } catch {
-            inviteError = error.localizedDescription
-        }
-    }
 }
 
 /// Thin standalone wrapper — adds a `NavigationStack` around `SettingsContent`

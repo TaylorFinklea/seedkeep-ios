@@ -27,12 +27,6 @@ public struct MembershipDTO: Codable, Sendable, Equatable {
     public let email: String?
 }
 
-public struct InviteDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let code: String
-    public let expires_at: Int64
-}
-
 public struct LocationDTO: Codable, Sendable, Equatable {
     public let id: String
     public let household_id: String
@@ -448,10 +442,6 @@ public enum WireResponses {
     public struct Members: Codable, Sendable, Equatable {
         public let household: HouseholdDTO
         public let members: [MembershipDTO]
-    }
-
-    public struct Invite: Codable, Sendable, Equatable {
-        public let invite: InviteDTO
     }
 
     public struct LocationOne: Codable, Sendable, Equatable {

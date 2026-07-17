@@ -127,16 +127,9 @@ struct RootView: View {
 
     @ViewBuilder
     private func signedOutInviteView(code: String) -> some View {
+        // Retired invite links are a dead flow — don't prompt sign-in to redeem one.
         VStack(spacing: 16) {
-            Image(systemName: "person.badge.key")
-                .resizable()
-                .frame(width: 56, height: 56)
-                .foregroundStyle(.tint)
-            Text("Sign in first")
-                .font(.title2.weight(.semibold))
-            Text("Sign in with Apple to accept the invite for code \(code).")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+            InviteRetirementNotice()
             Button("OK") {
                 pendingInviteCode = nil
             }

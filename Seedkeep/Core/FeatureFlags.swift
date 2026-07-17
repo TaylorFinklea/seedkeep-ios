@@ -59,6 +59,13 @@ enum FeatureFlags {
     static let cloudKitPhotoCapabilityMessage =
         "Photos are temporarily unavailable while your active garden uses CloudKit. Existing seed and journal photos are preserved; uploads, galleries, and deletes return when CloudKit photo support is ready."
 
+    /// R1 retirement copy for legacy server household invitations (2026-07-13 "CKShare is the sole
+    /// R1 invitation model" ADR). Unlike the CloudKit capability messages above, this is a
+    /// **permanent retirement, not a temporary gate** — server invite links are not coming back;
+    /// CKShare (Settings ▸ "Share garden via iCloud") is the sole sharing model going forward.
+    static let legacyInviteRetirementMessage =
+        "Household invite links are no longer supported. Share your garden from Settings via iCloud — tap “Share garden via iCloud” to invite someone."
+
     /// True when server-backed household features must not be exposed.
     static var serverGardenFeaturesRestricted: Bool {
         cloudKitHouseholdSyncEnabled
