@@ -497,42 +497,49 @@ public final class AppEnvironment {
         return ParticipantRowRecovery.scopeKey(ownerZoneHouseholdID: ownerID, signedInHouseholdID: household.id)
     }
 
-    /// Share to garden: re-home the live row in place if it still exists, else recreate it from the
-    /// registry item's snapshot through `JournalStore`'s CloudKit authoring path (minting a fresh
-    /// `journal_local_` id). The FK the entry once carried is intentionally NOT reattached on
-    /// recreate — a quarantined entry's FK, by definition, never resolved into the owner-zone garden,
-    /// so passing it through would only trip `JournalStore`'s parent-scope validation.
+    /// Share to garden: re-home the live row in place if it still exists, else recreate it
+    /// atomically from the registry item's snapshot via
+    /// `ParticipantRowRecovery.recreateFromSnapshotAtomically` (R1 27d.18 hardening #1 — the entry,
+    /// its checklist items, and the registry flip to `shared` land in ONE save, so a failure partway
+    /// through can never leave a duplicate-creating retry target). The FK the entry once carried is
+    /// intentionally NOT reattached on recreate — a quarantined entry's FK, by definition, never
+    /// resolved into the owner-zone garden, so passing it through would only trip `JournalStore`'s
+    /// parent-scope validation. `currentScopeKey` (hardening #2) is re-derived from live auth state on
+    /// every call so a stale item captured across a garden switch is refused rather than acted on.
     func shareJournalRecoveryItem(_ item: LocalJournalRecoveryItem) async {
         guard case .signedIn(_, let household) = auth.state,
               let ownerID = activeGardenHouseholdID, ownerID != household.id else { return }
         let itemID = item.id
-        if ParticipantRowRecovery.shareLiveEntryIfPresent(
-            itemID: itemID, ownerZoneHouseholdID: ownerID, container: container
-        ) {
-            noteHouseholdMutation()
-            return
-        }
-        guard let snapshot = ParticipantRowRecovery.decodeSnapshot(item.snapshotJSON) else { return }
+        let scope = ParticipantRowRecovery.scopeKey(
+            ownerZoneHouseholdID: ownerID, signedInHouseholdID: household.id)
         do {
-            let created = try await journal.create(
-                occurredOn: snapshot.occurredOn, body: snapshot.body, householdID: ownerID)
-            for checklistItem in snapshot.checklistItems {
-                let added = try await journal.addChecklistItem(
-                    entryID: created.id, text: checklistItem.text, householdID: ownerID)
-                if checklistItem.completed {
-                    try await journal.updateChecklistItem(added, completed: true, householdID: ownerID)
-                }
+            if try ParticipantRowRecovery.shareLiveEntryIfPresent(
+                itemID: itemID, ownerZoneHouseholdID: ownerID, currentScopeKey: scope, container: container
+            ) {
+                noteHouseholdMutation()
+                return
             }
-            ParticipantRowRecovery.markShared(itemID: itemID, container: container)
+            try ParticipantRowRecovery.recreateFromSnapshotAtomically(
+                itemID: itemID, ownerZoneHouseholdID: ownerID, currentScopeKey: scope, container: container)
             noteHouseholdMutation()
         } catch {
             surfaceError(error)
         }
     }
 
-    /// Keep private: mark the registry item `kept`. Nothing deleted anywhere.
+    /// Keep private: mark the registry item `kept`. Nothing deleted anywhere. `currentScopeKey`
+    /// (R1 27d.18 hardening #2) is re-derived from live auth state so a stale/foreign-scope item is
+    /// refused rather than acted on.
     func keepJournalRecoveryItemPrivate(_ item: LocalJournalRecoveryItem) {
-        ParticipantRowRecovery.keepPrivate(itemID: item.id, container: container)
+        guard case .signedIn(_, let household) = auth.state,
+              let ownerID = activeGardenHouseholdID, ownerID != household.id else { return }
+        let scope = ParticipantRowRecovery.scopeKey(
+            ownerZoneHouseholdID: ownerID, signedInHouseholdID: household.id)
+        do {
+            try ParticipantRowRecovery.keepPrivate(itemID: item.id, currentScopeKey: scope, container: container)
+        } catch {
+            surfaceError(error)
+        }
     }
 
     /// Phase 5.1.4 — recompute the Sunday-8am pet roundup body from the

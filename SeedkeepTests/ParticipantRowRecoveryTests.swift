@@ -194,13 +194,16 @@ struct ParticipantRowRecoveryTests {
 
     // MARK: - Invariant 7 — flag-OFF is byte-identical (same guard, framed for the OFF case)
 
-    @Test("flag-OFF's activeGardenHouseholdID (== signed-in) is a safe no-op")
-    func flagOffEquivalentGuardIsNoOp() throws {
-        // `AppEnvironment.activeGardenHouseholdID` resolves to the signed-in household ID whenever
-        // the CloudKit flag is off (`ActiveGardenContext.householdID`'s `cloudKitSyncEnabled` guard) —
-        // the real gate lives at the `syncIfPossible` call site (never invoked when the flag is off),
-        // but this proves the function is ALSO defensively a no-op if ever called with that value,
-        // and `scripts/test-gate.sh`'s OFF lane exercises the call site never firing at all.
+    @Test("the same-ID guard a flag-OFF resolver value would produce is a safe no-op")
+    func sameIDGuardIsNoOpForAFlagOffEquivalentValue() throws {
+        // This does NOT exercise AppEnvironment or the flag-OFF call site — AppEnvironment is
+        // un-instantiable in this suite, so there is no flag-OFF call-site coverage here despite this
+        // test's proximity to "Invariant 7". It only proves `runIfNeeded`'s own same-ID guard is a
+        // safe no-op for the SAME VALUE that `AppEnvironment.activeGardenHouseholdID` would produce
+        // when the CloudKit flag is off (`ActiveGardenContext.householdID`'s `cloudKitSyncEnabled`
+        // guard resolves it to the signed-in household ID in that case) — this test and
+        // `ownerModeNoParticipantMarkerIsNoOp` exercise the identical code path for that reason. The
+        // real flag gate is `AppEnvironment.swift:227-243`, unreachable from this harness.
         let container = makeContainer()
         let householdID = "hh-\(UUID().uuidString)"
         let setup = ModelContext(container)
@@ -325,20 +328,8 @@ struct ParticipantRowRecoveryTests {
 
     // MARK: - Invariant 8 — share-to-garden recreates from snapshot post-wipe
 
-    @Test("share-to-garden recreates from snapshot when the live row is gone (post-wipe path)")
-    func shareRecreatesFromSnapshotPostWipe() async throws {
-        // JournalStore.create's CloudKit branch (no server round-trip) only activates when the flag
-        // reads true — mirrors CloudKitPendingWriteRegressionTests' explicit-flag idiom.
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer {
-            if let previous {
-                UserDefaults.standard.set(previous, forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-            }
-        }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
+    @Test("share-to-garden recreates from snapshot atomically when the live row is gone (post-wipe path)")
+    func shareRecreatesFromSnapshotPostWipe() throws {
         let container = makeContainer()
         let signedIn = "signed-\(UUID().uuidString)"
         let owner = "owner-\(UUID().uuidString)"
@@ -368,36 +359,254 @@ struct ParticipantRowRecoveryTests {
         ).first, "the registry must survive a garden wipe")
         #expect(survivingItem.status == "pending")
 
-        let liveRehomed = ParticipantRowRecovery.shareLiveEntryIfPresent(
-            itemID: "je1", ownerZoneHouseholdID: owner, container: container)
+        let scope = ParticipantRowRecovery.scopeKey(ownerZoneHouseholdID: owner, signedInHouseholdID: signedIn)
+        let liveRehomed = try ParticipantRowRecovery.shareLiveEntryIfPresent(
+            itemID: "je1", ownerZoneHouseholdID: owner, currentScopeKey: scope, container: container)
         #expect(liveRehomed == false, "no live row remains after the wipe")
 
         let snapshot = try #require(ParticipantRowRecovery.decodeSnapshot(survivingItem.snapshotJSON))
         #expect(snapshot.body == "Solo notes")
         #expect(snapshot.checklistItems.map(\.text) == ["Water"])
 
-        let store = JournalStore(
-            client: SeedkeepClient(configuration: .init(baseURL: URL(string: "https://test.local")!), bearerToken: "test"),
-            container: container
-        )
-        let created = try await store.create(occurredOn: snapshot.occurredOn, body: snapshot.body, householdID: owner)
-        for checklistItem in snapshot.checklistItems {
-            let added = try await store.addChecklistItem(entryID: created.id, text: checklistItem.text, householdID: owner)
-            if checklistItem.completed {
-                try await store.updateChecklistItem(added, completed: true, householdID: owner)
-            }
-        }
-        ParticipantRowRecovery.markShared(itemID: "je1", container: container)
+        // R1 27d.18 hardening #1 — the recreate now goes through ONE atomic save (entry + checklist
+        // items + the registry flip to `shared`) instead of separate JournalStore calls per row.
+        let created = try ParticipantRowRecovery.recreateFromSnapshotAtomically(
+            itemID: "je1", ownerZoneHouseholdID: owner, currentScopeKey: scope, container: container)
 
         #expect(created.id != "je1", "recreate mints a fresh id rather than reusing the stranded one")
         #expect(created.id.hasPrefix("journal_local_"))
         #expect(created.householdID == owner)
         #expect(created.body == "Solo notes")
 
+        let createdEntryID = created.id
+        let checklist = try ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalChecklistItem>(predicate: #Predicate { $0.entryID == createdEntryID })
+        )
+        #expect(checklist.map(\.text) == ["Water"])
+        #expect(checklist.map(\.completed) == [true])
+        #expect(checklist.allSatisfy { $0.id.hasPrefix("journal_checklist_local_") })
+
         let finalItem = try #require(ModelContext(container).fetch(
             FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == "je1" })
         ).first)
         #expect(finalItem.status == "shared")
+    }
+
+    // MARK: - Invariant 1 (hardening) — atomic recreate is retry-safe after an injected failure
+
+    @Test("a failed atomic recreate persists nothing and leaves the item pending; a retry produces exactly ONE entry")
+    func atomicRecreateRetryAfterInjectedFailureProducesExactlyOneEntry() throws {
+        let container = makeContainer()
+        let signedIn = "signed-\(UUID().uuidString)"
+        let owner = "owner-\(UUID().uuidString)"
+
+        let setup = ModelContext(container)
+        setup.insert(LocalJournalEntry(
+            id: "retry-entry", householdID: signedIn, occurredOn: "2026-06-11", body: "Retry me",
+            seedID: nil, bedID: nil, plantingEventID: nil, createdAt: 1, updatedAt: 2, deletedAt: nil))
+        setup.insert(LocalJournalChecklistItem(id: "retry-ci", entryID: "retry-entry", text: "Weed", completed: false, sortOrder: 0, updatedAt: 2))
+        try setup.save()
+
+        let ran = ParticipantRowRecovery.runIfNeeded(
+            container: container, signedInHouseholdID: signedIn, ownerZoneHouseholdID: owner)
+        #expect(ran == true)
+
+        // Simulate the post-wipe path: the live row is gone, only the registry snapshot remains.
+        try HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+
+        let scope = ParticipantRowRecovery.scopeKey(ownerZoneHouseholdID: owner, signedInHouseholdID: signedIn)
+
+        struct Boom: Error {}
+        #expect(throws: Boom.self) {
+            try ParticipantRowRecovery.recreateFromSnapshotAtomically(
+                itemID: "retry-entry", ownerZoneHouseholdID: owner, currentScopeKey: scope,
+                container: container, saveOperation: { _ in throw Boom() })
+        }
+
+        // Nothing persisted: no journal entry exists yet, and the registry item is still pending —
+        // proving the whole recreate (entry + checklist items + registry flip) is one atomic unit.
+        let afterFailure = try ModelContext(container).fetch(FetchDescriptor<LocalJournalEntry>())
+        #expect(afterFailure.isEmpty, "a failed atomic save must persist nothing")
+        let itemAfterFailure = try #require(ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == "retry-entry" })
+        ).first)
+        #expect(itemAfterFailure.status == "pending", "a failed atomic save must not flip the registry item")
+
+        // Retry — mirrors a retap of the still-enabled Share button — succeeds this time.
+        let recreated = try ParticipantRowRecovery.recreateFromSnapshotAtomically(
+            itemID: "retry-entry", ownerZoneHouseholdID: owner, currentScopeKey: scope, container: container)
+
+        let allEntries = try ModelContext(container).fetch(FetchDescriptor<LocalJournalEntry>())
+        #expect(allEntries.count == 1, "a retry after a failed atomic save must produce exactly ONE entry, not a duplicate")
+        #expect(allEntries.first?.id == recreated.id)
+        #expect(recreated.householdID == owner)
+        #expect(recreated.body == "Retry me")
+
+        let recreatedEntryID = recreated.id
+        let checklist = try ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalChecklistItem>(predicate: #Predicate { $0.entryID == recreatedEntryID })
+        )
+        #expect(checklist.map(\.text) == ["Weed"])
+
+        let finalItem = try #require(ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == "retry-entry" })
+        ).first)
+        #expect(finalItem.status == "shared")
+    }
+
+    // MARK: - Invariant 2 (hardening) — scope re-validation refuses a foreign-scope item
+
+    @Test("an action refuses when the registry item's scopeKey doesn't match the current scope; nothing is mutated")
+    func scopeMismatchRefusesAndMutatesNothing() throws {
+        let container = makeContainer()
+        let signedIn = "S"
+        let staleOwner = "O1"
+        let currentOwner = "O2"
+
+        let setup = ModelContext(container)
+        setup.insert(LocalJournalEntry(
+            id: "cross-scope-entry", householdID: signedIn, occurredOn: "2026-06-10", body: "Cross scope",
+            seedID: nil, bedID: nil, plantingEventID: nil, createdAt: 1, updatedAt: 2, deletedAt: nil))
+        let staleScope = ParticipantRowRecovery.scopeKey(ownerZoneHouseholdID: staleOwner, signedInHouseholdID: signedIn)
+        setup.insert(LocalJournalRecoveryItem(
+            id: "cross-scope-entry", scopeKey: staleScope, snapshotJSON: "{}", detectedAt: 1, status: "pending"))
+        try setup.save()
+
+        // The item's scopeKey is "O1|S" but the action is invoked under the CURRENT scope "O2|S".
+        let currentScope = ParticipantRowRecovery.scopeKey(ownerZoneHouseholdID: currentOwner, signedInHouseholdID: signedIn)
+        #expect(currentScope != staleScope)
+
+        #expect(throws: SeedkeepError.self) {
+            try ParticipantRowRecovery.shareLiveEntryIfPresent(
+                itemID: "cross-scope-entry", ownerZoneHouseholdID: currentOwner, currentScopeKey: currentScope, container: container)
+        }
+        #expect(throws: SeedkeepError.self) {
+            try ParticipantRowRecovery.keepPrivate(itemID: "cross-scope-entry", currentScopeKey: currentScope, container: container)
+        }
+        #expect(throws: SeedkeepError.self) {
+            try ParticipantRowRecovery.markShared(itemID: "cross-scope-entry", currentScopeKey: currentScope, container: container)
+        }
+
+        let entry = try #require(ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == "cross-scope-entry" })
+        ).first)
+        #expect(entry.householdID == signedIn, "a scope-mismatched action must not mutate the live row")
+
+        let item = try #require(ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == "cross-scope-entry" })
+        ).first)
+        #expect(item.status == "pending", "a scope-mismatched action must not mutate the registry item")
+    }
+
+    // MARK: - Invariant 3 (hardening) — tombstoned ambiguous entries are never registered
+
+    @Test("a stranded soft-deleted entry with no FK is left parked with its tombstone, not registered for review")
+    func strandedTombstonedNoFKEntryIsNotRegisteredAndStaysParked() throws {
+        let container = makeContainer()
+        let signedIn = "signed-\(UUID().uuidString)"
+        let owner = "owner-\(UUID().uuidString)"
+
+        let setup = ModelContext(container)
+        setup.insert(LocalJournalEntry(
+            id: "tomb-no-fk", householdID: signedIn, occurredOn: "2026-05-20", body: "Deleted solo entry",
+            seedID: nil, bedID: nil, plantingEventID: nil, createdAt: 1, updatedAt: 2, deletedAt: 3))
+        try setup.save()
+
+        let ran = ParticipantRowRecovery.runIfNeeded(
+            container: container, signedInHouseholdID: signedIn, ownerZoneHouseholdID: owner)
+        #expect(ran == true)
+
+        let after = HouseholdMigrationPlanner.fetchInput(
+            from: ModelContext(container), householdID: owner, householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 1)
+        #expect(after.journalEntries.isEmpty, "a tombstoned ambiguous entry must never appear in the owner-zone export")
+
+        #expect(try ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == "tomb-no-fk" })
+        ).isEmpty, "a tombstoned ambiguous entry must not be registered for review")
+
+        let stillParked = try #require(ModelContext(container).fetch(
+            FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == "tomb-no-fk" })
+        ).first)
+        #expect(stillParked.householdID == signedIn, "must be left completely untouched")
+        #expect(stillParked.deletedAt == 3, "the tombstone must remain intact")
+    }
+
+    // MARK: - Invariant 6 (breadth) — byte-identity for LocalPlantingEvent + FK-evidenced LocalJournalEntry
+
+    @Test("re-home preserves every field of a LocalPlantingEvent, including the never-sync pet streak columns")
+    func rehomePreservesPlantingEventFieldsIncludingNeverSyncPetColumns() throws {
+        let container = makeContainer()
+        let signedIn = "signed-\(UUID().uuidString)"
+        let owner = "owner-\(UUID().uuidString)"
+
+        let setup = ModelContext(container)
+        let event = LocalPlantingEvent(
+            id: "pe-live", householdID: signedIn, bedID: "bed1", seedID: "seed1", catalogSeedID: "cat1",
+            kindRaw: "sowing", plannedFor: "2026-07-01", completedAt: nil, notes: "notes",
+            xFeet: 1.5, yFeet: 2.5, createdAt: 111, updatedAt: 222, deletedAt: nil,
+            petSeed: "abc123", petRarity: "rare", petCreatureKind: "garden_worm", petName: "Wiggles",
+            petPersonalityJSON: "{\"name\":\"Wiggles\"}", petSpawnedAt: 333,
+            petWiltedStreakDays: 4, petLastMoodTickAt: 444)
+        setup.insert(event)
+        try setup.save()
+
+        let ran = ParticipantRowRecovery.runIfNeeded(
+            container: container, signedInHouseholdID: signedIn, ownerZoneHouseholdID: owner)
+        #expect(ran == true)
+
+        let context = ModelContext(container)
+        let rehomed = try #require(context.fetch(FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == "pe-live" })).first)
+        #expect(rehomed.householdID == owner)
+        #expect(rehomed.bedID == "bed1")
+        #expect(rehomed.seedID == "seed1")
+        #expect(rehomed.catalogSeedID == "cat1")
+        #expect(rehomed.kindRaw == "sowing")
+        #expect(rehomed.plannedFor == "2026-07-01")
+        #expect(rehomed.completedAt == nil)
+        #expect(rehomed.notes == "notes")
+        #expect(rehomed.xFeet == 1.5)
+        #expect(rehomed.yFeet == 2.5)
+        #expect(rehomed.createdAt == 111)
+        #expect(rehomed.updatedAt == 222, "re-home must not bump the clock")
+        #expect(rehomed.deletedAt == nil)
+        #expect(rehomed.petSeed == "abc123")
+        #expect(rehomed.petRarity == "rare")
+        #expect(rehomed.petCreatureKind == "garden_worm")
+        #expect(rehomed.petName == "Wiggles")
+        #expect(rehomed.petPersonalityJSON == "{\"name\":\"Wiggles\"}")
+        #expect(rehomed.petSpawnedAt == 333)
+        #expect(rehomed.petWiltedStreakDays == 4, "the never-sync pet streak columns must survive re-home untouched")
+        #expect(rehomed.petLastMoodTickAt == 444, "the never-sync pet streak columns must survive re-home untouched")
+    }
+
+    @Test("FK-evidenced re-home preserves every field of the journal entry, not just its id")
+    func fkEvidencedRehomePreservesJournalEntryFields() throws {
+        let container = makeContainer()
+        let signedIn = "signed-\(UUID().uuidString)"
+        let owner = "owner-\(UUID().uuidString)"
+
+        let setup = ModelContext(container)
+        setup.insert(LocalBed(id: "ownerBed2", householdID: owner, name: "East", createdAt: 1, updatedAt: 2))
+        setup.insert(LocalJournalEntry(
+            id: "fk-entry", householdID: signedIn, occurredOn: "2026-06-05", body: "Full field check",
+            seedID: nil, bedID: "ownerBed2", plantingEventID: nil, createdAt: 77, updatedAt: 88, deletedAt: nil))
+        try setup.save()
+
+        let ran = ParticipantRowRecovery.runIfNeeded(
+            container: container, signedInHouseholdID: signedIn, ownerZoneHouseholdID: owner)
+        #expect(ran == true)
+
+        let context = ModelContext(container)
+        let rehomed = try #require(context.fetch(FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == "fk-entry" })).first)
+        #expect(rehomed.householdID == owner)
+        #expect(rehomed.occurredOn == "2026-06-05")
+        #expect(rehomed.body == "Full field check")
+        #expect(rehomed.seedID == nil)
+        #expect(rehomed.bedID == "ownerBed2")
+        #expect(rehomed.plantingEventID == nil)
+        #expect(rehomed.createdAt == 77)
+        #expect(rehomed.updatedAt == 88, "re-home must not bump the clock")
+        #expect(rehomed.deletedAt == nil)
     }
 
     // MARK: - Invariant 9 — keep-private
@@ -419,7 +628,8 @@ struct ParticipantRowRecoveryTests {
             container: container, signedInHouseholdID: signedIn, ownerZoneHouseholdID: owner)
         #expect(ran == true)
 
-        ParticipantRowRecovery.keepPrivate(itemID: "je-kept", container: container)
+        let scope = ParticipantRowRecovery.scopeKey(ownerZoneHouseholdID: owner, signedInHouseholdID: signedIn)
+        try ParticipantRowRecovery.keepPrivate(itemID: "je-kept", currentScopeKey: scope, container: container)
 
         let item = try #require(ModelContext(container).fetch(
             FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == "je-kept" })

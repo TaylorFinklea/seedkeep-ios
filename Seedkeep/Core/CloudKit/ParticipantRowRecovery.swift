@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import SeedkeepKit
 
 // R1 27d.18 — one-time recovery for participant garden rows stranded under the signed-in server
 // household ID by pre-fix builds 47–49 (see `.docs/ai/decisions.md` 2026-07-16 "Ambiguous pre-fix
@@ -62,6 +63,13 @@ enum ParticipantRowRecovery {
     /// call is re-homing) — that FK could only have been set by code running against the adopted
     /// garden, i.e. post-adopt authorship. Everything else journal-shaped (no FK, or an FK that
     /// still doesn't resolve) is quarantined with its checklist items snapshotted for the review inbox.
+    ///
+    /// R1 27d.18 hardening #3 (tombstone filter) — an AMBIGUOUS entry (no FK, or an FK that doesn't
+    /// resolve) that is ALSO already soft-deleted (`deletedAt != nil`) gets NO registry item: it is
+    /// left completely untouched instead. Without this, the review inbox would offer to "Share" an
+    /// already-deleted entry, and the share path would resurrect deleted content by recreating it.
+    /// FK-evidenced entries keep re-homing with an intact tombstone regardless (unchanged, existing
+    /// behavior) — only the ambiguous/quarantine branch gets the filter.
     static func plan(_ input: Input) -> Plan {
         var out = Plan()
         out.rehomeLocations = input.locations
@@ -85,10 +93,11 @@ enum ParticipantRowRecovery {
             }
             if resolves {
                 out.rehomeJournalEntries.append(entry)
-            } else {
+            } else if entry.deletedAt == nil {
                 out.quarantined.append(QuarantinedEntry(
                     entry: entry, checklistItems: checklistByEntry[entry.id] ?? []))
             }
+            // else: ambiguous AND already soft-deleted — leave parked, no registry item (hardening #3).
         }
         return out
     }
@@ -226,50 +235,133 @@ enum ParticipantRowRecovery {
     }
 
     // MARK: - Review inbox actions
+    //
+    // R1 27d.18 hardening #2 (scope re-validation, defense-in-depth) — every action below now
+    // requires the CALLER's `currentScopeKey` and refuses (throws, no mutation of any kind) when the
+    // registry item's own `scopeKey` doesn't match it. Without this, an item/entry id passed by a
+    // stale reference — e.g. a captured `LocalJournalRecoveryItem` across a garden switch while the
+    // review sheet is still open, or a future call site that doesn't re-derive scope per call — could
+    // push content into whatever owner zone happens to be active. The registry item is always looked
+    // up FIRST so the guard runs before any mutation is attempted.
 
     /// Share to garden, live-row path: if the stranded/quarantined entry still exists locally,
     /// re-home it in place (checklist items + journal photos need no mutation — they carry no
     /// `householdID`; they are scoped by `entryID` membership and already follow the parent) and
     /// mark the registry item `shared`. Returns `false` when no live row remains (post-wipe), so the
-    /// caller recreates from `snapshotJSON` instead.
+    /// caller recreates via `recreateFromSnapshotAtomically` instead.
     @discardableResult
     @MainActor
-    static func shareLiveEntryIfPresent(itemID: String, ownerZoneHouseholdID: String, container: ModelContainer) -> Bool {
+    static func shareLiveEntryIfPresent(
+        itemID: String, ownerZoneHouseholdID: String, currentScopeKey: String, container: ModelContainer
+    ) throws -> Bool {
         let context = ModelContext(container)
-        guard let entry = try? context.fetch(
+        guard let registryItem = try context.fetch(
+            FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == itemID })
+        ).first else { return false }
+        guard registryItem.scopeKey == currentScopeKey else {
+            throw SeedkeepError(
+                code: "scope_mismatch",
+                message: "This item belongs to a different garden and can't be shared here.")
+        }
+        guard let entry = try context.fetch(
             FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == itemID })
         ).first else { return false }
         entry.householdID = ownerZoneHouseholdID
-        if let item = try? context.fetch(
-            FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == itemID })
-        ).first {
-            item.status = "shared"
-        }
-        try? context.save()
+        registryItem.status = "shared"
+        try context.save()
         return true
     }
 
-    /// Marks a registry item `shared` after the caller recreated it via `JournalStore`'s CloudKit
-    /// authoring path (the post-wipe path, when `shareLiveEntryIfPresent` returned `false`).
+    /// Marks a registry item `shared`. Superseded, as the production post-wipe caller, by
+    /// `recreateFromSnapshotAtomically` (hardening #1 — see its doc), which flips status in the SAME
+    /// save as the recreate; kept as a low-level primitive for a caller that recreates through a
+    /// different path and still needs the scope guard.
     @MainActor
-    static func markShared(itemID: String, container: ModelContainer) {
+    static func markShared(itemID: String, currentScopeKey: String, container: ModelContainer) throws {
         let context = ModelContext(container)
-        guard let item = try? context.fetch(
+        guard let item = try context.fetch(
             FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == itemID })
         ).first else { return }
+        guard item.scopeKey == currentScopeKey else {
+            throw SeedkeepError(
+                code: "scope_mismatch",
+                message: "This item belongs to a different garden and can't be shared here.")
+        }
         item.status = "shared"
-        try? context.save()
+        try context.save()
     }
 
     /// Keep private: mark the registry item `kept`. Any live row stays parked and hidden — nothing
     /// deleted anywhere.
     @MainActor
-    static func keepPrivate(itemID: String, container: ModelContainer) {
+    static func keepPrivate(itemID: String, currentScopeKey: String, container: ModelContainer) throws {
         let context = ModelContext(container)
-        guard let item = try? context.fetch(
+        guard let item = try context.fetch(
             FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == itemID })
         ).first else { return }
+        guard item.scopeKey == currentScopeKey else {
+            throw SeedkeepError(
+                code: "scope_mismatch",
+                message: "This item belongs to a different garden and can't be shared here.")
+        }
         item.status = "kept"
-        try? context.save()
+        try context.save()
+    }
+
+    /// Atomic post-wipe recreate (R1 27d.18 hardening #1). The ORIGINAL post-wipe path in
+    /// `AppEnvironment.shareJournalRecoveryItem` called `JournalStore.create`, one
+    /// `addChecklistItem`/`updateChecklistItem` pair per snapshot row, then `markShared` — each its
+    /// own `ModelContext` + `save()`. If `create` succeeded and a later step threw, the registry item
+    /// stayed `pending` while a `journal_local_` entry already existed; a retap of the (unconditionally
+    /// re-enabled) Share button would then recreate a SECOND entry, duplicating content in the owner
+    /// zone. This inserts the entry + every checklist item + flips the registry item to `shared` in
+    /// ONE `context.save()`, so a mid-batch failure leaves nothing persisted and the registry item
+    /// still `pending` — a retry is safe. Mints ids/fields exactly as `JournalStore`'s CloudKit
+    /// authoring path does (`journal_local_`/`journal_checklist_local_` prefixes, the owner-zone
+    /// `householdID` stamp); every fresh row shares one `now` timestamp since nothing here is ever
+    /// updated afterward, so `JournalStore`'s monotonic max-bump (used for edits) doesn't apply. The
+    /// FK the entry once carried is intentionally NOT reattached — same reasoning as the path this
+    /// replaces (a quarantined entry's FK, by definition, never resolved into the owner-zone garden).
+    /// Also re-validates `currentScopeKey` (hardening #2) before touching anything.
+    @discardableResult
+    @MainActor
+    static func recreateFromSnapshotAtomically(
+        itemID: String,
+        ownerZoneHouseholdID: String,
+        currentScopeKey: String,
+        container: ModelContainer,
+        saveOperation: ((ModelContext) throws -> Void)? = nil
+    ) throws -> LocalJournalEntry {
+        let context = ModelContext(container)
+        guard let item = try context.fetch(
+            FetchDescriptor<LocalJournalRecoveryItem>(predicate: #Predicate { $0.id == itemID })
+        ).first else {
+            throw SeedkeepError(code: "not_found", message: "Recovery item not found")
+        }
+        guard item.scopeKey == currentScopeKey else {
+            throw SeedkeepError(
+                code: "scope_mismatch",
+                message: "This item belongs to a different garden and can't be shared here.")
+        }
+        guard let snapshot = EntrySnapshot.decode(item.snapshotJSON) else {
+            throw SeedkeepError(
+                code: "invalid_snapshot", message: "The recovery item's snapshot could not be read")
+        }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let entryID = "journal_local_\(UUID().uuidString)"
+        let entry = LocalJournalEntry(
+            id: entryID, householdID: ownerZoneHouseholdID, occurredOn: snapshot.occurredOn,
+            body: snapshot.body, seedID: nil, bedID: nil, plantingEventID: nil,
+            createdAt: now, updatedAt: now, deletedAt: nil)
+        context.insert(entry)
+        for (index, checklistItem) in snapshot.checklistItems.enumerated() {
+            context.insert(LocalJournalChecklistItem(
+                id: "journal_checklist_local_\(UUID().uuidString)", entryID: entryID,
+                text: checklistItem.text, completed: checklistItem.completed,
+                sortOrder: index, updatedAt: now))
+        }
+        item.status = "shared"
+        try (saveOperation ?? { try $0.save() })(context)
+        return entry
     }
 }
