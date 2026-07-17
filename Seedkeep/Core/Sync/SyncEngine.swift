@@ -307,7 +307,18 @@ public final class SyncEngine {
     /// instead of dispatching the same rows a second time. Rows enqueued
     /// while a pass is in flight ride the next trigger (every UI call
     /// site re-fires after enqueueing, and `syncAll` always flushes).
+    ///
+    /// R1 (bead seedkeep-27d.2): while CloudKit household sync is active,
+    /// the legacy server write queue must never dispatch — CloudKit is the
+    /// only writer of household garden data, and a second writer racing
+    /// against it would double-apply mutations server-side. Fail-closed,
+    /// silent no-op (every caller is a fire-and-forget `Task { try? await
+    /// ... }`, so there's no error to surface). Enqueueing is intentionally
+    /// NOT gated (see `enqueueOrCoalesceUpdate` and friends) — rows keep
+    /// parking here so a flag-OFF rollback drains them instead of losing
+    /// every ON-era mutation server-side.
     public func flushPending() async throws {
+        if FeatureFlags.cloudKitHouseholdSyncEnabled { return }
         if let inFlight = flushTask {
             try await inFlight.value
             return
