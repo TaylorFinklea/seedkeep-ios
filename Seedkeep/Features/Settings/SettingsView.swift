@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import SeedkeepKit
 
 /// Stack-less content view for Settings — "The Order". Designed to be
@@ -22,6 +23,10 @@ struct SettingsContent: View {
     @State private var syncedJustNow = false
     @State private var syncToken = 0
     @State private var preparingShare = false
+    // R1 27d.18 — participant journal recovery review inbox
+    @State private var showingJournalRecoveryReview = false
+    @Query(filter: #Predicate<LocalJournalRecoveryItem> { $0.status == "pending" })
+    private var pendingRecoveryItems: [LocalJournalRecoveryItem]
 
     @ViewBuilder private func statusRow(_ label: String, _ value: String) -> some View {
         HStack {
@@ -304,6 +309,16 @@ struct SettingsContent: View {
                         // system share sheet; a participant who has joined sees a Leave affordance.
                         if appEnv.isViewingSharedHousehold {
                             statusRow("Household", "shared with you")
+                            if let scopeKey = appEnv.participantRecoveryScopeKey {
+                                let scopedPendingCount = pendingRecoveryItems.filter { $0.scopeKey == scopeKey }.count
+                                if scopedPendingCount > 0 {
+                                    Button {
+                                        showingJournalRecoveryReview = true
+                                    } label: {
+                                        Label("Journal items need review (\(scopedPendingCount))", systemImage: "tray.and.arrow.down")
+                                    }
+                                }
+                            }
                             Button(role: .destructive) {
                                 Task { await appEnv.leaveSharedHousehold() }
                             } label: {
@@ -347,6 +362,11 @@ struct SettingsContent: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingJournalRecoveryReview) {
+            NavigationStack {
+                JournalRecoveryReviewView()
+            }
+        }
     }
 
     // MARK: - Build stamp

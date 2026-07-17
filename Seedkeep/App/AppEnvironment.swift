@@ -225,6 +225,17 @@ public final class AppEnvironment {
             // gated while CloudKit is active because their server tools address the parked household.
             let banner: String?
             if FeatureFlags.cloudKitHouseholdSyncEnabled {
+                // R1 27d.18 — participant stranded-row recovery. Only meaningful for a participant
+                // (activeGardenHouseholdID resolves to the owner-zone ID, differing from the signed-in
+                // ID); runs BEFORE the sync pass so re-homed rows are pushed by the pass that follows.
+                if activeGardenHouseholdID != household.id {
+                    let recovered = ParticipantRowRecovery.runIfNeeded(
+                        container: container,
+                        signedInHouseholdID: household.id,
+                        ownerZoneHouseholdID: activeGardenHouseholdID
+                    )
+                    if recovered { noteHouseholdMutation() }
+                }
                 let coordinator = ensureCloudCoordinator(household: household)
                 let ran = await coordinator.sync()
                 guard ran else { return }
@@ -473,6 +484,55 @@ public final class AppEnvironment {
         clearParticipantMarker()
         cloudCoordinator = nil; cloudCoordinatorKey = nil
         await syncIfPossible()
+    }
+
+    // MARK: - R1 27d.18 — participant journal recovery review inbox
+
+    /// Scope key for the current participant's stranded-row registry (nil unless the flag is on and
+    /// this device is currently viewing a shared household) — drives the Settings review-inbox row +
+    /// its sheet's item filter.
+    var participantRecoveryScopeKey: String? {
+        guard case .signedIn(_, let household) = auth.state,
+              let ownerID = activeGardenHouseholdID, ownerID != household.id else { return nil }
+        return ParticipantRowRecovery.scopeKey(ownerZoneHouseholdID: ownerID, signedInHouseholdID: household.id)
+    }
+
+    /// Share to garden: re-home the live row in place if it still exists, else recreate it from the
+    /// registry item's snapshot through `JournalStore`'s CloudKit authoring path (minting a fresh
+    /// `journal_local_` id). The FK the entry once carried is intentionally NOT reattached on
+    /// recreate — a quarantined entry's FK, by definition, never resolved into the owner-zone garden,
+    /// so passing it through would only trip `JournalStore`'s parent-scope validation.
+    func shareJournalRecoveryItem(_ item: LocalJournalRecoveryItem) async {
+        guard case .signedIn(_, let household) = auth.state,
+              let ownerID = activeGardenHouseholdID, ownerID != household.id else { return }
+        let itemID = item.id
+        if ParticipantRowRecovery.shareLiveEntryIfPresent(
+            itemID: itemID, ownerZoneHouseholdID: ownerID, container: container
+        ) {
+            noteHouseholdMutation()
+            return
+        }
+        guard let snapshot = ParticipantRowRecovery.decodeSnapshot(item.snapshotJSON) else { return }
+        do {
+            let created = try await journal.create(
+                occurredOn: snapshot.occurredOn, body: snapshot.body, householdID: ownerID)
+            for checklistItem in snapshot.checklistItems {
+                let added = try await journal.addChecklistItem(
+                    entryID: created.id, text: checklistItem.text, householdID: ownerID)
+                if checklistItem.completed {
+                    try await journal.updateChecklistItem(added, completed: true, householdID: ownerID)
+                }
+            }
+            ParticipantRowRecovery.markShared(itemID: itemID, container: container)
+            noteHouseholdMutation()
+        } catch {
+            surfaceError(error)
+        }
+    }
+
+    /// Keep private: mark the registry item `kept`. Nothing deleted anywhere.
+    func keepJournalRecoveryItemPrivate(_ item: LocalJournalRecoveryItem) {
+        ParticipantRowRecovery.keepPrivate(itemID: item.id, container: container)
     }
 
     /// Phase 5.1.4 — recompute the Sunday-8am pet roundup body from the
