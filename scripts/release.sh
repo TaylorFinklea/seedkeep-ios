@@ -15,8 +15,11 @@
 # review.
 #
 # App Store Connect API auth (override defaults via env):
-#   ASC_API_KEY_PATH   — path to the .p8 key (default: ~/.appstoreconnect/AuthKey_J79935N6P6.p8)
-#   ASC_API_KEY_ID     — key ID matching the .p8 filename     (default: J79935N6P6)
+#   ASC_API_KEY_PATH   — path to the .p8 key (default: ~/.appstoreconnect/AuthKey_67RBQ3NP5S.p8)
+#   ASC_API_KEY_ID     — key ID matching the .p8 filename     (default: 67RBQ3NP5S)
+#
+# The key must have the Admin role (or the cloud-managed-distribution grant) —
+# export/upload mints provisioning profiles via cloud signing and 403s without it.
 #   ASC_API_ISSUER_ID  — App Store Connect issuer UUID         (default: fe27785a-1413-46ff-bd82-111de0da024f)
 #
 # Source of truth for build/version numbers is project.yml. The script bumps
@@ -54,8 +57,8 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 # ---------- App Store Connect API key ----------
-ASC_KEY_PATH="${ASC_API_KEY_PATH:-$HOME/.appstoreconnect/AuthKey_J79935N6P6.p8}"
-ASC_KEY_ID="${ASC_API_KEY_ID:-J79935N6P6}"
+ASC_KEY_PATH="${ASC_API_KEY_PATH:-$HOME/.appstoreconnect/AuthKey_67RBQ3NP5S.p8}"
+ASC_KEY_ID="${ASC_API_KEY_ID:-67RBQ3NP5S}"
 ASC_ISSUER="${ASC_API_ISSUER_ID:-fe27785a-1413-46ff-bd82-111de0da024f}"
 
 [[ -f "$ASC_KEY_PATH" ]] || fail "ASC API key not found at $ASC_KEY_PATH. Set ASC_API_KEY_PATH or place the .p8 there."
