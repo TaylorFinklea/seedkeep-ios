@@ -21,6 +21,7 @@ struct SettingsContent: View {
     @State private var preparingShare = false
     // R1 27d.18 — participant journal recovery review inbox
     @State private var showingJournalRecoveryReview = false
+    @State private var showingWhatsNew = false
     @Query(filter: #Predicate<LocalJournalRecoveryItem> { $0.status == "pending" })
     private var pendingRecoveryItems: [LocalJournalRecoveryItem]
 
@@ -316,6 +317,25 @@ struct SettingsContent: View {
                 }
 
                 Section {
+                    Button {
+                        if let newest = ChangelogData.releases.map(\.build).max() {
+                            WhatsNewGate.markSeen(build: newest)
+                        }
+                        showingWhatsNew = true
+                    } label: {
+                        HStack {
+                            Label("What's New", systemImage: "sparkles")
+                            Spacer()
+                            if whatsNewUnseen {
+                                Circle().fill(HerbColor.rose).frame(width: 8, height: 8)
+                            }
+                        }
+                    }
+                } header: {
+                    Rubric(text: "changelog")
+                }
+
+                Section {
                     Text("SEEDKEEP · BUILD \(buildRoman) · ANNO MMXXVI")
                         .font(HerbFont.smallCaps(size: 8))
                         .tracking(1.5)
@@ -333,6 +353,11 @@ struct SettingsContent: View {
                 JournalRecoveryReviewView()
             }
         }
+        .sheet(isPresented: $showingWhatsNew) {
+            if let latest = ChangelogData.releases.max(by: { $0.build < $1.build }) {
+                WhatsNewSheet(initialRelease: latest)
+            }
+        }
     }
 
     // MARK: - Build stamp
@@ -345,6 +370,13 @@ struct SettingsContent: View {
         let raw = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
         guard let n = Int(raw), n > 0 else { return raw.isEmpty ? "?" : raw }
         return HerbRomanNumeral.string(for: n, lowercase: false)
+    }
+
+    /// True when the newest authored release is newer than what the user has
+    /// last opened — drives the small unseen dot on the What's New row.
+    private var whatsNewUnseen: Bool {
+        guard let newest = ChangelogData.releases.map(\.build).max() else { return false }
+        return newest > (WhatsNewGate.lastSeenBuild() ?? .max)
     }
 
     // MARK: - Hero block
