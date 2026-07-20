@@ -81,6 +81,7 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.scenePhase) private var scenePhase
     @Binding var pendingInviteCode: String?
+    @State private var whatsNewRelease: ChangelogRelease?
 
     var body: some View {
         ZStack {
@@ -95,6 +96,9 @@ struct RootView: View {
                     .task(id: snapshotID(auth.state)) {
                         await appEnv.syncIfPossible()
                     }
+                    .task {
+                        presentWhatsNewIfNeeded()
+                    }
                     .onChange(of: scenePhase) { _, newPhase in
                         // Foregrounding re-runs the full sync + tick
                         // cycle. `PetStateEngine.tickAll` fires inside
@@ -107,6 +111,9 @@ struct RootView: View {
                         Task { await appEnv.processPendingShare(); await appEnv.syncIfPossible() }
                     }
                     .overlay { SproutAssistantOverlay() }
+                    .sheet(item: $whatsNewRelease) { release in
+                        WhatsNewSheet(initialRelease: release)
+                    }
             }
         }
         .sheet(item: Binding(
@@ -137,6 +144,22 @@ struct RootView: View {
         }
         .padding(28)
         .presentationDetents([.medium])
+    }
+
+    /// Decide the What's New sheet once per launch. Never stacks on a pending
+    /// invite/CKShare sheet — if one is up, defer to the next launch. Fresh
+    /// installs baseline silently (no popup for a version never upgraded from).
+    private func presentWhatsNewIfNeeded() {
+        guard pendingInviteCode == nil else { return }
+        let current = AppInfo.currentBuild
+        let seen = WhatsNewGate.lastSeenBuild()
+        if let release = WhatsNewGate.releaseToAutoPresent(
+            releases: ChangelogData.releases, lastSeenBuild: seen, currentBuild: current) {
+            WhatsNewGate.markSeen(build: release.build)
+            whatsNewRelease = release
+        } else if seen == nil {
+            WhatsNewGate.markSeen(build: current)
+        }
     }
 
     /// Stable identity for the `.task(id:)` so we kick a sync once per
