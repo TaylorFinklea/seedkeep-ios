@@ -24,6 +24,8 @@ iOS client for Seedkeep. Phase 1 ships a household seed library with offline-fir
 - [x] **R1 photo capability gate** — CloudKit-active owner, participant, and rollback modes preserve photo metadata/server objects while hiding server-backed seed/journal photo bytes, galleries, uploads, and deletes; flag OFF retains the existing paths.
 - [ ] **Extension-calendar integration** (regional planting calendars from state cooperative-extension feeds) — deferred to 0.3.0+ per the smart-planting-window spec.
 - [ ] **TestFlight feedback triage** — pull tester feedback / crash logs from App Store Connect for builds 11–16.
+- [x] **In-app "What's New" changelog** (`seedkeep-rdd`, merged 2026-07-19) — auto-presents the build's New/Improved/Fixed notes once after update; Settings row + unseen dot + History drill-down; `release.sh` fail-closed on a missing entry. Swift-constant `ChangelogData`, seeded at build 50. Spec/plan/report in `phases/`+`plans/`. **Not yet TestFlight-cut**; human device-verify pending (see report). Bead `seedkeep-rdd` to close (remote not resolvable on this machine).
+- [ ] **Changelog follow-up (Minor)** — clamp Settings `markSeen`/`whatsNewUnseen` to `AppInfo.currentBuild` so authoring a future build's entry can't suppress its real auto-present (dev-workflow footgun; nothing broken ships). Also confirm the What's New header alignment on the device visual pass.
 
 ### Next
 - [ ] **Hosted-tier unflag** — register `app.seedkeep.ios.hosted.{monthly,yearly}` products in App Store Connect, set `APPLE_IAP_SHARED_SECRET` + `ANTHROPIC_API_KEY` on Fly, flip `AppPreferences.isHostedTierEnabled = true`. Ships as 0.1.1.

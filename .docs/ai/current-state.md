@@ -2,11 +2,11 @@
 
 ## Branch
 
-`main`
+`main` (What's New changelog merged 2026-07-19, `d387501..d04dc4c`).
 
 ## Plan
 
-None.
+None active. Last shipped: in-app "What's New" changelog (`seedkeep-rdd`) — human device-verify + a TestFlight cut pending (report: `phases/2026-07-18-whats-new-changelog-report.md`).
 
 ## Blockers
 
