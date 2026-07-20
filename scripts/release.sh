@@ -41,13 +41,15 @@ fail() { echo -e "${RED}✘ $1${NC}"; exit 1; }
 # ---------- flags ----------
 BUMP_TYPE="build"
 SKIP_TESTS=false
+SKIP_CHANGELOG=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build) BUMP_TYPE="build"; shift ;;
         --patch) BUMP_TYPE="patch"; shift ;;
         --minor) BUMP_TYPE="minor"; shift ;;
         --skip-tests) SKIP_TESTS=true; shift ;;
-        *) fail "Unknown flag: $1. Use --build, --patch, --minor, or --skip-tests." ;;
+        --skip-changelog) SKIP_CHANGELOG=true; shift ;;
+        *) fail "Unknown flag: $1. Use --build, --patch, --minor, --skip-tests, or --skip-changelog." ;;
     esac
 done
 
@@ -81,6 +83,18 @@ if [[ "$BUMP_TYPE" != "build" ]]; then
         patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
         minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
     esac
+fi
+
+# ---------- changelog authoring gate (fail-closed) ----------
+CHANGELOG_FILE="$REPO_ROOT/Seedkeep/Core/Changelog/ChangelogData.swift"
+if [[ "$SKIP_CHANGELOG" == "false" ]]; then
+    [[ -f "$CHANGELOG_FILE" ]] || fail "Changelog file not found at $CHANGELOG_FILE"
+    if ! grep -Eq "build:[[:space:]]*${NEW_BUILD}([^0-9]|\$)" "$CHANGELOG_FILE"; then
+        fail "No changelog entry for build ${NEW_BUILD}. Add a ChangelogRelease with 'build: ${NEW_BUILD}' to ChangelogData.swift, or pass --skip-changelog for a throwaway diagnostic build."
+    fi
+    echo "[release] changelog entry for build ${NEW_BUILD} present"
+else
+    echo "[release] WARNING: skipping changelog gate (--skip-changelog)"
 fi
 
 # ---------- run tests before mutating anything ----------
