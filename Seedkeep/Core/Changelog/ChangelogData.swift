@@ -53,6 +53,16 @@ enum ChangelogData {
     static let releases: [ChangelogRelease] = [
         ChangelogRelease(
             version: "0.4.0",
+            build: 51,
+            date: "Jul 21, 2026",
+            headline: "See what's new",
+            changes: [
+                ChangelogChange(category: .new,
+                    text: "A 'What's New' summary now appears when you open a fresh build, with New, Improved, and Fixed highlights. Browse past releases anytime from Settings → What's New."),
+            ]
+        ),
+        ChangelogRelease(
+            version: "0.4.0",
             build: 50,
             date: "Jul 17, 2026",
             headline: "Sharing & recovery polish",
