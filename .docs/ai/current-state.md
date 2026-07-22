@@ -6,7 +6,7 @@
 
 ## Plan
 
-None active. Last shipped: in-app "What's New" changelog (`seedkeep-rdd`) — human device-verify + a TestFlight cut pending (report: `phases/2026-07-18-whats-new-changelog-report.md`).
+None active. Last shipped: in-app "What's New" changelog (`seedkeep-rdd`) — cut to TestFlight 0.4.0 (build 51) 2026-07-21 (`b99b185`). Human device-verify pending (report: `phases/2026-07-18-whats-new-changelog-report.md`).
 
 ## Blockers
 
