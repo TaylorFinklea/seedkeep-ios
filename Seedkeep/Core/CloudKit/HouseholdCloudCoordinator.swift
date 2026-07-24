@@ -289,7 +289,10 @@ final class HouseholdCloudCoordinator {
         guard isCurrent(passEpoch) else { return }
         engine.activateForCurrentAccount()
         engine.merger = SeedkeepRecordMerger()
-        engine.onFetchedChanges = { [buffer] mods, dels in buffer.append(mods, dels, epoch: passEpoch) }
+        engine.onFetchedChanges = { [weak self, buffer] mods, dels in
+            buffer.append(mods, dels, epoch: passEpoch)
+            try await self?.drainPendingApplies(passEpoch)
+        }
         let cleanupMarkerURL = cleanupMarkerURL
         engine.onAccountChange = { [weak self, buffer] change in
             switch change {

@@ -21,7 +21,7 @@ struct HouseholdCloudCoordinatorTests {
     final class FakeEngine: HouseholdRecordSyncing, @unchecked Sendable {
         let store = HouseholdLocalStore()
         var merger: RecordMerger?
-        var onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)?
+        var onFetchedChanges: (@Sendable ([CKRecord], [CKRecord.ID]) async throws -> Void)?
         var onAccountChange: ((HouseholdAccountChange) -> Void)?
         private(set) var savedRecords: [CKRecord] = []
         private(set) var deletedIDs: [CKRecord.ID] = []
@@ -38,6 +38,7 @@ struct HouseholdCloudCoordinatorTests {
         var fetchFailuresRemaining = 0
         var fetchError: Error = URLError(.timedOut)
 
+        var beforeDurableCheckpoint: (@Sendable () async -> Void)?
         func save(_ record: CKRecord) {
             guard acceptsChanges else { return }
             store.setRecord(record)
@@ -63,7 +64,8 @@ struct HouseholdCloudCoordinatorTests {
             guard !mods.isEmpty || !dels.isEmpty else { return }
             for m in mods { store.applyRemoteModification(m) }
             for d in dels { store.removeRecord(d) }
-            onFetchedChanges?(mods, dels)
+            try await onFetchedChanges?(mods, dels)
+            await beforeDurableCheckpoint?()
         }
         func sendUntilDrained(maxPasses: Int) async throws {
             sendUntilDrainedCallCount += 1
@@ -255,6 +257,27 @@ struct HouseholdCloudCoordinatorTests {
         let m = fetchSeed(ModelContext(container), "s1")
         #expect(m?.customName == "Brandywine")
         #expect(m?.updatedAt == 500)
+    }
+
+    @Test("fetched projection commits before the engine may checkpoint its state")
+    func fetchedProjectionPrecedesCheckpoint() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        engine.pendingFetch = ([remoteSeed(
+            id: "checkpointed",
+            householdID: hid,
+            name: "Applied first",
+            updatedAt: 500
+        )], [])
+        engine.beforeDurableCheckpoint = {
+            await MainActor.run {
+                #expect(self.fetchSeed(ModelContext(container), "checkpointed") != nil)
+            }
+        }
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+
+        await coordinator.sync()
     }
 
     @Test("updatedAt-LWW gate: an OLDER remote does not clobber a newer local edit")

@@ -24,10 +24,10 @@ public protocol HouseholdRecordSyncing: AnyObject, Sendable {
     /// Field-merge resolver consulted at the fetch + serverRecordChanged seams.
     var merger: RecordMerger? { get set }
 
-    /// Fired after a fetched batch is reconciled into the store, carrying the records that were
-    /// actually applied this batch (post-merge; local-pending skips are excluded) and the
-    /// deletion IDs. The coordinator decodes + projects these into SwiftData.
-    var onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)? { get set }
+    /// Fired for each reconciled batch before its CKSyncEngine state may be durably checkpointed.
+    /// The engine awaits this callback; throwing keeps the prior durable state so relaunch re-fetches
+    /// the batch instead of advancing past an unapplied SwiftData projection.
+    var onFetchedChanges: (@Sendable ([CKRecord], [CKRecord.ID]) async throws -> Void)? { get set }
 
     /// Fired on an iCloud account transition so the coordinator can wipe SwiftData (AC5).
     var onAccountChange: ((HouseholdAccountChange) -> Void)? { get set }

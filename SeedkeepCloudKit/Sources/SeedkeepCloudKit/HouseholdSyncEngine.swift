@@ -22,6 +22,8 @@ public enum SyncEngineError: Error {
     case drainIncomplete
     /// The coordinator retired this engine generation at an account/garden boundary.
     case accountInvalidated
+    /// SwiftData rejected a fetched/sent projection; durable CKSyncEngine state was not advanced.
+    case projectionFailed
 }
 
 public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing, @unchecked Sendable {
@@ -63,7 +65,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// explicit `@unchecked Sendable` required by CKSyncEngineDelegate's concurrent callbacks.
     private let callbackLock = NSLock()
     private var _merger: RecordMerger?
-    private var _onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)?
+    private var _onFetchedChanges: (@Sendable ([CKRecord], [CKRecord.ID]) async throws -> Void)?
     private var _onAccountChange: ((HouseholdAccountChange) -> Void)?
 
     public var merger: RecordMerger? {
@@ -72,12 +74,12 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     }
 
     /// Fired after a fetched batch is reconciled into the local store (and after a SENT batch's
-    /// saved records land), with the records actually applied + the deletion IDs. The coordinator
-    /// decodes these and projects them into SwiftData. Called off arbitrary tasks (CKSyncEngine's
-    /// queue) — the coordinator must hop to @MainActor before touching ModelContext.
-    public var onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)? {
-        get { callbackLock.lock(); defer { callbackLock.unlock() }; return _onFetchedChanges }
-        set { callbackLock.lock(); _onFetchedChanges = newValue; callbackLock.unlock() }
+    /// saved records land), with the records actually applied + the deletion IDs. CKSyncEngine
+    /// awaits this callback before accepting a later state checkpoint, so durable state cannot
+    /// advance past a failed SwiftData projection.
+    public var onFetchedChanges: (@Sendable ([CKRecord], [CKRecord.ID]) async throws -> Void)? {
+        get { callbackLock.withLock { _onFetchedChanges } }
+        set { callbackLock.withLock { _onFetchedChanges = newValue } }
     }
 
     /// Fired on an iCloud account transition (mapped to the app-level kind) so the coordinator
@@ -177,8 +179,10 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
 
     public func fetchChanges() async throws {
         let engine = try currentActiveEngine()
+        clearProjectionFailure()
         try await engine.fetchChanges()
         try ensureCurrent(engine)
+        try throwIfProjectionFailed(reset: engine)
     }
 
     public func sendChanges() async throws {
@@ -304,15 +308,14 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             handleAccountChange(change, originatingFrom: syncEngine)
             return
         }
-        lifecycleGate.withActive {
-            guard syncEngine === self.syncEngine else { return }
-            handleCurrentEvent(event, syncEngine: syncEngine)
-        }
+        guard lifecycleGate.withActive({ syncEngine === self.syncEngine }) == true else { return }
+        await handleCurrentEvent(event, syncEngine: syncEngine)
     }
 
-    private func handleCurrentEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) {
+    private func handleCurrentEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
         switch event {
         case .stateUpdate(let update):
+            guard !hasProjectionFailure else { return }
             Self.saveState(update.stateSerialization, to: stateURL)
 
         case .fetchedRecordZoneChanges(let changes):
@@ -352,7 +355,11 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                 note("fetched del \(deletion.recordID.recordName)")
             }
             if !applied.isEmpty || !deletedIDs.isEmpty {
-                onFetchedChanges?(applied, deletedIDs)
+                do {
+                    try await onFetchedChanges?(applied, deletedIDs)
+                } catch {
+                    markProjectionFailure()
+                }
             }
 
         case .sentRecordZoneChanges(let sent):
@@ -380,7 +387,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             // re-saved record IS the merged result (packetCount-min / tagIDs-union / sticky-deletedAt)
             // produced in handleFailedSave — without this, the editing device's SwiftData keeps its
             // pre-merge values forever (it authored the last write, so it never re-fetches them).
-            if !saved.isEmpty { onFetchedChanges?(saved, []) }
+            if !saved.isEmpty {
+                do {
+                    try await onFetchedChanges?(saved, [])
+                } catch {
+                    markProjectionFailure()
+                }
+            }
 
         case .accountChange:
             break
@@ -394,6 +407,30 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         @unknown default:
             break
         }
+    }
+
+    private let projectionLock = NSLock()
+    private var projectionFailed = false
+
+    private var hasProjectionFailure: Bool {
+        projectionLock.withLock { projectionFailed }
+    }
+
+    private func clearProjectionFailure() {
+        projectionLock.withLock { projectionFailed = false }
+    }
+
+    private func markProjectionFailure() {
+        projectionLock.withLock { projectionFailed = true }
+    }
+
+    private func throwIfProjectionFailed(reset engine: CKSyncEngine) throws {
+        guard hasProjectionFailure else { return }
+        _ = lifecycleGate.withActive {
+            guard engine === syncEngine else { return }
+            syncEngine = makeSyncEngine(stateSerialization: Self.loadState(from: stateURL))
+        }
+        throw SyncEngineError.projectionFailed
     }
 
     private func pendingSaveIDs() -> Set<CKRecord.ID> {
