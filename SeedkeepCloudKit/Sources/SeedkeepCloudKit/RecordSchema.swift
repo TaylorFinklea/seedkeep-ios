@@ -30,9 +30,9 @@ public extension SeedkeepRecordType {
         return lines.joined(separator: "\n")
     }
 
-    /// All spike blocks in manifest order, ready to paste into a .ckdb schema file.
+    /// Complete schema document in manifest order, ready to import as a .ckdb file.
     static func allCKDSL() -> String {
-        allCases.map { $0.ckdsl() }.joined(separator: "\n\n")
+        "DEFINE SCHEMA\n\n" + allCases.map { $0.ckdsl() }.joined(separator: "\n\n")
     }
 
     private static func dslType(_ t: CKFieldType) -> String {

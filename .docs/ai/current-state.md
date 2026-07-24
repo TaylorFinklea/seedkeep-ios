@@ -2,16 +2,16 @@
 
 ## Branch
 
-`main` (What's New changelog merged 2026-07-19, `d387501..d04dc4c`).
+`main` (TestFlight 0.4.0 build 51; schema-generator repair pending commit).
 
 ## Plan
 
-None active. Last shipped: in-app "What's New" changelog (`seedkeep-rdd`) — cut to TestFlight 0.4.0 (build 51) 2026-07-21 (`b99b185`). Human device-verify pending (report: `phases/2026-07-18-whats-new-changelog-report.md`).
+None active. Build 51 device pass found Production CloudKit missing `PlantingEvent`: the generated `.ckdb` omitted the required `DEFINE SCHEMA` wrapper and could never be imported. Generator fixed test-first; full SeedkeepCloudKit suite green. User imported an additive merge preserving `Users`, `cloudkit.share`, and legacy `ShareHandoff`, deployed to Production, and confirmed sync works.
 
 ## Blockers
 
-- `seedkeep-27d.9` — iOS cutoff committed as `05f1743`; existing MCP/OAuth credentials still execute server garden tools. Awaiting hdeck `seedkeep/20260715-cloudkit-mcp-credential-policy` (`seedkeep-6wm`).
+- Continue the remaining build-51 device checklist before App Store submission.
 
 ## Open questions
 
-- Choose the R1 server credential policy in hdeck.
+- None.

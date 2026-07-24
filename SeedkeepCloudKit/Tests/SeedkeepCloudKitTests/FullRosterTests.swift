@@ -231,9 +231,10 @@ func ckdslReferenceEmission() {
     #expect(pe.contains("catalogSeedID STRING"))
 }
 
-@Test("ckdsl: allCKDSL covers all 11 record types")
+@Test("ckdsl: allCKDSL emits an importable schema covering the full roster")
 func ckdslCoversFullRoster() {
     let all = SeedkeepRecordType.allCKDSL()
+    #expect(all.hasPrefix("DEFINE SCHEMA\n\n"))
     for t in SeedkeepRecordType.allCases {
         #expect(all.contains("RECORD TYPE \(t.recordTypeName) ("))
     }
