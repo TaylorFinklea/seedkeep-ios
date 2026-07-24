@@ -24,7 +24,7 @@ public enum SyncEngineError: Error {
     case accountInvalidated
 }
 
-public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing {
+public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing, @unchecked Sendable {
     enum DeleteFailureDisposition: Equatable {
         case confirmedAbsent
         case retry
@@ -57,10 +57,10 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// Optional field-merger. When set, records whose type it `handles` are field-merged
     /// at the fetch + serverRecordChanged seams instead of blanket LWW.
     ///
-    /// `merger` + the two callbacks below are lock-guarded: they are written once from the
-    /// coordinator (MainActor) before the first sync and READ on the CKSyncEngine delegate queue.
-    /// The lock makes the `Sendable` conformance sound; the live coordinator additionally builds the
-    /// engine with `automaticSync: false`, so no delegate event can fire before they are wired.
+    /// `merger` + the two callbacks below are lock-guarded. `syncEngine`, `zoneEnsured`, and
+    /// lifecycle transitions are serialized by `lifecycleGate`; failure and trace state have
+    /// dedicated locks; `store` enforces its own lock invariant. Those boundaries justify the
+    /// explicit `@unchecked Sendable` required by CKSyncEngineDelegate's concurrent callbacks.
     private let callbackLock = NSLock()
     private var _merger: RecordMerger?
     private var _onFetchedChanges: (([CKRecord], [CKRecord.ID]) -> Void)?
@@ -241,7 +241,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// or advance its watermark past records CloudKit never confirmed.
     public func sendUntilDrained(maxPasses: Int = 6) async throws {
         let engine = try currentActiveEngine()
-        failLock.lock(); surfacedFailure = nil; failLock.unlock()
+        failLock.withLock { surfacedFailure = nil }
         var lastError: Error?
         for pass in 0..<maxPasses {
             do {

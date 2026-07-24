@@ -34,6 +34,24 @@ func accountLifecycleGate() {
     #expect(executions == 2)
 }
 
+@Test("local store preserves every record under concurrent delegate access")
+func localStoreConcurrentAccess() async {
+    let store = HouseholdLocalStore()
+    await withTaskGroup(of: Void.self) { group in
+        for index in 0..<100 {
+            group.addTask {
+                let id = CKRecord.ID(
+                    recordName: "seed:\(index)",
+                    zoneID: zoneID
+                )
+                store.setRecord(CKRecord(recordType: "Seed", recordID: id))
+                #expect(store.record(for: id) != nil)
+            }
+        }
+    }
+    #expect(store.count() == 100)
+}
+
 // MARK: - Default LWW merge (all non-custom types)
 
 private func record(_ type: String, name: String, updatedAt: Int?, displayName: String) -> CKRecord {

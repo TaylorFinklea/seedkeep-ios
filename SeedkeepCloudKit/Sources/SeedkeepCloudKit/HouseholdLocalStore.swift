@@ -5,9 +5,9 @@ import Foundation
 /// Local mirror of a household zone's records — the source of truth CKSyncEngine
 /// uploads from and applies fetched changes into.
 ///
-/// Thread-safe (NSLock): CKSyncEngine calls the delegate off arbitrary tasks.
-/// Adapted from SimmerSmith's HouseholdLocalStore — functionally identical (no app-specific changes needed).
-public final class HouseholdLocalStore {
+/// Thread-safe: every access to `records` is serialized by `lock`.
+/// `@unchecked Sendable` is justified by that invariant and exercised by concurrent-access tests.
+public final class HouseholdLocalStore: @unchecked Sendable {
     private let lock = NSLock()
     private var records: [CKRecord.ID: CKRecord] = [:]
 
