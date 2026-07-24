@@ -6,7 +6,9 @@
 
 ## Plan
 
-None active. Build 51 device pass found Production CloudKit missing `PlantingEvent`: the generated `.ckdb` omitted the required `DEFINE SCHEMA` wrapper and could never be imported. Generator fixed test-first; full SeedkeepCloudKit suite green. User imported an additive merge preserving `Users`, `cloudkit.share`, and legacy `ShareHandoff`, deployed to Production, and confirmed sync works.
+- [x] `seedkeep-27d.13`: Swift 6 CloudKit isolation (`27a294d`); strict warnings-as-errors package gate green.
+- [x] `seedkeep-27d.19`: await SwiftData projection before durable CKSyncEngine checkpoint (`1f694d6`); full `test-gate.sh` green.
+- [ ] `seedkeep-27d.12`: implement approved cross-repo resumable deletion transfer; spec/plan in umbrella `phases/2026-07-23-cloudkit-account-deletion-{spec,plan}.md`.
 
 ## Blockers
 
