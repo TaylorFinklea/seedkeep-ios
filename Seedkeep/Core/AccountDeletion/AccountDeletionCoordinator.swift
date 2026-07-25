@@ -236,6 +236,52 @@ final class AccountDeletionCoordinator {
         return try await drive()
     }
 
+    /// Finish a deletion that already committed on the server but whose
+    /// response never arrived. Call this at launch, BEFORE and INDEPENDENTLY
+    /// of session restore.
+    ///
+    /// This is the one path that must work with no signed-in user, because
+    /// the situation it exists for is defined by not having one: the
+    /// deletion cascaded the session that authorised it, so the next launch
+    /// gets a 401 from `restoreSession`, lands in signed-out or failed, and
+    /// `resume()` — which needs an identity — can never run. Without this
+    /// sweep the receipt written in C4 is unreachable and the user is left
+    /// staring at a sign-in screen with a checkpoint and a local garden
+    /// belonging to an account that no longer exists.
+    ///
+    /// Only checkpoints that reached `.deletingAccount` carrying a receipt
+    /// are considered, and each is resolved by the unauthenticated receipt
+    /// lookup — never by the absence of a session, never by a status code.
+    /// No receipt means the account is still there and the ordinary
+    /// signed-in flow owns it.
+    @discardableResult
+    func recoverCommittedDeletions() async throws -> Outcome {
+        try Task.checkCancellation()
+        var recovered = false
+        for candidate in store.allCheckpoints() {
+            let checkpoint = candidate.checkpoint
+            guard checkpoint.deletesOwnAccount,
+                  checkpoint.phase == .deletingAccount,
+                  let receipt = checkpoint.deletionReceipt else { continue }
+            // A lookup failure proves nothing either way, so it leaves the
+            // record exactly where it is for the next attempt.
+            guard let confirmed = (try? await server.deletionReceipt(token: receipt)).flatMap({ $0 }),
+                  confirmed.deleted else { continue }
+            self.checkpoint = checkpoint
+            lease = candidate.lease
+            try? clear(userID: checkpoint.userID)
+            recovered = true
+        }
+        guard recovered else { return .idle }
+        handoff = nil
+        pendingDestination = nil
+        // Erases local data and returns the app to signed out. Safe to run
+        // from an already-signed-out state — it is the only way the garden
+        // of a deleted account gets removed from this device.
+        await session.signOut()
+        return .deleted
+    }
+
     /// Abandon a transfer and forget the local deletion.
     ///
     /// Legal only while the original garden is still there. Once the source

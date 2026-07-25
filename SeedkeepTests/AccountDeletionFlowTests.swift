@@ -1,22 +1,112 @@
 import Testing
 import Foundation
+import CloudKit
+import CryptoKit
 import SwiftData
 @testable import Seedkeep
 import SeedkeepKit
 
-/// E2E integration tests for the account-deletion flow (M5, YouView sequence).
+/// End-to-end tests for account deletion over the REAL production seam:
+/// `AccountDeletionCoordinator` → `LiveAccountDeletionServer` →
+/// `SeedkeepClient` → HTTP, with a real `AuthController` and a real
+/// `SyncEngine` eraser wired exactly as `AppEnvironment.live()` wires them.
 ///
-///   1. `deleteAccount(disposition:deletionReceiptHash:)` → DELETE /api/me
-///   2. `await auth.signOut()` (only on success)
+/// These tests used to call `client.deleteAccount` and `auth.signOut()`
+/// themselves and describe that as "the YouView sequence". It no longer is
+/// — `YouView` calls `appEnv.accountDeletion.start()` — so the suite was
+/// asserting a hand-rolled copy of a path that does not exist, and every
+/// invariant the coordinator adds (mint and persist the receipt BEFORE the
+/// destructive call, sign out only on server confirmation, recover a lost
+/// response through the unauthenticated receipt lookup) was invisible to
+/// it.
 ///
-/// The eraser is wired as in AppEnvironment.live(): `auth.wireLocalDataEraser`
-/// receives a closure that calls `sync.eraseAllLocalData()`.
+/// Only the CloudKit seam is substituted: a live one needs an iCloud
+/// entitlement the test host does not have. Identity is supplied directly
+/// for the same reason — production reads it from `auth.state`, which is
+/// not what these tests are about.
 @MainActor
 @Suite("Account deletion flow (M5)", .serialized)
 struct AccountDeletionFlowTests {
 
     private static let householdID = "hh_del"
-    private static let deletionReceiptHash = String(repeating: "d", count: 64)
+    /// Fixed so the wire body can be checked against the exact value the
+    /// coordinator persisted.
+    private static let receiptNonce = "flow-receipt-nonce"
+
+    static func hash(of nonce: String) -> String {
+        SHA256.hash(data: Data(nonce.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A CloudKit seam that reports no iCloud garden. Every other method
+    /// traps: reaching one would mean the coordinator picked a flow this
+    /// account cannot be in.
+    @MainActor
+    private final class NoGardenCloudKit: AccountDeletionCloudKitOperating {
+        func currentRole() async throws -> AccountDeletionCloudKitRole { .noGarden }
+        func leaveSharedGarden(zoneID: CKRecordZone.ID) async throws {
+            Issue.record("no CloudKit work is expected for an account with no garden")
+        }
+        func sharedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool { true }
+        func deleteOwnedZone(zoneID: CKRecordZone.ID) async throws {
+            Issue.record("no CloudKit work is expected for an account with no garden")
+        }
+        func ownedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool { true }
+        func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> [CKRecord] { [] }
+        func saveRecords(_ records: [CKRecord],
+                         policy: CKModifyRecordsOperation.RecordSavePolicy,
+                         in zoneID: CKRecordZone.ID) async throws {}
+        func acceptShare(at url: URL) async throws -> CKRecordZone.ID {
+            CKRecordZone.default().zoneID
+        }
+        func createDestination(householdID: String, title: String) async throws
+            -> AccountDeletionDestination {
+            throw CancellationError()
+        }
+    }
+
+    @MainActor
+    private struct Harness {
+        let coordinator: AccountDeletionCoordinator
+        let auth: AuthController
+        let store: AccountDeletionCheckpointStore
+        let userID: String
+        var storedCheckpoint: AccountDeletionCheckpoint? {
+            try? store.load(userID: userID)?.checkpoint
+        }
+    }
+
+    /// Wires the coordinator the way `AppEnvironment` does: real client,
+    /// real auth, real eraser, real checkpoint store.
+    @MainActor
+    private static func makeHarness(
+        client: SeedkeepClient,
+        container: ModelContainer,
+        tokenStore: InMemoryTokenStore,
+        defaults: UserDefaults,
+        userID: String = "u_del"
+    ) -> Harness {
+        let sync = SyncEngine(client: client, container: container)
+        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+        auth.wireLocalDataEraser { [sync] in
+            try? sync.eraseAllLocalData()
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AccountDeletionFlowTests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = AccountDeletionCheckpointStore(directory: directory)
+        let coordinator = AccountDeletionCoordinator(
+            store: store,
+            cloudKit: NoGardenCloudKit(),
+            server: LiveAccountDeletionServer(client: client),
+            session: AccountDeletionSession(
+                identity: { .init(userID: userID, householdID: householdID) },
+                signOut: { [weak auth] in await auth?.signOut() }
+            ),
+            now: { 1_700_000_000_000 },
+            newReceipt: { receiptNonce }
+        )
+        return Harness(coordinator: coordinator, auth: auth, store: store, userID: userID)
+    }
 
     private static func makeContainer(_ name: String) -> ModelContainer {
         makeTestContainer(name: name)
@@ -104,31 +194,27 @@ struct AccountDeletionFlowTests {
             ),
             bearerToken: "tok_del"
         )
-        let sync = SyncEngine(client: client, container: container)
-        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
-        auth.wireLocalDataEraser { [sync] in
-            try? sync.eraseAllLocalData()
-        }
+        let harness = Self.makeHarness(client: client, container: container,
+                                       tokenStore: tokenStore, defaults: defaults)
 
-        // Replicate the YouView sequence exactly.
-        let deleted = try await client.deleteAccount(
-            disposition: .noCloudKitGarden,
-            deletionReceiptHash: Self.deletionReceiptHash
-        )
-        await auth.signOut()
+        let outcome = try await harness.coordinator.start()
 
-        #expect(deleted == true, "deleteAccount() must return true on ok:true response")
-        let requestBody = try #require(AccountDeletionMockURLProtocol.lastBody())
+        #expect(outcome == .deleted)
+        let requestBody = try #require(AccountDeletionMockURLProtocol.body(for: "DELETE /api/me"))
         let body = try #require(
             JSONSerialization.jsonObject(with: requestBody) as? [String: Any]
         )
         #expect(Set(body.keys) == ["cloudkit_disposition", "deletion_receipt_hash"])
         #expect(body["cloudkit_disposition"] as? String == "no_cloudkit_garden")
-        #expect(body["deletion_receipt_hash"] as? String == Self.deletionReceiptHash)
+        // The hash on the wire is the one the coordinator minted and wrote
+        // down, not a value the test handed it — that is what makes the
+        // deletion recoverable if this response never comes back.
+        #expect(body["deletion_receipt_hash"] as? String == Self.hash(of: Self.receiptNonce))
+        #expect(harness.storedCheckpoint == nil, "a completed deletion leaves no checkpoint")
         #expect(tokenStore.load() == nil, "signOut must clear the keychain token")
-        #expect(auth.loadCachedIdentity() == nil, "signOut must clear the cached identity")
-        guard case .signedOut = auth.state else {
-            Issue.record("expected signedOut, got \(auth.state)")
+        #expect(harness.auth.loadCachedIdentity() == nil, "signOut must clear the cached identity")
+        guard case .signedOut = harness.auth.state else {
+            Issue.record("expected signedOut, got \(harness.auth.state)")
             return
         }
 
@@ -166,29 +252,26 @@ struct AccountDeletionFlowTests {
             ),
             bearerToken: "tok_alive"
         )
-        let sync = SyncEngine(client: client, container: container)
-        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
-        auth.wireLocalDataEraser { [sync] in
-            try? sync.eraseAllLocalData()
-        }
+        let harness = Self.makeHarness(client: client, container: container,
+                                       tokenStore: tokenStore, defaults: defaults)
 
-        // Replicate YouView's catch branch: deleteAccount throws → signOut NOT called.
         var threwError = false
         do {
-            _ = try await client.deleteAccount(
-                disposition: .noCloudKitGarden,
-                deletionReceiptHash: Self.deletionReceiptHash
-            )
+            _ = try await harness.coordinator.start()
         } catch {
             threwError = true
-            // signOut() is intentionally NOT called here — mirroring YouView's catch branch.
         }
 
-        #expect(threwError, "deleteAccount() must throw on a non-ok response")
+        #expect(threwError, "a non-ok response must surface, never be treated as deletion")
         #expect(tokenStore.load() == "tok_alive",
-                "token must be intact when deleteAccount() throws before signOut()")
-        #expect(auth.loadCachedIdentity() != nil,
-                "cached identity must be intact when deleteAccount() throws")
+                "the token must survive a failed deletion")
+        #expect(harness.auth.loadCachedIdentity() != nil,
+                "cached identity must survive a failed deletion")
+        // The receipt was minted and persisted BEFORE the destructive call,
+        // so a retry — or a relaunch — can still find out what happened.
+        let checkpoint = try #require(harness.storedCheckpoint)
+        #expect(checkpoint.phase == .deletingAccount)
+        #expect(checkpoint.deletionReceipt == Self.receiptNonce)
         // Auth state is still .signedOut (default) because adoptBearerToken was not called;
         // the key assertion is that rows are still present.
 
@@ -201,6 +284,94 @@ struct AccountDeletionFlowTests {
         #expect(!journals.isEmpty, "journal rows must survive when deleteAccount() throws")
         #expect(!pending.isEmpty, "pending writes must survive when deleteAccount() throws")
         #expect(!cursors.isEmpty, "sync cursors must survive when deleteAccount() throws")
+    }
+
+    // MARK: - Response loss: the deletion committed, the answer did not
+
+    @Test("a deletion whose response was lost is finished through the receipt lookup")
+    func lostResponseRecoveredOverHTTP() async throws {
+        let container = Self.makeContainer("deleteAccountLost")
+        let defaults = Self.makeDefaults("deleteAccountLost")
+        let tokenStore = InMemoryTokenStore("tok_lost")
+        try Self.seedContainer(container)
+        try Self.cacheIdentity(defaults, userID: "u_del", householdID: Self.householdID)
+
+        // The server committed the deletion and then the session it
+        // cascaded made the response come back 401 — indistinguishable,
+        // from the client's side, from an ordinary expired token. Only the
+        // receipt route can tell them apart, and it is unauthenticated
+        // precisely because there is no session left to present.
+        let session = AccountDeletionMockURLProtocol.makeSession(
+            routes: [
+                "DELETE /api/me": Data(
+                    #"{"ok":false,"error":{"code":"unauthorized","message":"no session"}}"#.utf8
+                ),
+                "POST /api/account-deletion/receipts/lookup": Data(
+                    #"{"ok":true,"data":{"deleted":true,"deleted_at":1700000000100}}"#.utf8
+                ),
+            ]
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "tok_lost"
+        )
+        let harness = Self.makeHarness(client: client, container: container,
+                                       tokenStore: tokenStore, defaults: defaults)
+
+        let outcome = try await harness.coordinator.start()
+
+        #expect(outcome == .deleted)
+        #expect(AccountDeletionMockURLProtocol.requests()
+            .contains("POST /api/account-deletion/receipts/lookup"))
+        let lookup = try #require(AccountDeletionMockURLProtocol
+            .body(for: "POST /api/account-deletion/receipts/lookup"))
+        let lookupBody = try #require(JSONSerialization.jsonObject(with: lookup) as? [String: Any])
+        // The RAW nonce goes up; the server hashes it. The hash went out
+        // with the deletion request.
+        #expect(lookupBody["receipt_token"] as? String == Self.receiptNonce)
+        #expect(tokenStore.load() == nil, "a confirmed deletion must still sign the user out")
+        #expect(harness.storedCheckpoint == nil)
+
+        let fresh = ModelContext(container)
+        for (name, count) in try rowCountsAllModels(context: fresh) {
+            #expect(count == 0, "model \(name) must be empty after a confirmed deletion")
+        }
+    }
+
+    @Test("an unauthorized response with no receipt on file is not a deletion")
+    func unauthorizedWithoutReceiptKeepsEverything() async throws {
+        let container = Self.makeContainer("deleteAccountUnauthorized")
+        let defaults = Self.makeDefaults("deleteAccountUnauthorized")
+        let tokenStore = InMemoryTokenStore("tok_stale")
+        try Self.seedContainer(container)
+        try Self.cacheIdentity(defaults, userID: "u_del", householdID: Self.householdID)
+
+        // Same 401, but the receipt route says there is no such receipt —
+        // so the account is alive and the token is merely stale.
+        let session = AccountDeletionMockURLProtocol.makeSession(
+            routes: [
+                "DELETE /api/me": Data(
+                    #"{"ok":false,"error":{"code":"unauthorized","message":"no session"}}"#.utf8
+                )
+            ],
+            fallbackStatus: 404
+        )
+        AccountDeletionMockURLProtocol.fallbackBody = Data(
+            #"{"ok":false,"error":{"code":"receipt_not_found","message":"none"}}"#.utf8
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "tok_stale"
+        )
+        let harness = Self.makeHarness(client: client, container: container,
+                                       tokenStore: tokenStore, defaults: defaults)
+
+        await #expect(throws: (any Error).self) { try await harness.coordinator.start() }
+
+        #expect(tokenStore.load() == "tok_stale", "a 401 alone must never sign the user out")
+        #expect(harness.storedCheckpoint?.phase == .deletingAccount)
+        let ctx = ModelContext(container)
+        #expect(!(try ctx.fetch(FetchDescriptor<LocalSeed>())).isEmpty)
     }
 }
 
@@ -232,6 +403,10 @@ private func countRows<T: PersistentModel>(of type: T.Type, in context: ModelCon
 final class AccountDeletionMockURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var routes: [String: Data] = [:]
     nonisolated(unsafe) static var capturedBody: Data?
+    /// Bodies keyed by "METHOD /path", so a test can inspect each leg of a
+    /// multi-request flow rather than only the last one.
+    nonisolated(unsafe) static var capturedBodies: [String: Data] = [:]
+    nonisolated(unsafe) static var requestLog: [String] = []
     nonisolated(unsafe) static var fallbackStatus: Int = 200
     nonisolated(unsafe) static var fallbackBody: Data = Data(
         #"{"ok":false,"error":{"code":"not_found","message":"unstubbed"}}"#.utf8
@@ -246,6 +421,8 @@ final class AccountDeletionMockURLProtocol: URLProtocol, @unchecked Sendable {
         defer { lock.unlock() }
         Self.routes = routes
         Self.capturedBody = nil
+        Self.capturedBodies = [:]
+        Self.requestLog = []
         Self.fallbackStatus = fallbackStatus
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [AccountDeletionMockURLProtocol.self]
@@ -256,6 +433,18 @@ final class AccountDeletionMockURLProtocol: URLProtocol, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return capturedBody
+    }
+
+    static func body(for key: String) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedBodies[key]
+    }
+
+    static func requests() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestLog
     }
 
     private static func drainBody(_ request: URLRequest) -> Data? {
@@ -282,6 +471,8 @@ final class AccountDeletionMockURLProtocol: URLProtocol, @unchecked Sendable {
         let method = request.httpMethod ?? "GET"
         let key = "\(method) \(path)"
         Self.capturedBody = Self.drainBody(request)
+        Self.capturedBodies[key] = Self.capturedBody
+        Self.requestLog.append(key)
         let body = Self.routes[key] ?? Self.routes[path] ?? Self.fallbackBody
         let status = Self.routes[key] != nil || Self.routes[path] != nil ? 200 : Self.fallbackStatus
         Self.lock.unlock()

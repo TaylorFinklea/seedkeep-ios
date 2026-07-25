@@ -99,17 +99,21 @@ struct AccountDeletionLiveCloudKitTests {
         ) == .participant(sharedZoneID: shared))
     }
 
-    @Test("a marker selects its accepted share when several shared zones exist")
-    func markerSelectsAmongSharedZones() throws {
+    @Test("a marker does NOT license abandoning the other accepted shares")
+    func markerCannotResolveSeveralSharedZones() {
+        // This device participates in both gardens. The participant flow
+        // leaves exactly one, so honouring the marker here would delete the
+        // account and quietly strand the user's membership of the other.
         let selected = zone("selected")
 
-        #expect(try LiveAccountDeletionCloudKit.resolveRole(
-            sharedZoneIDs: [zone("other"), selected],
-            ownedZoneExists: true,
-            ownedZoneID: zone("owned", owner: CKCurrentUserDefaultName),
-            acceptedShareParticipants: 1,
-            markerZoneID: selected
-        ) == .participant(sharedZoneID: selected))
+        #expect(throws: (any Error).self) {
+            try LiveAccountDeletionCloudKit.resolveRole(
+                sharedZoneIDs: [zone("other"), selected],
+                ownedZoneExists: true,
+                ownedZoneID: zone("owned", owner: CKCurrentUserDefaultName),
+                acceptedShareParticipants: 1,
+                markerZoneID: selected)
+        }
     }
 
     @Test("several accepted shares without a marker fail closed")

@@ -106,10 +106,20 @@ struct LiveAccountDeletionCloudKit: AccountDeletionCloudKitOperating {
     }
 
     private let containerID: String
-    private let container: CKContainer
     private let participantZoneID: @MainActor () -> CKRecordZone.ID?
     private let ownedHouseholdID: @MainActor () -> String?
     private let rebuildOwnGardenScope: @MainActor () async throws -> Void
+
+    /// Resolved on use, never in `init`.
+    ///
+    /// Constructing a `CKContainer` is not free and, in a process without
+    /// the iCloud entitlement, it is actively hostile — CloudKit logs a
+    /// significant issue and the process can die on the spot. This adapter
+    /// is now built during app launch (the deletion-receipt sweep needs it
+    /// in scope before anything is signed in), and that sweep touches no
+    /// CloudKit at all, so the container must not exist until a method
+    /// that genuinely needs CloudKit asks for it.
+    private var container: CKContainer { CKContainer(identifier: containerID) }
 
     init(
         containerIdentifier: String = "iCloud.app.seedkeep",
@@ -118,7 +128,6 @@ struct LiveAccountDeletionCloudKit: AccountDeletionCloudKitOperating {
         rebuildOwnGardenScope: @escaping @MainActor () async throws -> Void
     ) {
         self.containerID = containerIdentifier
-        self.container = CKContainer(identifier: containerIdentifier)
         self.participantZoneID = participantZoneID
         self.ownedHouseholdID = ownedHouseholdID
         self.rebuildOwnGardenScope = rebuildOwnGardenScope
@@ -179,9 +188,20 @@ struct LiveAccountDeletionCloudKit: AccountDeletionCloudKitOperating {
 
     /// Chooses the deletion flow from already-observed CloudKit facts.
     ///
-    /// The local participant marker is only a disambiguation hint. A missing
-    /// marker is normal after reinstall, while guessing between two accepted
-    /// shares could clean up the wrong zone and strand the other one.
+    /// MORE THAN ONE ACCEPTED SHARE IS ALWAYS AMBIGUOUS, marker or not.
+    ///
+    /// The marker used to be allowed to pick a winner here, which was
+    /// wrong in a way that mattered: this device is a live participant of
+    /// EVERY accepted share, and the participant flow leaves exactly one.
+    /// Picking one and deleting the account would silently abandon the
+    /// others — the user's account disappears while their name stays on
+    /// somebody else's garden, which is precisely the outcome the whole
+    /// role-inspection step exists to prevent. A marker can say which zone
+    /// this device is currently *viewing*; it cannot say that the other
+    /// shares stopped existing.
+    ///
+    /// So the marker's only remaining job is diagnostic, and the honest
+    /// answer for two or more shares is to stop and say so.
     nonisolated static func resolveRole(
         sharedZoneIDs: [CKRecordZone.ID],
         ownedZoneExists: Bool,
@@ -197,14 +217,11 @@ struct LiveAccountDeletionCloudKit: AccountDeletionCloudKitOperating {
         case 0:
             break
         case 1:
+            // A missing marker is normal after a reinstall or on a second
+            // device, and irrelevant when there is only one candidate.
             return .participant(sharedZoneID: acceptedSharedZoneIDs[0])
         default:
-            let markerMatches = acceptedSharedZoneIDs.filter { $0 == markerZoneID }
-            guard markerMatches.count == 1 else {
-                throw OperationFailure.ambiguousSharedZones(
-                    count: acceptedSharedZoneIDs.count)
-            }
-            return .participant(sharedZoneID: markerMatches[0])
+            throw OperationFailure.ambiguousSharedZones(count: acceptedSharedZoneIDs.count)
         }
 
         guard ownedZoneExists else { return .noGarden }

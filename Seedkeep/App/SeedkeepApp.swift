@@ -54,6 +54,13 @@ struct SeedkeepApp: App {
             .preferredColorScheme(.light)
             .task {
                 appDelegate.environment = environment   // let the scene delegate drive participant adopt
+                // BEFORE restoring the session, and deliberately not gated
+                // on it: an account deletion that committed but whose
+                // response was lost took this device's session with it, so
+                // restore will 401 and every signed-in code path stays out
+                // of reach. The receipt lookup needs no credentials and is
+                // the only thing that can finish that deletion.
+                await environment.recoverCommittedAccountDeletion()
                 await environment.auth.restoreSession()
                 await environment.processPendingShare()  // cold-launch: adopt a share tapped while terminated
             }

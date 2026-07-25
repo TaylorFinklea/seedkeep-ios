@@ -360,6 +360,26 @@ public final class AppEnvironment {
         return coordinator
     }
 
+    /// Launch sweep for an account deletion that committed server-side but
+    /// whose response never got back. Runs before session restore and
+    /// needs no credentials — see
+    /// `AccountDeletionCoordinator.recoverCommittedDeletions`.
+    ///
+    /// Best effort: a lookup that cannot reach the server leaves the
+    /// checkpoint untouched for the next launch, and must never keep the
+    /// app from starting.
+    func recoverCommittedAccountDeletion() async {
+        // Cheap disk check first. Almost every launch has no checkpoint at
+        // all, and this runs before anything else the app does — no reason
+        // to build the coordinator or reach the network to learn that.
+        guard !AccountDeletionCheckpointStore().allCheckpoints().isEmpty else { return }
+        do {
+            _ = try await accountDeletion.recoverCommittedDeletions()
+        } catch {
+            // Nothing was concluded, so nothing was changed.
+        }
+    }
+
     /// Household ID that scopes locally stored garden data. In a CloudKit shared
     /// garden, the owner's zone is authoritative; server-only/rollback mode
     /// deliberately remains on the signed-in household.

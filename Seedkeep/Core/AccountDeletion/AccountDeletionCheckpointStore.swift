@@ -213,6 +213,42 @@ struct AccountDeletionCheckpointStore: Sendable {
         )
     }
 
+    /// Every checkpoint on disk, for callers that do not yet know — or can
+    /// no longer learn — which user they belong to.
+    ///
+    /// This exists for exactly one situation, and it is the worst one:
+    /// `DELETE /api/me` committed, the response was lost, and the next
+    /// launch cannot authenticate because the deletion took the session
+    /// with it. `load(userID:)` is useless there, because the signed-in
+    /// identity it needs is precisely what is gone. The filename encodes
+    /// the user id, so the record can still be found — and its receipt can
+    /// still prove, unauthenticated, that the deletion happened.
+    ///
+    /// Undecodable files are SKIPPED, not thrown on and not deleted. A
+    /// sweep is a background best-effort over records that may belong to
+    /// other accounts; refusing to look at any of them because one is
+    /// damaged would be the opposite of fail-closed here, and the damaged
+    /// one is still protected — nothing in this method writes.
+    func allCheckpoints() -> [Loaded] {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return names.sorted().compactMap { name -> Loaded? in
+            guard name.hasPrefix("checkpoint-"), name.hasSuffix(".json") else { return nil }
+            let url = directory.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: url),
+                  let checkpoint = try? JSONDecoder().decode(AccountDeletionCheckpoint.self, from: data),
+                  // The name is derived from the user id, so a file whose
+                  // contents disagree with its own path has been tampered
+                  // with or hand-edited. Leave it alone.
+                  url == self.url(forUserID: checkpoint.userID) else { return nil }
+            let slot = Self.slot(forPath: url.path, occupied: true)
+            return Loaded(checkpoint: checkpoint,
+                          lease: Lease(path: url.path, generation: slot.generation))
+        }
+    }
+
     /// Replaces the user's checkpoint and returns the lease for the next
     /// write.
     ///

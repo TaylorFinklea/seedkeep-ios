@@ -1922,4 +1922,152 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.stored == nil)
     }
 
+
+    // MARK: Recovery with no session at all
+
+    /// A coordinator whose session is signed out, exactly as it is on the
+    /// launch after a deletion cascaded the token.
+    @MainActor
+    private func signedOutCoordinator(_ harness: Harness) -> AccountDeletionCoordinator {
+        AccountDeletionCoordinator(
+            store: harness.store,
+            cloudKit: harness.cloudKit,
+            server: harness.server,
+            session: AccountDeletionSession(
+                identity: { nil },
+                signOut: { [recorder = harness.signOut] in recorder.count += 1 }
+            ),
+            now: { 1_700_000_000_000 },
+            newReceipt: { Harness.receiptNonce }
+        )
+    }
+
+    @Test("a relaunch with no session finishes a deletion the server already committed")
+    func recoveryWithoutSessionCompletesDeletion() async throws {
+        // The deletion took the session with it, so `resume()` can never
+        // run again. The receipt is the only thing left that can prove what
+        // happened, and it needs no credentials.
+        let harness = Harness()
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .noCloudKitGarden, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness)
+
+        let outcome = try await coordinator.recoverCommittedDeletions()
+
+        #expect(outcome == .deleted)
+        #expect(harness.stored == nil, "the local record of a deleted account must not survive")
+        #expect(harness.signOut.count == 1, "local data has to be erased even though nobody is signed in")
+    }
+
+    @Test("resume alone cannot reach the receipt once the session is gone")
+    func resumeIsUnreachableWithoutSession() async throws {
+        // Pins WHY the sweep exists: the ordinary path is credential-bound.
+        let harness = Harness()
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .noCloudKitGarden, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness)
+
+        await #expect(throws: AccountDeletionCoordinatorError.notSignedIn) {
+            try await coordinator.resume()
+        }
+        #expect(harness.stored != nil)
+        #expect(harness.signOut.count == 0)
+    }
+
+    @Test("a relaunch with no session and no receipt changes nothing")
+    func recoveryWithoutReceiptChangesNothing() async throws {
+        // The 401 on this launch means nothing on its own: the account may
+        // be perfectly alive and the token merely stale.
+        let harness = Harness()
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .noCloudKitGarden, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness)
+
+        let outcome = try await coordinator.recoverCommittedDeletions()
+
+        #expect(outcome == .idle)
+        #expect(harness.stored?.phase == .deletingAccount)
+        #expect(harness.signOut.count == 0, "an unconfirmed deletion must never erase local data")
+    }
+
+    @Test("an unreachable receipt lookup during recovery leaves the record for next launch")
+    func recoveryTolerationOfOfflineLookup() async throws {
+        let harness = Harness()
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        harness.server.failures[.deletionReceipt] = SeedkeepError(code: "network", message: "offline")
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .noCloudKitGarden, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness)
+
+        #expect(try await coordinator.recoverCommittedDeletions() == .idle)
+        #expect(harness.stored?.deletionReceipt == Harness.receiptNonce)
+        #expect(harness.signOut.count == 0)
+    }
+
+    @Test("recovery ignores deletions that never reached the destructive step")
+    func recoveryIgnoresEarlierPhases() async throws {
+        let harness = Harness()
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .sharedOwner, phase: .copyComplete,
+            transferID: "tr_1", deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness)
+
+        #expect(try await coordinator.recoverCommittedDeletions() == .idle)
+        #expect(harness.stored?.phase == .copyComplete)
+        #expect(harness.signOut.count == 0)
+    }
+
+    @Test("recovery ignores a successor's checkpoint")
+    func recoveryIgnoresSuccessor() async throws {
+        // A successor is finishing somebody else's handoff; there is no
+        // account of theirs to finish deleting.
+        let harness = Harness()
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .successor, phase: .deletingAccount,
+            transferID: "tr_1", deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness)
+
+        #expect(try await coordinator.recoverCommittedDeletions() == .idle)
+        #expect(harness.stored != nil)
+        #expect(harness.signOut.count == 0)
+    }
+
+    @Test("recovery leaves an unreadable checkpoint strictly alone")
+    func recoverySkipsUnreadableCheckpoints() async throws {
+        let harness = Harness()
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try Data("{not json".utf8).write(to: harness.store.url(forUserID: harness.userID))
+        let coordinator = signedOutCoordinator(harness)
+
+        // One damaged file must neither crash the sweep nor be deleted by
+        // it — it is the only evidence of whatever went wrong.
+        #expect(try await coordinator.recoverCommittedDeletions() == .idle)
+        #expect(FileManager.default.fileExists(atPath: harness.store.url(forUserID: harness.userID).path))
+        #expect(harness.signOut.count == 0)
+    }
+
+    @Test("recovery finds a checkpoint belonging to an account it cannot name")
+    func recoveryEnumeratesForeignCheckpoints() async throws {
+        // The sweep runs before sign-in, so the only way it can find the
+        // record is by enumerating the store rather than asking for a user.
+        let harness = Harness(userID: "u_nobody")
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: "u_someone_else", role: .soloOwner, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness)
+
+        #expect(try await coordinator.recoverCommittedDeletions() == .deleted)
+        #expect(try harness.store.load(userID: "u_someone_else") == nil)
+        #expect(harness.signOut.count == 1)
+    }
+
 }
