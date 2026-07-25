@@ -1311,6 +1311,44 @@ struct AccountDeletionFlowModelTests {
         #expect(harness.stored == nil, "a household mismatch must never be persisted as a handoff")
     }
 
+    @Test("a network failure during the expired-preview replay keeps the token, not a refusal")
+    func transientFailureDuringExpiredReplayRetainsTheLink() async throws {
+        // The offer LOOKS dead (preview says expired), but the replay
+        // itself never got an answer — the connection dropped. That
+        // proves nothing about whether the token still works, so it must
+        // not be treated the same as the server actually saying no.
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .successorBound, destination: false)
+        harness.server.inspectError = SeedkeepError(
+            code: "handoff_expired", message: "This handoff link has expired.", httpStatus: 403)
+        harness.server.acceptError = URLError(.networkConnectionLost)
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+
+        guard case .failed = harness.model.stage else {
+            Issue.record("a transport failure must surface as retryable, got \(harness.model.stage)")
+            return
+        }
+        #expect(harness.model.canRetry)
+        #expect(harness.stored == nil)
+
+        // Retry re-presents the SAME retained token — not a fresh
+        // inspection, not a generic resume — and this time it lands.
+        harness.server.acceptError = nil
+        await harness.model.retry()
+
+        #expect(harness.server.calls.filter {
+            if case .acceptTransfer = $0 { return true }
+            return false
+        }.count == 2)
+        #expect(harness.stored?.role == .successor)
+        if case .handoffRefused = harness.model.stage {
+            Issue.record("a transient failure must never permanently refuse the offer")
+        }
+    }
+
 }
 
 // MARK: - Universal-link routing
@@ -1476,42 +1514,39 @@ struct AccountDeletionRootRouteTests {
 
 /// The successor's app-scope cutover, as the decision it turns on.
 ///
-/// The transfer id is the authority for WHICH garden was handed over. A
-/// refreshed session is not: `/api/me` answers with a membership, and a
-/// user who belongs to more than one household can be handed back the
-/// wrong one — or a cached one from before the re-home. Adopting on that
-/// answer would point the app at a garden the transfer never mentioned.
+/// The transfer names the household to adopt; the session is never
+/// trusted to agree on its own. `AppEnvironment.adoptTransferredGarden`
+/// asks the server the EXACT question — `GET /api/households/:id` — and
+/// this type turns that route's answer into copy, never a guess.
 @Suite("Transferred-garden cutover guard")
 struct TransferredGardenCutoverTests {
 
-    @Test("a session that names the transferred household is accepted")
-    func matchingHouseholdIsAccepted() throws {
-        try TransferredGardenCutover.verifyHousehold(transferHouseholdID: "hh_owner",
-                                                     signedInHouseholdID: "hh_owner")
+    @Test("not_a_member classifies as not-yet-transferred, legitimately retryable")
+    func notAMemberClassifiesAsNotYetTransferred() {
+        let error = SeedkeepError(code: "not_a_member", message: "Not a member of this household.",
+                                  httpStatus: 403)
+        #expect(TransferredGardenCutover.classify(error) == .notYetTransferred)
     }
 
-    @Test("a session that names a different household is refused, never adopted")
-    func mismatchedHouseholdIsRefused() {
-        #expect(throws: TransferredGardenCutover.Failure
-            .householdNotTransferred(expected: "hh_owner", found: "hh_other")) {
-            try TransferredGardenCutover.verifyHousehold(transferHouseholdID: "hh_owner",
-                                                         signedInHouseholdID: "hh_other")
-        }
+    @Test("unauthorized classifies as no session to adopt into")
+    func unauthorizedClassifiesAsSessionUnavailable() {
+        let error = SeedkeepError(code: "unauthorized", message: "Missing authorization token",
+                                  httpStatus: 401)
+        #expect(TransferredGardenCutover.classify(error) == .sessionUnavailable)
     }
 
-    @Test("no session at all is refused rather than guessed at")
-    func missingSessionIsRefused() {
-        #expect(throws: TransferredGardenCutover.Failure.sessionUnavailable) {
-            try TransferredGardenCutover.verifyHousehold(transferHouseholdID: "hh_owner",
-                                                         signedInHouseholdID: nil)
-        }
+    @Test("an error this type does not recognise is left for the caller to propagate")
+    func unrecognisedErrorsAreNotReinterpreted() {
+        let error = SeedkeepError(code: "server_error", message: "boom", httpStatus: 500)
+        #expect(TransferredGardenCutover.classify(error) == nil)
+        #expect(TransferredGardenCutover.classify(URLError(.timedOut)) == nil)
     }
 
     @Test("every refusal explains itself without naming a credential")
     func refusalsAreReadable() {
         let failures: [TransferredGardenCutover.Failure] = [
+            .notYetTransferred,
             .sessionUnavailable,
-            .householdNotTransferred(expected: "hh_owner", found: "hh_other"),
             .destinationSyncIncomplete(message: nil),
             .destinationSyncIncomplete(message: "iCloud is unavailable."),
         ]

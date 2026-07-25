@@ -150,9 +150,12 @@ enum AccountDeletionRootRoute: Equatable {
         /// `nil` means resume a handoff already accepted on this device;
         /// its single-use token is long gone and is not needed.
         let link: AccountDeletionHandoffLink?
+        /// The id `.link == nil` presents as. Named so a dismissal
+        /// handler can recognise it without constructing a `Presentation`.
+        static let resumeID = "resume"
         /// Keyed on the link's fingerprint, so a reissued token presents
         /// as the new thing it is rather than reusing the live sheet.
-        var id: String { link?.id ?? "resume" }
+        var id: String { link?.id ?? Self.resumeID }
     }
 
     var presentation: Presentation? {

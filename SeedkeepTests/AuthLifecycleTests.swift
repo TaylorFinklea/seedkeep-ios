@@ -256,6 +256,96 @@ struct AuthLifecycleTests {
             Issue.record("a fresh token of unknown ownership must not adopt the previous user's cache")
         }
     }
+
+    // MARK: - Exact-household adoption (account-deletion successor cutover)
+
+    @Test("adoptHousehold switches state and the cache to the exact household given")
+    func adoptHouseholdSwitchesStateAndCache() async throws {
+        let defaults = Self.makeDefaults("adoptHousehold")
+        let tokenStore = Self.makeTokenStore("adoptHousehold")
+        try Self.cacheIdentity(defaults, userID: "u_succ", householdID: "hh_own")
+        let client = Self.makeClient()
+        Self.stubIdentity(userID: "u_succ", householdID: "hh_own")
+        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+        await auth.adoptBearerToken("tok_succ")
+        guard case .signedIn(let user, _) = auth.state else {
+            Issue.record("setup failed to sign in")
+            return
+        }
+
+        let transferred = try JSONDecoder().decode(
+            HouseholdDTO.self,
+            from: Data(#"{"id":"hh_transferred","name":"Transferred garden","created_at":1,"updated_at":1}"#.utf8))
+        auth.adoptHousehold(transferred)
+
+        guard case .signedIn(let sameUser, let household) = auth.state else {
+            Issue.record("expected signedIn, got \(auth.state)")
+            return
+        }
+        #expect(sameUser.id == user.id, "adopting a household must not change WHO is signed in")
+        #expect(household.id == "hh_transferred")
+        let cached = auth.loadCachedIdentity()
+        #expect(cached?.household.id == "hh_transferred",
+                "the cache must move together with state — a later restore must see the same household")
+        #expect(cached?.user.id == user.id)
+    }
+
+    @Test("a later restore that agrees with the adopted household does not wipe it")
+    func restoreAfterAdoptionDoesNotWipe() async throws {
+        // The bug this defends against: `loadIdentity`'s wipe check
+        // compares the SERVER's answer to `loadCachedIdentity()`, not to
+        // `state`. If `adoptHousehold` moved `state` to the transferred
+        // household but left the CACHE pointing at the old one, then even
+        // a later restore that correctly resolves the SAME (transferred)
+        // household would look like an identity switch against the stale
+        // cache and wipe a garden that is still perfectly valid.
+        let defaults = Self.makeDefaults("restoreAfterAdoption")
+        let tokenStore = Self.makeTokenStore("restoreAfterAdoption")
+        tokenStore.save("tok_succ")
+        try Self.cacheIdentity(defaults, userID: "u_succ", householdID: "hh_own")
+        let client = Self.makeClient()
+        Self.stubIdentity(userID: "u_succ", householdID: "hh_own")
+        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+        await auth.adoptBearerToken("tok_succ")
+
+        let transferred = try JSONDecoder().decode(
+            HouseholdDTO.self,
+            from: Data(#"{"id":"hh_transferred","name":"Transferred garden","created_at":1,"updated_at":1}"#.utf8))
+        auth.adoptHousehold(transferred)
+
+        final class Counter { var count = 0 }
+        let eraser = Counter()
+        auth.wireLocalDataEraser { eraser.count += 1 }
+
+        // The server now correctly resolves the SAME household this
+        // device just adopted (the realistic post-re-home answer).
+        Self.stubIdentity(userID: "u_succ", householdID: "hh_transferred")
+        await auth.restoreSession()
+
+        #expect(eraser.count == 0,
+                "the cache must already agree with the adopted household — a correct restore must not wipe it")
+        guard case .signedIn(_, let household) = auth.state else {
+            Issue.record("expected signedIn, got \(auth.state)")
+            return
+        }
+        #expect(household.id == "hh_transferred")
+    }
+
+    @Test("adoptHousehold is a no-op when nobody is signed in")
+    func adoptHouseholdNoOpWhenSignedOut() throws {
+        let defaults = Self.makeDefaults("adoptHouseholdSignedOut")
+        let tokenStore = Self.makeTokenStore("adoptHouseholdSignedOut")
+        let client = Self.makeClient()
+        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+
+        let household = try JSONDecoder().decode(
+            HouseholdDTO.self,
+            from: Data(#"{"id":"hh_x","name":"X","created_at":1,"updated_at":1}"#.utf8))
+        auth.adoptHousehold(household)
+
+        #expect(auth.state == .signedOut)
+        #expect(auth.loadCachedIdentity() == nil)
+    }
 }
 
 // MARK: - Auth router mock

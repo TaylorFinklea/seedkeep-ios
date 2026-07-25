@@ -101,6 +101,11 @@ struct RootView: View {
     /// closed. The checkpoint it comes from is durable, so without this the
     /// sheet would reopen the instant it is dismissed.
     @State private var resumeDismissed = false
+    /// The fingerprint of whichever handoff presentation is currently on
+    /// screen, recorded the moment it appears — the ONLY reliable way to
+    /// know what a later dismissal is closing, since a `.sheet(item:)`
+    /// setter always receives `nil` regardless of which item it was.
+    @State private var presentedHandoffID: String?
 
     var body: some View {
         ZStack {
@@ -160,15 +165,29 @@ struct RootView: View {
             get: { handoffRoute.presentation },
             set: { newValue in
                 guard newValue == nil else { return }
-                // Which one was dismissed decides what stops presenting: a
-                // link is consumed by closing it, but a durable successor
-                // checkpoint outlives the sheet and would re-present
-                // forever without a per-session acknowledgement.
-                if pendingHandoff != nil { pendingHandoff = nil } else { resumeDismissed = true }
+                // `newValue` is always nil on dismiss, so the ONLY way to
+                // know which presentation just closed is what we recorded
+                // when it appeared. Comparing that recorded fingerprint —
+                // not "is pendingHandoff non-nil" — is what lets a
+                // rotated token that arrived while the old sheet was
+                // still up survive this dismissal
+                // (`AccountDeletionRootRoute.dismissalClearsPendingLink`).
+                if presentedHandoffID == AccountDeletionRootRoute.Presentation.resumeID {
+                    resumeDismissed = true
+                } else if AccountDeletionRootRoute.dismissalClearsPendingLink(
+                    dismissedID: presentedHandoffID, pendingLink: pendingHandoff) {
+                    pendingHandoff = nil
+                }
+                presentedHandoffID = nil
             }
         )) { presentation in
             AccountDeletionHandoffAcceptView(model: appEnv.accountDeletionFlow,
                                              link: presentation.link)
+        }
+        .onChange(of: handoffRoute.presentation) { _, newValue in
+            // Recorded at presentation time, independently of dismissal —
+            // the one moment we reliably know what is actually on screen.
+            if let newValue { presentedHandoffID = newValue.id }
         }
         .onChange(of: isSignedIn) { _, signedIn in
             // Sign-in is what a held link and a relaunched successor

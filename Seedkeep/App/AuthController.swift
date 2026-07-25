@@ -94,6 +94,32 @@ public final class AuthController {
         await loadIdentity(allowCachedFallback: false)
     }
 
+    /// Adopts a household this device has proven membership in through an
+    /// EXACT lookup (`SeedkeepClient.household(id:)`), bypassing
+    /// `loadIdentity`'s "current household" resolution entirely.
+    ///
+    /// For the account-deletion successor cutover: after a transfer
+    /// re-homes ownership, this device briefly holds TWO memberships, and
+    /// the caller already knows — from the transfer itself — exactly
+    /// which one to adopt. `loadIdentity` cannot be trusted to land on it
+    /// (it resolves via `POST /api/households`, itself now ordered by
+    /// most-recent-join but still a heuristic, not the transfer's own
+    /// authority).
+    ///
+    /// Updates BOTH `state` and the cached identity together so a LATER
+    /// ordinary `restoreSession()` sees the SAME household this call just
+    /// adopted — never mistakes it for an identity switch, and never
+    /// wipes the very data this call exists to preserve.
+    ///
+    /// A no-op when nobody is signed in: adopting a household requires an
+    /// authenticated user to adopt it AS, and the caller (the deletion
+    /// coordinator's session seam) has no such user to hand it here.
+    public func adoptHousehold(_ household: HouseholdDTO) {
+        guard case .signedIn(let user, _) = state else { return }
+        saveCachedIdentity(CachedIdentity(user: user, household: household))
+        state = .signedIn(user: user, household: household)
+    }
+
     public func signOut() async {
         tokenStore.clear()
         await client.setBearerToken(nil)

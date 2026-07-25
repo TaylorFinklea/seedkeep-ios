@@ -404,6 +404,23 @@ struct SeedkeepClientContractTests {
         #expect(!path.contains("?"), "raw '?' must not appear in path: \(path)")
         #expect(path == "/api/assistant/threads/t_1", "unexpected path: \(path)")
     }
+
+    @Test("household(id:): GET /api/households/:id, no %3F, decodes household + role")
+    func householdByIDPathClean() async throws {
+        let responseBody = Data(#"""
+        {"ok":true,"data":{"household":{"id":"hh_owner","name":"Finklea Garden","created_at":1,"updated_at":2},"role":"owner"}}
+        """#.utf8)
+        let client = makeClient(responseBody: responseBody)
+        let result = try await client.household(id: "hh_owner")
+        let req = try #require(ContractStub.lastRequest())
+        #expect(req.httpMethod == "GET")
+        let path = req.url?.path ?? ""
+        #expect(!path.contains("%3F"), "path must not contain %3F: \(path)")
+        #expect(!path.contains("?"), "raw '?' must not appear in path: \(path)")
+        #expect(path == "/api/households/hh_owner", "unexpected path: \(path)")
+        #expect(result.household.id == "hh_owner")
+        #expect(result.role == "owner")
+    }
 }
 
 // MARK: - Shared single-capture URLProtocol stub

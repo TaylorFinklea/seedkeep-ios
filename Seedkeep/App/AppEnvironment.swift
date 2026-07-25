@@ -562,16 +562,22 @@ public final class AppEnvironment {
     /// that zone. So "the garden is yours" is not true when the digests
     /// match; it is true when this has happened:
     ///
-    ///   1. Re-read the session. The server re-homed household ownership
-    ///      at `verified`, so the cached identity now names a household
-    ///      this user owns rather than one they merely joined.
-    ///   2. Stop being a participant. The destination zone lives in THIS
+    ///   1. Prove membership in the EXACT household the transfer names
+    ///      (`GET /api/households/:id`), not whichever one the "current
+    ///      household" heuristic resolves to. Verification UPSERTs a
+    ///      second `memberships` row for this user, so asking "what is my
+    ///      current household" is genuinely ambiguous the moment this
+    ///      runs — the transfer itself already knows the answer.
+    ///   2. Adopt it into `AuthController` — state AND the cache together,
+    ///      so a later ordinary restore does not mistake the correct
+    ///      household for an identity switch and wipe it.
+    ///   3. Stop being a participant. The destination zone lives in THIS
     ///      device's private database; keeping the marker would keep
     ///      pointing every read at the doomed shared zone.
-    ///   3. Reset the owner state token, so the rebuilt owner coordinator
+    ///   4. Reset the owner state token, so the rebuilt owner coordinator
     ///      does a FULL fetch of the destination zone instead of resuming
     ///      a cursor that belongs to the source zone's change history.
-    ///   4. Drop the cached coordinator and sync, which rebuilds it as the
+    ///   5. Drop the cached coordinator and sync, which rebuilds it as the
     ///      owner of the destination.
     ///
     /// Local SwiftData is deliberately NOT wiped: its rows are scoped to
@@ -583,19 +589,17 @@ public final class AppEnvironment {
     /// returns, so a failure here is retried rather than papered over with
     /// a completion screen.
     func adoptTransferredGarden(householdID: String) async throws {
-        // The TRANSFER names the garden; the session is only asked to
-        // agree. `/api/me` answers with a membership, and a user in more
-        // than one household — or one whose session restored from cache
-        // before the server's re-home landed — can be handed a different
-        // one. Adopting on that answer is how a successor ends up pointed
-        // at a garden nobody transferred, so a disagreement is refused and
-        // retried rather than resolved by picking.
-        await auth.restoreSession()
-        let signedInHouseholdID: String?
-        if case .signedIn(_, let household) = auth.state { signedInHouseholdID = household.id }
-        else { signedInHouseholdID = nil }
-        try TransferredGardenCutover.verifyHousehold(transferHouseholdID: householdID,
-                                                     signedInHouseholdID: signedInHouseholdID)
+        let membership: WireResponses.CreateOrFetchHousehold
+        do {
+            membership = try await client.household(id: householdID)
+        } catch {
+            // `not_a_member` means the re-home has not landed yet — this
+            // device is retried later by the coordinator's own drive
+            // loop, not something to report as broken. Anything else
+            // propagates unchanged.
+            throw TransferredGardenCutover.classify(error) ?? error
+        }
+        auth.adoptHousehold(membership.household)
         guard case .signedIn(_, let household) = auth.state else {
             throw TransferredGardenCutover.Failure.sessionUnavailable
         }

@@ -369,8 +369,13 @@ final class AccountDeletionFlowModel {
     /// (via `retry()`) is recovering a step that is known to be in
     /// progress, so its failure stays `.failed` and retryable. Here there
     /// is no such guarantee — the preview never confirmed there is
-    /// anything to recover — so a failed replay is a dead offer, reported
-    /// as `.handoffRefused` rather than offered another retry.
+    /// anything to recover from — so a failed replay is judged: a
+    /// DEFINITIVE refusal (the token was already used, belongs to a
+    /// garden this device cannot see, or the transfer was withdrawn)
+    /// means the offer is dead and the token is spent; anything else —
+    /// unreachable, a 5xx, a timeout — proves nothing about the offer
+    /// itself, so the link is retained exactly like an ordinary lost-
+    /// response recovery, and `retry()` re-presents it.
     private func recoverFromExpiredPreview(_ link: AccountDeletionHandoffLink) async {
         acceptanceUnfinished = true
         stage = .working(nil)
@@ -381,10 +386,47 @@ final class AccountDeletionFlowModel {
             acceptanceUnfinished = false
             apply(outcome)
         } catch {
+            guard Self.isDefinitiveHandoffRefusal(error) else {
+                // Not proven dead — only unreachable. Keep the token.
+                stage = .failed(phase: nil, message: humanizeDeletionError(error))
+                return
+            }
             pendingHandoff = nil
             acceptanceUnfinished = false
             stage = .handoffRefused(humanizeDeletionError(error))
         }
+    }
+
+    /// True only for an answer that PROVES the offer cannot be spent by
+    /// this device — never for "could not ask". A network failure, a
+    /// timeout, or a 5xx says nothing about whether the token is still
+    /// good; treating it as a refusal would throw away a live capability
+    /// on nothing more than a bad connection.
+    private static func isDefinitiveHandoffRefusal(_ error: Error) -> Bool {
+        if let coordinatorError = error as? AccountDeletionCoordinatorError {
+            switch coordinatorError {
+            case .sourceHouseholdMismatch, .notASourceParticipant, .handoffWithdrawn,
+                 .handoffAlreadyUsed, .deletionAlreadyInProgress:
+                return true
+            default:
+                return false
+            }
+        }
+        if let seedkeepError = error as? SeedkeepError {
+            switch seedkeepError.code {
+            // `/accept`'s own vocabulary for "this token cannot bind you":
+            // wrong token, the owner posing as their own successor, a
+            // transfer already accepted by someone else (or by this
+            // device with a different in-flight attempt), the token's own
+            // clock-gated expiry, and a phase the transfer has moved past.
+            case "invalid_token", "successor_is_owner", "already_accepted",
+                 "token_expired", "phase_conflict":
+                return true
+            default:
+                return false
+            }
+        }
+        return false
     }
 
     private func drive(

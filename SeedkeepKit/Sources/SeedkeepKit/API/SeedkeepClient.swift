@@ -308,6 +308,23 @@ public actor SeedkeepClient {
         try await getJSON(path: "/api/households/me")
     }
 
+    /// `GET /api/households/:id` — a household this user has an EXACT
+    /// membership row for, named directly rather than resolved through
+    /// `household()`'s "current household" heuristic (most-recently-
+    /// joined membership).
+    ///
+    /// Needed by the account-deletion successor handoff: verifying a
+    /// transfer UPSERTs a SECOND membership row for the successor, who
+    /// until that moment had none for the source household at all. The
+    /// caller already knows — from the transfer itself — exactly which
+    /// household id to adopt; asking for "the current one" would risk
+    /// resolving the wrong membership. `not_a_member` (403) means the
+    /// server has not re-homed ownership yet, which is legitimately
+    /// retryable, not a failure to report.
+    public func household(id: String) async throws -> WireResponses.CreateOrFetchHousehold {
+        try await getJSON(path: "/api/households/\(id)")
+    }
+
     // MARK: - Watering state (Phase 4C)
 
     /// Household-scoped last-watering-notification timestamp. The server
