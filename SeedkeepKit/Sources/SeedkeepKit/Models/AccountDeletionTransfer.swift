@@ -42,6 +42,49 @@ public enum AccountDeletionTransferPhase: String, Codable, CaseIterable, Sendabl
     case cancelled
 }
 
+/// What the device did about its CloudKit garden before asking the server
+/// to erase the account — the required body of `DELETE /api/me`
+/// (`deleteAccountBody` in `src/routes/auth.ts`).
+///
+/// The server cannot see CloudKit: shares, zones and participants leave no
+/// trace in `memberships`, so it cannot infer whether a garden is shared
+/// or who owns it. The device states its disposition explicitly and the
+/// server fails closed on anything absent or unrecognized — including an
+/// older build that never learned to send one. Modelled as an enum with
+/// the transfer id attached to the one case that needs it, so it is not
+/// possible to claim a completed handoff without naming it.
+public enum AccountDeletionDisposition: Sendable, Equatable, Hashable {
+    /// No iCloud garden to dispose of.
+    case noCloudKitGarden
+    /// Left the CKShare and verified the shared zone is no longer active.
+    case participantLeftShare
+    /// Deleted the owned record zone and verified its absence.
+    case ownerZoneDeleted
+    /// Completed a verified transfer and deleted the source zone. The
+    /// server checks that this transfer belongs to the caller and is in
+    /// the `source_deleted` phase.
+    case transferSourceDeleted(transferID: String)
+
+    /// Value of the `cloudkit_disposition` body field.
+    public var wireValue: String {
+        switch self {
+        case .noCloudKitGarden: return "no_cloudkit_garden"
+        case .participantLeftShare: return "participant_left_share"
+        case .ownerZoneDeleted: return "owner_zone_deleted"
+        case .transferSourceDeleted: return "transfer_source_deleted"
+        }
+    }
+
+    /// `transfer_id`, sent only with `transfer_source_deleted`. The body
+    /// schema is strict, so every other case must omit the key.
+    public var transferID: String? {
+        switch self {
+        case .transferSourceDeleted(let id): return id
+        default: return nil
+        }
+    }
+}
+
 /// One party's verification document: the canonical graph hash plus the
 /// per-record-type census. The server compares the owner's against the
 /// successor's and refuses source deletion unless both agree.

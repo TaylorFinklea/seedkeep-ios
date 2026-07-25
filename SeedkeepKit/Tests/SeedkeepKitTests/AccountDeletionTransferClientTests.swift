@@ -303,6 +303,85 @@ struct AccountDeletionTransferClientTests {
         _ = try assertRequest(method: "DELETE", path: "/api/account-deletion/transfers/tr_abc123")
     }
 
+    // MARK: - DELETE /api/me — CloudKit disposition
+
+    /// The server's `deleteAccountBody` is a strict Zod object requiring
+    /// `cloudkit_disposition`; there is no default, and an absent or
+    /// unrecognized value is a 400 (`cloudkit_disposition_required`).
+    /// A bodyless DELETE therefore fails AFTER the CloudKit garden may
+    /// already have been irreversibly deleted — which is why the exact
+    /// bytes are pinned here, not just the method and path.
+    @Test(
+        "deleteAccount sends the exact disposition body; transfer_id only for the transfer case",
+        arguments: [
+            (AccountDeletionDisposition.noCloudKitGarden, "no_cloudkit_garden", String?.none),
+            (.participantLeftShare, "participant_left_share", nil),
+            (.ownerZoneDeleted, "owner_zone_deleted", nil),
+            (.transferSourceDeleted(transferID: "tr_abc123"), "transfer_source_deleted", "tr_abc123"),
+        ]
+    )
+    func deleteAccountDisposition(
+        disposition: AccountDeletionDisposition,
+        wire: String,
+        transferID: String?
+    ) async throws {
+        let client = makeClient(responseBody: #"{"ok":true,"data":{"deleted":true}}"#)
+        let deleted = try await client.deleteAccount(disposition: disposition)
+        #expect(deleted)
+
+        _ = try assertRequest(method: "DELETE", path: "/api/me")
+        let body = try capturedBody()
+        #expect(body["cloudkit_disposition"] as? String == wire)
+        if let transferID {
+            #expect(Set(body.keys) == ["cloudkit_disposition", "transfer_id"])
+            #expect(body["transfer_id"] as? String == transferID)
+        } else {
+            #expect(Set(body.keys) == ["cloudkit_disposition"],
+                    "transfer_id must be omitted, not null, for \(wire)")
+        }
+    }
+
+    @Test("the transfer disposition cannot be expressed without a transfer id")
+    func transferDispositionCarriesID() {
+        // Type-level guarantee: the id is an associated value, so there is
+        // no way to claim a completed handoff without naming the transfer
+        // the server must check.
+        #expect(AccountDeletionDisposition.transferSourceDeleted(transferID: "tr_1").transferID == "tr_1")
+        #expect(AccountDeletionDisposition.ownerZoneDeleted.transferID == nil)
+        #expect(AccountDeletionDisposition.participantLeftShare.transferID == nil)
+        #expect(AccountDeletionDisposition.noCloudKitGarden.transferID == nil)
+    }
+
+    @Test("400 cloudkit_disposition_required surfaces as a typed error, not a silent success")
+    func deleteAccountRejected() async throws {
+        let refusal = #"""
+        {"ok":false,"error":{"code":"cloudkit_disposition_required","message":"Finish the iCloud garden step first, then send cloudkit_disposition with the deletion request."}}
+        """#
+        let client = makeClient(responseBody: refusal, status: 400)
+        do {
+            _ = try await client.deleteAccount(disposition: .ownerZoneDeleted)
+            Issue.record("a refused deletion must throw")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "cloudkit_disposition_required")
+            #expect(error.httpStatus == 400)
+        }
+    }
+
+    @Test("409 cloudkit_transfer_required surfaces as a typed error")
+    func deleteAccountBlockedByTransfer() async throws {
+        let refusal = #"""
+        {"ok":false,"error":{"code":"cloudkit_transfer_required","message":"A shared-garden transfer is in progress. Finish or cancel it before deleting this account."}}
+        """#
+        let client = makeClient(responseBody: refusal, status: 409)
+        do {
+            _ = try await client.deleteAccount(disposition: .ownerZoneDeleted)
+            Issue.record("a blocked deletion must throw")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "cloudkit_transfer_required")
+            #expect(error.httpStatus == 409)
+        }
+    }
+
     // MARK: - Phase enum
 
     @Test("phase enum covers the server's phase list, raw values verbatim")

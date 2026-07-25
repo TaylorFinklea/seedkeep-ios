@@ -1,12 +1,13 @@
 import Foundation
 import SeedkeepKit
 
-/// The durable record of an account deletion that is part-way done.
+/// The durable record of an account deletion — or of a successor's half of
+/// a garden handoff — that is part-way done.
 ///
-/// Deleting a Seedkeep account is not one operation — it is a sequence of
+/// Deleting a Seedkeep account is not one operation. It is a sequence of
 /// CloudKit work followed by `DELETE /api/me`, and the CloudKit half is
 /// irreversible. Between "the source zone is gone" and "the server says
-/// the account is deleted" the app is in a state that nothing else can
+/// the account is deleted" the app is in a state nothing else can
 /// describe: the garden no longer exists, but the account still does. If
 /// the app is killed there, only this file can tell the next launch to
 /// finish the job instead of showing a signed-in user an empty garden.
@@ -22,49 +23,96 @@ import SeedkeepKit
 /// JSON file in Application Support for the lifetime of the flow.
 struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
 
-    /// Which CloudKit flow this deletion is running. The role is fixed
-    /// when the flow starts (it is a fact about the share, not about
-    /// progress) and decides which phases are reachable.
+    /// What this device is doing. Fixed when the flow starts — it is a
+    /// fact about the CloudKit share, not about progress — and it decides
+    /// which phases are reachable and which `cloudkit_disposition` the
+    /// final `DELETE /api/me` may claim.
     enum Role: String, Codable, Sendable, CaseIterable {
-        /// Accepted someone else's CKShare; leaves the share.
+        /// Deleting this account; there is no iCloud garden to dispose of.
+        case noCloudKitGarden = "no_cloudkit_garden"
+        /// Deleting this account; accepted someone else's CKShare, so the
+        /// CloudKit step is leaving that share.
         case participant
-        /// Owns an unshared household zone; deletes the zone.
+        /// Deleting this account; owns an unshared household zone.
         case soloOwner = "solo_owner"
-        /// Owns a zone other people participate in; must hand the garden
-        /// to a successor before the zone can go.
+        /// Deleting this account; owns a zone other people participate in,
+        /// so the garden must be handed to a successor first.
         case sharedOwner = "shared_owner"
+        /// NOT deleting this account. This device accepted a handoff link
+        /// and is building the destination garden for a departing owner.
+        /// It needs a checkpoint of its own: the accept consumed a
+        /// single-use token, so a crash here cannot be recovered by
+        /// re-opening the link.
+        case successor
     }
 
-    /// The step that has been *reached*. A checkpoint is written only
-    /// after the external operation that reaches it succeeded, so a
-    /// resumed flow re-attempts the step AFTER this one — never the one
-    /// that already landed.
+    /// Which side of the server transfer this device acts as.
     ///
-    /// The shared-owner cases mirror `AccountDeletionTransferPhase` one
-    /// for one so a server reload maps straight across
-    /// (`init(transferPhase:)`).
+    /// Derived from `role` rather than stored: two independently-stored
+    /// fields could disagree on disk, and the pair "owner of a deletion"
+    /// / "owner party of the transfer" is one fact, not two.
+    enum TransferParty: String, Sendable, Equatable {
+        case owner
+        case successor
+    }
+
+    /// The step the flow is ON.
+    ///
+    /// Written *before* the step runs and advanced only after it succeeds,
+    /// so a resumed flow re-attempts exactly the step named here. Every
+    /// step — CloudKit and server alike — is idempotent, which is what
+    /// makes that safe (spec § "Failure invariants": "Every network/
+    /// CloudKit step is idempotent and checkpointed after success").
+    ///
+    /// Local-only phases exist wherever a CloudKit operation lands with no
+    /// server phase to record it. Without them a crash in that window is
+    /// indistinguishable from a crash before the operation, and the
+    /// coordinator would have to redo an expensive copy — or, worse, guess
+    /// whether a zone it can no longer see was deleted by this flow.
     enum Phase: String, Codable, Sendable, CaseIterable {
-        /// Participant: leaving the accepted share.
+        // ── Participant ────────────────────────────────────────────────
+        /// Leaving the accepted share.
         case participantLeaving = "participant_leaving"
-        /// Solo owner: deleting the owned household zone.
+
+        // ── Solo owner ─────────────────────────────────────────────────
+        /// Deleting the owned household zone.
         case ownerDeletingZone = "owner_deleting_zone"
-        /// Shared owner: transfer created, waiting for a successor to
-        /// open the handoff link.
+
+        // ── Shared owner ───────────────────────────────────────────────
+        /// Creating/resuming the server transfer and showing the link.
         case transferPending = "transfer_pending"
-        /// A successor accepted; they are preparing their destination.
+        /// A successor is bound; waiting for their destination.
         case successorBound = "successor_bound"
-        /// The destination zone/share exists — copy the graph into it.
+        /// Successor-only: destination zone + share created in CloudKit,
+        /// not yet posted to the server. Re-posting is idempotent; losing
+        /// this would strand a zone nobody knows about.
+        case destinationZoneCreated = "destination_zone_created"
+        /// The destination is recorded server-side.
         case destinationReady = "destination_ready"
+        /// Owner-only: the destination share has been accepted, so the
+        /// owner can write into the successor's zone. The copy is next.
+        case destinationShareAccepted = "destination_share_accepted"
+        /// Owner-only: the graph is fully copied but the digest has not
+        /// been posted. Resuming re-posts the digest instead of recopying
+        /// the whole garden.
+        case copyComplete = "copy_complete"
         /// The owner's digest is posted; waiting on the successor's.
         case ownerVerified = "owner_verified"
         /// Both digests matched. The source zone may now be deleted.
         case verified
-        /// The source zone is verifiably gone and the server knows.
+        /// Owner-only: the source zone is gone but the server does not
+        /// know yet. This is the one window where an absent source zone is
+        /// expected rather than alarming (spec § "Failure invariants":
+        /// "A crash after source deletion resumes server deletion").
+        case sourceZoneDeleted = "source_zone_deleted"
+        /// The server has recorded the source as deleted.
         case sourceDeleted = "source_deleted"
-        /// Every role's last step: `DELETE /api/me`, then sign-out.
+
+        // ── Every deleting role ────────────────────────────────────────
+        /// `DELETE /api/me`, then sign-out and local erase.
         case deletingAccount = "deleting_account"
 
-        /// Maps a durable server phase onto the local resume point.
+        /// Where a durable server phase says the flow should resume.
         ///
         /// `nil` for `.cancelled`: a cancelled transfer has no step to
         /// resume, so the checkpoint is removed rather than rewritten.
@@ -77,6 +125,22 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
             case .verified: self = .verified
             case .sourceDeleted: self = .sourceDeleted
             case .cancelled: return nil
+            }
+        }
+
+        /// The server phase this local step implies, or `nil` for a step
+        /// the server never sees. Lets a resumed flow compare its
+        /// checkpoint against a reloaded transfer and notice the server is
+        /// ahead — the other device advanced it — instead of replaying.
+        var impliedTransferPhase: AccountDeletionTransferPhase? {
+            switch self {
+            case .transferPending: return .pendingSuccessor
+            case .successorBound, .destinationZoneCreated: return .successorBound
+            case .destinationReady, .destinationShareAccepted, .copyComplete: return .destinationReady
+            case .ownerVerified: return .ownerVerified
+            case .verified, .sourceZoneDeleted: return .verified
+            case .sourceDeleted: return .sourceDeleted
+            case .participantLeaving, .ownerDeletingZone, .deletingAccount: return nil
             }
         }
     }
@@ -106,20 +170,54 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
         }
     }
 
-    /// Authenticated user this deletion belongs to. The store keys files
+    /// Authenticated user this checkpoint belongs to. The store keys files
     /// by it and refuses to hand a checkpoint to a different account.
     let userID: String
     var role: Role
     var phase: Phase
-    /// Server transfer id — shared-owner flows only.
+    /// Server transfer id — shared-owner and successor flows only.
     var transferID: String?
     var sourceZoneName: String?
     var sourceZoneOwnerName: String?
     var destinationZoneName: String?
     var destinationZoneOwnerName: String?
     var lastFailure: Failure?
-    /// Epoch milliseconds, set by the caller that advanced the phase.
+    /// Epoch milliseconds, set by the caller that advanced the phase. The
+    /// store uses it to reject a stale write that lost a race.
     var updatedAt: Int64
+
+    /// Which side of the transfer this device is, if any.
+    var transferParty: TransferParty? {
+        switch role {
+        case .sharedOwner: return .owner
+        case .successor: return .successor
+        case .noCloudKitGarden, .participant, .soloOwner: return nil
+        }
+    }
+
+    /// True when this checkpoint describes deleting *this* user's account.
+    /// A successor is finishing someone else's handoff and must never be
+    /// routed into an account-deletion flow.
+    var deletesOwnAccount: Bool { role != .successor }
+
+    /// The `cloudkit_disposition` this flow may claim on `DELETE /api/me`.
+    ///
+    /// `nil` means the account deletion is not authorized yet: a successor
+    /// is not deleting anything, and a shared owner without a completed
+    /// transfer has no honest claim to make. Fail closed — the server also
+    /// refuses, but the client must not even ask.
+    var disposition: AccountDeletionDisposition? {
+        switch role {
+        case .noCloudKitGarden: return .noCloudKitGarden
+        case .participant: return .participantLeftShare
+        case .soloOwner: return .ownerZoneDeleted
+        case .sharedOwner:
+            guard phase == .sourceDeleted || phase == .deletingAccount,
+                  let transferID else { return nil }
+            return .transferSourceDeleted(transferID: transferID)
+        case .successor: return nil
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id"

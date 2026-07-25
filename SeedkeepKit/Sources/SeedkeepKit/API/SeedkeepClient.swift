@@ -59,10 +59,31 @@ public actor SeedkeepClient {
     /// (if sole member) their household. Returns `true` when the server
     /// confirms the deletion. Callers should follow up with `signOut()` to
     /// clear the local token and cached identity.
+    ///
+    /// `disposition` is REQUIRED and carries a body: the server has no way
+    /// to see CloudKit, so it refuses (400 `cloudkit_disposition_required`)
+    /// unless the device states what it did with the garden, and refuses
+    /// again (409 `cloudkit_transfer_required`) if that claim contradicts a
+    /// durable transfer row. Call this only after the CloudKit work the
+    /// disposition asserts has actually succeeded — this is the last,
+    /// irreversible step of every deletion flow.
     @discardableResult
-    public func deleteAccount() async throws -> Bool {
+    public func deleteAccount(disposition: AccountDeletionDisposition) async throws -> Bool {
+        struct Body: Encodable {
+            let cloudkit_disposition: String
+            /// Omitted (never null) for every disposition but the
+            /// transfer one — the server body is a strict Zod object.
+            let transfer_id: String?
+        }
         struct DeletedResult: Decodable, Sendable { let deleted: Bool }
-        let result: DeletedResult = try await deleteJSON(path: "/api/me")
+        let result: DeletedResult = try await sendJSON(
+            method: "DELETE",
+            path: "/api/me",
+            body: Body(
+                cloudkit_disposition: disposition.wireValue,
+                transfer_id: disposition.transferID
+            )
+        )
         return result.deleted
     }
 

@@ -370,13 +370,16 @@ struct SeedkeepClientContractTests {
 
     // MARK: - Account deletion
 
+    /// Path/method only — the required `cloudkit_disposition` body is
+    /// pinned key-by-key in `AccountDeletionTransferClientTests`, whose
+    /// stub drains `httpBodyStream`. This stub does not capture bodies.
     @Test("deleteAccount: DELETE /api/me, no %3F in path")
     func deleteAccount() async throws {
         let responseBody = Data(#"""
         {"ok":true,"data":{"deleted":true}}
         """#.utf8)
         let client = makeClient(responseBody: responseBody)
-        _ = try? await client.deleteAccount()
+        _ = try? await client.deleteAccount(disposition: .noCloudKitGarden)
         try assertRequest(
             method: "DELETE",
             path: "/api/me"

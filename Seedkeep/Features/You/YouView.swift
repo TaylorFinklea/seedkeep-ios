@@ -96,8 +96,26 @@ struct YouView: View {
                 ) {
                     Button("Delete Account", role: .destructive) {
                         Task {
+                            // Interim: `DELETE /api/me` now requires the
+                            // device to state what it did with its
+                            // CloudKit garden, and this screen cannot
+                            // know. Claiming `no_cloudkit_garden` while a
+                            // zone is live would delete the account and
+                            // orphan the garden, so the only honest
+                            // disposition here is the one that is true
+                            // when CloudKit sync is off. The resumable
+                            // role-aware flow replaces this surface.
+                            guard !FeatureFlags.cloudKitHouseholdSyncEnabled else {
+                                deleteAccountError = """
+                                Account deletion needs an update. Your iCloud garden has to be \
+                                handled first, and this version can't do that yet.
+                                """
+                                return
+                            }
                             do {
-                                _ = try await appEnv.client.deleteAccount()
+                                _ = try await appEnv.client.deleteAccount(
+                                    disposition: .noCloudKitGarden
+                                )
                                 await auth.signOut()
                             } catch {
                                 deleteAccountError = error.localizedDescription

@@ -7,7 +7,7 @@ import SeedkeepKit
 /// E2E integration tests for the account-deletion flow (M5, YouView sequence).
 ///
 /// The production sequence (YouView) is:
-///   1. `_ = try await client.deleteAccount()`  → DELETE /api/me
+///   1. `_ = try await client.deleteAccount(disposition: .noCloudKitGarden)`  → DELETE /api/me
 ///   2. `await auth.signOut()` (only on success)
 ///
 /// The eraser is wired as in AppEnvironment.live(): `auth.wireLocalDataEraser`
@@ -111,7 +111,7 @@ struct AccountDeletionFlowTests {
         }
 
         // Replicate the YouView sequence exactly.
-        let deleted = try await client.deleteAccount()
+        let deleted = try await client.deleteAccount(disposition: .noCloudKitGarden)
         await auth.signOut()
 
         #expect(deleted == true, "deleteAccount() must return true on ok:true response")
@@ -165,7 +165,7 @@ struct AccountDeletionFlowTests {
         // Replicate YouView's catch branch: deleteAccount throws → signOut NOT called.
         var threwError = false
         do {
-            _ = try await client.deleteAccount()
+            _ = try await client.deleteAccount(disposition: .noCloudKitGarden)
         } catch {
             threwError = true
             // signOut() is intentionally NOT called here — mirroring YouView's catch branch.
