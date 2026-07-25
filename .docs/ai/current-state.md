@@ -7,7 +7,8 @@
 ## Plan
 
 - [x] `seedkeep-27d.13/.19` hardened after Opus 5 adversarial review: send/fetch-symmetric projection rollback, disk-backed owner/participant relaunch tests, structural engine-generation isolation (`7072ee3`, `979acda`). Sol re-review CLEAN. Strict package 79 + full gate 70 kit / 79 CloudKit / 476 app / 1 production-default green.
-- [ ] `seedkeep-27d.12`: Task 1 server state machine complete; next Task 2 CloudKit graph digest/copier. Spec/plan in umbrella `phases/2026-07-23-cloudkit-account-deletion-{spec,plan}.md`.
+- [x] `seedkeep-27d.12` Task 2 CloudKit graph digest/copier (`4f6acb4`, fail-closed review fixes `1feb00e`): expected-zone canonical SHA-256 + counts, unknown app data rejected, exact Date encoding, deterministic parent-first copy, enforced `.allKeys` batch saver. Sol re-review CLEAN. Fresh full gate: 70 kit / 138 CloudKit / 476 app / 1 production-default.
+- [ ] Next: Task 3 typed transfer client + durable deletion checkpoint.
 
 ## Blockers
 
