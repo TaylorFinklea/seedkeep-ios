@@ -227,6 +227,46 @@ struct AccountDeletionFlowTests {
         }
     }
 
+    // MARK: - You ▸ Delete account presents a flow; it does not delete
+
+    @Test("opening the deletion flow sends nothing; only confirming reaches DELETE /api/me")
+    func openingTheFlowSendsNothing() async throws {
+        // The button used to call the coordinator's one-shot delete
+        // directly, which meant the destructive request left the device on
+        // the same tap that opened the sheet. It now opens a progress flow
+        // that asks first — so the wire must stay silent until the user
+        // says yes, and then carry exactly one deletion.
+        let container = Self.makeContainer("deleteAccountPresent")
+        let defaults = Self.makeDefaults("deleteAccountPresent")
+        let tokenStore = InMemoryTokenStore("tok_present")
+        try Self.seedContainer(container)
+        try Self.cacheIdentity(defaults, userID: "u_del", householdID: Self.householdID)
+
+        let session = AccountDeletionMockURLProtocol.makeSession(
+            routes: ["DELETE /api/me": Data(#"{"ok":true,"data":{"deleted":true}}"#.utf8)]
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "tok_present"
+        )
+        let harness = Self.makeHarness(client: client, container: container,
+                                       tokenStore: tokenStore, defaults: defaults)
+        let model = AccountDeletionFlowModel(coordinator: harness.coordinator)
+
+        await model.prepare()
+
+        #expect(model.stage == .confirming)
+        #expect(AccountDeletionMockURLProtocol.requests().isEmpty,
+                "presenting the flow must not send a single request")
+        #expect(tokenStore.load() == "tok_present")
+
+        await model.confirm()
+
+        #expect(model.stage == .deleted)
+        #expect(AccountDeletionMockURLProtocol.requests() == ["DELETE /api/me"])
+        #expect(tokenStore.load() == nil)
+    }
+
     // MARK: - Failure path: deleteAccount throws → signOut NOT reached
 
     @Test("deleteAccount RPC failure: token, identity, and SwiftData rows all intact")

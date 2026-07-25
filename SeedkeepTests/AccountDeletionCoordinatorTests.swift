@@ -2124,43 +2124,45 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.signOut.count == 0)
     }
 
-    // MARK: The delete-account button, as behaviour
+    // MARK: Looking at a handoff without spending it
 
-    @Test("the delete-account button reports success as no message")
-    func buttonReportsSuccess() async throws {
-        let harness = Harness()
-        harness.cloudKit.role = .noGarden
+    @Test("previewHandoff reads the offer and leaves the token unspent")
+    func previewDoesNotConsumeTheToken() async throws {
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: ownerZone)
+        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph())
+        harness.server.seedRow(phase: .pendingSuccessor, destination: false)
 
-        #expect(await harness.coordinator.deleteAccountForUser() == nil)
-        #expect(harness.signOut.count == 1)
+        let preview = try await harness.coordinator.previewHandoff(
+            transferID: "tr_1", token: harness.server.mintedToken!)
+
+        #expect(preview.transferID == "tr_1")
+        #expect(preview.sourceHouseholdID == ownerHouseholdID)
+        #expect(harness.server.calls.contains(.inspectHandoff(id: "tr_1",
+                                                              token: harness.server.mintedToken!)))
+        #expect(!harness.server.calls.contains(where: {
+            if case .acceptTransfer = $0 { return true }
+            return false
+        }), "looking must never bind a successor")
+        #expect(harness.stored == nil, "looking must write nothing durable")
     }
 
-    @Test("the delete-account button refuses a shared owner with truthful copy")
-    func buttonRefusesSharedOwner() async throws {
-        // `start()` settles at waiting, which is NOT success — the button
-        // must never look like it deleted anything.
-        let harness = Harness()
-        harness.cloudKit.role = .sharedOwner(zoneID: ownerZone)
-        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph())
+    @Test("previewHandoff refuses a garden this device cannot see, token intact")
+    func previewRefusesForeignGarden() async throws {
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        let otherZone = CKRecordZone.ID(zoneName: "seedkeep-hh_stranger", ownerName: "_stranger")
+        harness.cloudKit.role = .participant(sharedZoneID: otherZone)
+        harness.cloudKit.seed(zone: otherZone)
+        harness.server.seedRow(phase: .pendingSuccessor, destination: false)
 
-        let message = try #require(await harness.coordinator.deleteAccountForUser())
-        #expect(message.contains("handed to someone else"))
-        #expect(harness.signOut.count == 0)
+        await #expect(throws: AccountDeletionCoordinatorError.self) {
+            try await harness.coordinator.previewHandoff(
+                transferID: "tr_1", token: harness.server.mintedToken!)
+        }
         #expect(!harness.server.calls.contains(where: {
-            if case .deleteAccount = $0 { return true }
+            if case .acceptTransfer = $0 { return true }
             return false
         }))
-    }
-
-    @Test("the delete-account button surfaces a failure instead of signing out")
-    func buttonSurfacesFailure() async throws {
-        let harness = Harness()
-        harness.cloudKit.role = .noGarden
-        harness.server.failures[.deleteAccount] = SeedkeepError(code: "server_error", message: "boom")
-
-        #expect(await harness.coordinator.deleteAccountForUser() != nil)
-        #expect(harness.signOut.count == 0)
-        #expect(harness.stored?.phase == .deletingAccount)
     }
 
 }

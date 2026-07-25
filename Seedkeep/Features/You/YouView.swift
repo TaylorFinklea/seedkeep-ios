@@ -9,8 +9,7 @@ struct YouView: View {
     @Environment(AuthController.self) private var auth
     @Environment(AppEnvironment.self) private var appEnv
     @State private var showSignOutConfirm = false
-    @State private var showDeleteAccountConfirm = false
-    @State private var deleteAccountError: String?
+    @State private var showDeletionFlow = false
     @State private var selectedContribution: ContributionSelection?
 
 
@@ -72,7 +71,11 @@ struct YouView: View {
                             Text("Sign out")
                         }
                         Button(role: .destructive) {
-                            showDeleteAccountConfirm = true
+                            // Opens the flow. It does NOT delete: the sheet
+                            // asks first, and everything after that is the
+                            // coordinator's resumable state machine, where
+                            // it is reachable by tests. A view body is not.
+                            showDeletionFlow = true
                         } label: {
                             Text("Delete account")
                         }
@@ -91,30 +94,8 @@ struct YouView: View {
                 } message: {
                     Text("You'll need to sign in again to sync your library.")
                 }
-                .confirmationDialog(
-                    "Delete your account?",
-                    isPresented: $showDeleteAccountConfirm,
-                    titleVisibility: .visible
-                ) {
-                    Button("Delete Account", role: .destructive) {
-                        // Deliberately one line. Everything this button can
-                        // decide — the CloudKit role, the receipt, whether
-                        // to sign out — is decided by the coordinator,
-                        // where it is reachable by tests. A view body is
-                        // not.
-                        Task { deleteAccountError = await appEnv.accountDeletion.deleteAccountForUser() }
-                    }
-                    Button("Cancel", role: .cancel) { }
-                } message: {
-                    Text("This permanently deletes your account and all of your household's library, garden, and journal data. This can't be undone.")
-                }
-                .alert("Delete account failed", isPresented: Binding(
-                    get: { deleteAccountError != nil },
-                    set: { if !$0 { deleteAccountError = nil } }
-                )) {
-                    Button("OK", role: .cancel) { deleteAccountError = nil }
-                } message: {
-                    Text(deleteAccountError ?? "")
+                .sheet(isPresented: $showDeletionFlow) {
+                    AccountDeletionFlowView(model: appEnv.accountDeletionFlow)
                 }
                 .sheet(item: $selectedContribution) { selection in
                     ContributionDetailSheet(correctionID: selection.id)

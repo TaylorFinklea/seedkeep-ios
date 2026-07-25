@@ -8,6 +8,7 @@ import SeedkeepCloudKit
 struct SeedkeepApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var pendingInviteCode: String?
+    @State private var pendingHandoff: AccountDeletionHandoffLink?
     // Pure-SwiftUI app otherwise — this delegate exists only to route scenes through ShareSceneDelegate
     // so CKShare acceptance is delivered (WindowGroup doesn't surface it on the app delegate).
     @UIApplicationDelegateAdaptor(SeedkeepAppDelegate.self) private var appDelegate
@@ -44,7 +45,7 @@ struct SeedkeepApp: App {
     }
 
     @ViewBuilder private var mainRoot: some View {
-        RootView(pendingInviteCode: $pendingInviteCode)
+        RootView(pendingInviteCode: $pendingInviteCode, pendingHandoff: $pendingHandoff)
             .environment(environment)
             .environment(environment.auth)
             .modelContainer(environment.container)
@@ -65,21 +66,27 @@ struct SeedkeepApp: App {
                 await environment.processPendingShare()  // cold-launch: adopt a share tapped while terminated
             }
             .onOpenURL { url in
-                if let code = InviteURLRouter.invitationCode(from: url) {
-                    pendingInviteCode = code
-                }
+                route(IncomingLink(url: url))
             }
             .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
-                if let url = activity.webpageURL,
-                   let code = InviteURLRouter.invitationCode(from: url) {
-                    pendingInviteCode = code
-                }
+                if let url = activity.webpageURL { route(IncomingLink(url: url)) }
             }
-            // Bridge invite codes forwarded by ShareSceneDelegate (covers the case where the custom
+            // Bridge links forwarded by ShareSceneDelegate (covers the case where the custom
             // scene delegate suppresses the SwiftUI .onOpenURL/.onContinueUserActivity hooks above).
             .onChange(of: environment.incomingInviteCode) { _, code in
                 if let code { pendingInviteCode = code; environment.incomingInviteCode = nil }
             }
+            .onChange(of: environment.incomingHandoffLink) { _, link in
+                if let link { pendingHandoff = link; environment.incomingHandoffLink = nil }
+            }
+    }
+
+    private func route(_ link: IncomingLink?) {
+        switch link {
+        case .invite(let code): pendingInviteCode = code
+        case .gardenHandoff(let handoff): pendingHandoff = handoff
+        case nil: break
+        }
     }
 }
 
@@ -88,6 +95,7 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.scenePhase) private var scenePhase
     @Binding var pendingInviteCode: String?
+    @Binding var pendingHandoff: AccountDeletionHandoffLink?
     @State private var whatsNewRelease: ChangelogRelease?
 
     var body: some View {
@@ -137,6 +145,13 @@ struct RootView: View {
                 signedOutInviteView(code: route.code)
             }
         }
+        // A shared-garden handoff. Presented at the ROOT, above both the
+        // signed-in and signed-out branches, because the link has to be
+        // held rather than dropped when it arrives with nobody signed in
+        // — the sheet says so, and re-inspects the moment auth lands.
+        .sheet(item: $pendingHandoff) { link in
+            AccountDeletionHandoffAcceptView(model: appEnv.accountDeletionFlow, link: link)
+        }
     }
 
     @ViewBuilder
@@ -154,10 +169,10 @@ struct RootView: View {
     }
 
     /// Decide the What's New sheet once per launch. Never stacks on a pending
-    /// invite/CKShare sheet — if one is up, defer to the next launch. Fresh
+    /// invite/handoff/CKShare sheet — if one is up, defer to the next launch. Fresh
     /// installs baseline silently (no popup for a version never upgraded from).
     private func presentWhatsNewIfNeeded() {
-        guard pendingInviteCode == nil else { return }
+        guard pendingInviteCode == nil, pendingHandoff == nil else { return }
         let current = AppInfo.currentBuild
         let seen = WhatsNewGate.lastSeenBuild()
         if let release = WhatsNewGate.releaseToAutoPresent(

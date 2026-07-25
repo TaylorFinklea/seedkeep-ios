@@ -365,6 +365,22 @@ public final class AppEnvironment {
         return coordinator
     }
 
+    /// The observable state behind the deletion progress sheet and the
+    /// successor acceptance sheet.
+    ///
+    /// One instance for the same reason the coordinator is one instance:
+    /// both surfaces drive the same durable flow, and a second model would
+    /// mean a handoff link opened while the deletion sheet is up ends up
+    /// talking to a coordinator that does not know about it.
+    @ObservationIgnored private var accountDeletionFlowModel: AccountDeletionFlowModel?
+
+    var accountDeletionFlow: AccountDeletionFlowModel {
+        if let existing = accountDeletionFlowModel { return existing }
+        let model = AccountDeletionFlowModel(coordinator: accountDeletion)
+        accountDeletionFlowModel = model
+        return model
+    }
+
     /// Launch sweep for an account deletion that committed server-side but
     /// whose response never got back. Runs before session restore and
     /// needs no credentials — see
@@ -477,9 +493,21 @@ public final class AppEnvironment {
     /// which can suppress `.onOpenURL`/`.onContinueUserActivity` — so the delegate forwards URL opens
     /// here and `SeedkeepApp` bridges this into the existing invite sheet. Observable so the bridge fires.
     var incomingInviteCode: String?
-    /// Route an incoming URL (custom scheme or universal link) to the invite flow, if it is one.
+    /// Shared-garden handoff forwarded the same way. Held here rather than
+    /// acted on: taking over a garden requires an authenticated identity
+    /// and a non-consuming inspection, both of which belong to
+    /// `AccountDeletionFlowModel`, and the token must survive arriving
+    /// while the app is signed out.
+    var incomingHandoffLink: AccountDeletionHandoffLink?
+
+    /// Route an incoming URL (custom scheme or universal link) to whichever
+    /// flow owns it.
     func routeIncomingURL(_ url: URL) {
-        if let code = InviteURLRouter.invitationCode(from: url) { incomingInviteCode = code }
+        switch IncomingLink(url: url) {
+        case .invite(let code): incomingInviteCode = code
+        case .gardenHandoff(let link): incomingHandoffLink = link
+        case nil: break
+        }
     }
 
     /// Accept a zone-wide CKShare and adopt the owner's household: wipe this device's own local garden

@@ -180,13 +180,62 @@ final class AccountDeletionCoordinator {
         return try await drive()
     }
 
+    /// What a handoff link is offering, without spending it.
+    ///
+    /// Everything here is safe to render: the token is deliberately absent
+    /// so a preview cannot be logged, screenshotted, or forwarded into a
+    /// capability.
+    struct HandoffPreview: Equatable, Sendable {
+        let transferID: String
+        let sourceHouseholdID: String
+        /// Epoch milliseconds.
+        let expiresAt: Int64
+    }
+
+    /// Look at a handoff link without consuming it, and prove this device
+    /// can actually receive the garden it names.
+    ///
+    /// The token is single-use and binding is irreversible, so a user who
+    /// happens to participate in a DIFFERENT garden must not be able to
+    /// burn the one chance the rightful successor has just by opening the
+    /// link. Inspection is the non-consuming read that makes the check
+    /// possible before the fact rather than after it — which is also what
+    /// lets the UI show somebody what they are about to take on and wait
+    /// for them to say yes.
+    func previewHandoff(transferID: String, token: String) async throws -> HandoffPreview {
+        try await inspectHandoff(transferID: transferID, token: token).preview
+    }
+
+    /// `previewHandoff` plus the zone the proof was made against, which
+    /// only `acceptHandoff` needs. One CloudKit role read and one
+    /// non-consuming server read serve both callers.
+    private func inspectHandoff(
+        transferID: String, token: String
+    ) async throws -> (preview: HandoffPreview, sourceZoneID: CKRecordZone.ID) {
+        try Task.checkCancellation()
+        _ = try requireIdentity()
+
+        guard case .participant(let sharedZoneID) = try await cloudKit.currentRole() else {
+            throw AccountDeletionCoordinatorError.notASourceParticipant
+        }
+        let visibleHouseholdID = SeedkeepRecordNames.householdID(fromZoneName: sharedZoneID.zoneName)
+
+        let inspection = try await server.inspectHandoff(id: transferID, token: token)
+        guard inspection.source_household_id == visibleHouseholdID else {
+            throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
+                expected: inspection.source_household_id, found: visibleHouseholdID)
+        }
+        return (HandoffPreview(transferID: inspection.transfer_id,
+                               sourceHouseholdID: inspection.source_household_id,
+                               expiresAt: inspection.handoff_expires_at),
+                sharedZoneID)
+    }
+
     /// Take over a departing owner's garden. Called with the id and token
     /// carried by a handoff link.
     ///
-    /// The participant proof happens BEFORE the token is spent: the token is
-    /// single-use, so a device that cannot read the source garden must be
-    /// turned away while the link is still worth something to somebody who
-    /// can.
+    /// The participant proof happens BEFORE the token is spent — see
+    /// `previewHandoff`, which this runs first for exactly that reason.
     @discardableResult
     func acceptHandoff(transferID: String, token: String) async throws -> Outcome {
         try Task.checkCancellation()
@@ -201,28 +250,13 @@ final class AccountDeletionCoordinator {
             return try await drive()
         }
 
-        guard case .participant(let sharedZoneID) = try await cloudKit.currentRole() else {
-            throw AccountDeletionCoordinatorError.notASourceParticipant
-        }
-        let visibleHouseholdID = SeedkeepRecordNames.householdID(fromZoneName: sharedZoneID.zoneName)
-
-        // Look before spending. The token is single-use and binding is
-        // irreversible, so a user who happens to participate in a DIFFERENT
-        // garden must not be able to burn the one chance the rightful
-        // successor has just by opening the link. Inspection is the
-        // non-consuming read that makes the check possible before the fact
-        // rather than after it.
-        let inspection = try await server.inspectHandoff(id: transferID, token: token)
-        guard inspection.source_household_id == visibleHouseholdID else {
-            throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
-                expected: inspection.source_household_id, found: visibleHouseholdID)
-        }
+        let (preview, sharedZoneID) = try await inspectHandoff(transferID: transferID, token: token)
 
         let transfer = try await server.acceptTransfer(id: transferID, token: token)
         // The row could in principle have moved between the two calls.
-        guard transfer.source_household_id == visibleHouseholdID else {
+        guard transfer.source_household_id == preview.sourceHouseholdID else {
             throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
-                expected: transfer.source_household_id, found: visibleHouseholdID)
+                expected: transfer.source_household_id, found: preview.sourceHouseholdID)
         }
 
         try persist(AccountDeletionCheckpoint(
@@ -236,31 +270,23 @@ final class AccountDeletionCoordinator {
         return try await drive()
     }
 
-    /// The You ▸ Delete account button, as behaviour rather than as view
-    /// code. Returns `nil` when the account is gone, or user-facing copy
-    /// explaining why it is not.
+    /// Read the durable record for the signed-in user, doing no external
+    /// work at all.
     ///
-    /// This lives here so it can be tested. A SwiftUI button body is not
-    /// reachable from a unit test, so anything decided inside one is
-    /// decided unobservably — and the last time this decision lived in the
-    /// view it hand-rolled a disposition, minted a receipt it immediately
-    /// threw away, and signed out on its own. The view is now a single call
-    /// to this method, and everything it can do is pinned by tests.
-    func deleteAccountForUser() async -> String? {
-        do {
-            guard try await start() == .deleted else {
-                // A shared owner needs a successor to take the garden
-                // first, and that flow has no surface yet. Say so rather
-                // than appearing to do nothing.
-                return """
-                Your iCloud garden has to be handed to someone else first, \
-                and this version can't do that yet.
-                """
-            }
+    /// The progress surface calls this the moment it appears, to decide
+    /// between asking for confirmation and picking a half-finished
+    /// deletion back up. It has to be able to tell those apart WITHOUT
+    /// touching CloudKit or the server: opening a screen is not consent,
+    /// and a sheet that reaches for the network to render itself would
+    /// make "I only wanted to look" indistinguishable from "delete my
+    /// account".
+    @discardableResult
+    func refreshCheckpoint() throws -> AccountDeletionCheckpoint? {
+        guard let identity = session.identity() else {
+            checkpoint = nil
             return nil
-        } catch {
-            return humanizeError(error)
         }
+        return try reload(userID: identity.userID)
     }
 
     /// Finish a deletion that already committed on the server but whose
@@ -337,7 +363,7 @@ final class AccountDeletionCoordinator {
     func cancel() async throws {
         let identity = try requireIdentity()
         guard let current = try reload(userID: identity.userID) else { return }
-        guard !Self.sourceIsGone(current.phase) else {
+        guard !current.phase.sourceIsGone else {
             throw AccountDeletionCoordinatorError.cancelAfterSourceDeletion
         }
         if let transferID = current.transferID {
@@ -870,7 +896,7 @@ final class AccountDeletionCoordinator {
         at current: AccountDeletionCheckpoint,
         transferID: String?
     ) throws -> Outcome {
-        guard !Self.sourceIsGone(current.phase) else {
+        guard !current.phase.sourceIsGone else {
             // The garden is already gone and the transfer that authorises
             // deleting the account has been withdrawn. There is no safe
             // automatic move left: keep the credentials, keep the
@@ -899,20 +925,6 @@ final class AccountDeletionCoordinator {
             return true
         default:
             return false
-        }
-    }
-
-    /// True once cancelling is no longer a safe answer.
-    ///
-    /// This deliberately starts at `.sourceZoneDeleting` — one step BEFORE
-    /// the garden is actually gone. From there the server holds a lease it
-    /// will not release, so a client-side cancel could only produce a
-    /// transfer the server refuses to cancel, or worse, a local flow that
-    /// forgets a deletion the server has already committed to.
-    private static func sourceIsGone(_ phase: AccountDeletionCheckpoint.Phase) -> Bool {
-        switch phase {
-        case .sourceZoneDeleting, .sourceZoneDeleted, .sourceDeleted, .deletingAccount: return true
-        default: return false
         }
     }
 
@@ -975,7 +987,8 @@ final class AccountDeletionCoordinator {
     /// matters, and a note that cannot be written must not replace it.
     private func noteFailure(_ error: Error, at phase: AccountDeletionCheckpoint.Phase) {
         guard var next = checkpoint else { return }
-        next.lastFailure = .init(phase: phase, message: humanizeError(error), occurredAt: now())
+        next.lastFailure = .init(phase: phase, message: humanizeDeletionError(error),
+                                 occurredAt: now())
         next.updatedAt = now()
         try? persist(next)
     }
@@ -1200,4 +1213,22 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
     }
 
     var errorDescription: String? { description }
+}
+
+/// User-facing copy for anything the deletion flow can fail with.
+///
+/// `humanizeError` flattens every error it does not recognise to one
+/// generic sentence, which is right for machine strings and wrong here:
+/// each `AccountDeletionCoordinatorError` case is already written as a
+/// user sentence, and WHICH one it is carries the only information that
+/// matters. "The original was kept", "the iCloud garden is still there"
+/// and "this handoff is for a garden this device cannot see" are three
+/// different situations, and collapsing them into "Something went wrong"
+/// leaves a user who is mid-deletion with no idea whether their garden
+/// survived. None of the cases interpolate a token or a credential.
+func humanizeDeletionError(_ error: Error) -> String {
+    if let deletionError = error as? AccountDeletionCoordinatorError {
+        return deletionError.description
+    }
+    return humanizeError(error)
 }

@@ -155,6 +155,28 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
             case .participantLeaving, .ownerDeletingZone, .deletingAccount: return nil
             }
         }
+
+        /// True once abandoning the flow is no longer a safe answer.
+        ///
+        /// This deliberately starts at `.sourceZoneDeleting` — one step
+        /// BEFORE the garden is actually gone. From there the server holds
+        /// a lease it will not release, so a client-side cancel could only
+        /// produce a transfer the server refuses to cancel, or worse, a
+        /// local flow that forgets a deletion the server has already
+        /// committed to. It is also the predicate the progress surface
+        /// uses to decide whether to offer Cancel at all: one definition,
+        /// so what the button shows and what `cancel()` permits cannot
+        /// drift apart.
+        var sourceIsGone: Bool {
+            switch self {
+            case .sourceZoneDeleting, .sourceZoneDeleted, .sourceDeleted, .deletingAccount:
+                return true
+            case .participantLeaving, .ownerDeletingZone, .transferPending, .successorBound,
+                 .destinationZoneCreated, .destinationReady, .destinationShareAccepted,
+                 .copyComplete, .ownerVerified, .verified:
+                return false
+            }
+        }
     }
 
     /// The last step that failed, kept so a relaunch can show the user
