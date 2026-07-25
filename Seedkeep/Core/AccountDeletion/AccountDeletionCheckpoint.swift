@@ -202,18 +202,27 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
 
     /// The `cloudkit_disposition` this flow may claim on `DELETE /api/me`.
     ///
-    /// `nil` means the account deletion is not authorized yet: a successor
-    /// is not deleting anything, and a shared owner without a completed
-    /// transfer has no honest claim to make. Fail closed — the server also
-    /// refuses, but the client must not even ask.
+    /// Available at exactly one phase — `.deletingAccount` — because the
+    /// disposition is an assertion that the CloudKit work is DONE, and
+    /// `.deletingAccount` is by definition the state reached only after
+    /// it is. At every earlier phase the claim would be a lie the server
+    /// cannot check: it cannot see whether a share was left or a zone
+    /// deleted, so a client that asks early gets its account erased with
+    /// the garden still live.
+    ///
+    /// `nil` also for a successor at any phase: they are finishing
+    /// someone else's handoff, not deleting an account. And `nil` for a
+    /// shared owner with no transfer id — losing it must fail closed
+    /// rather than fall back to a simpler disposition the server would
+    /// accept.
     var disposition: AccountDeletionDisposition? {
+        guard phase == .deletingAccount else { return nil }
         switch role {
         case .noCloudKitGarden: return .noCloudKitGarden
         case .participant: return .participantLeftShare
         case .soloOwner: return .ownerZoneDeleted
         case .sharedOwner:
-            guard phase == .sourceDeleted || phase == .deletingAccount,
-                  let transferID else { return nil }
+            guard let transferID else { return nil }
             return .transferSourceDeleted(transferID: transferID)
         case .successor: return nil
         }

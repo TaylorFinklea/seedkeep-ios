@@ -9,34 +9,58 @@ import Foundation
 ///
 /// Four properties matter more than convenience here:
 ///
-///   - **Atomic.** A save writes a complete document to a temporary file
-///     in the same directory and then `rename(2)`s it over the
-///     destination. A crash, or a failure between the two steps, leaves
-///     the previous document byte-for-byte intact — never a truncated
-///     one. The two steps are separate injectable operations so a test can
-///     fail *between* them; an in-place write cannot pass those tests.
-///   - **Serialized.** Every operation runs under one process-wide lock
-///     keyed by nothing (the lock is cheap and operations are
-///     microseconds), so a save cannot interleave with another save or a
-///     clear. Ordering is enforced on top of that by a per-file
-///     watermark: a save carrying an `updatedAt` older than what is
-///     already stored is rejected instead of regressing the phase, and a
-///     save that lost a race with `clear` cannot resurrect a finished or
-///     cancelled deletion.
-///   - **Fail-closed.** An unreadable checkpoint throws. Treating it as
-///     "no checkpoint" would report *no deletion in progress* for a user
-///     whose CloudKit garden may already be gone.
+///   - **Atomic.** A save writes a complete document to a scratch file in
+///     the same directory and then `rename(2)`s it over the destination. A
+///     crash, or a failure between the two steps, leaves the previous
+///     document byte-for-byte intact — never a truncated one. The two
+///     steps are separate injectable operations so a test can fail
+///     *between* them; an in-place write cannot pass those tests.
+///   - **Ordered by the store, not by the caller.** Every operation runs
+///     under one process-wide lock, and each write must present the
+///     `Lease` issued by the previous one. Leases carry a store-issued
+///     generation that nobody outside can mint or predict, so a delayed
+///     write is rejected no matter what timestamp it carries and no matter
+///     which direction its phase moved. A caller's clock is data, never
+///     authority.
+///   - **Fail-closed.** An unreadable checkpoint throws — on read AND on
+///     write. Treating it as "no checkpoint" would report *no deletion in
+///     progress* for a user whose CloudKit garden may already be gone, and
+///     overwriting it would destroy the evidence of what went wrong. Only
+///     an explicit `clear` removes a file the store cannot validate.
 ///   - **Per-user.** Files are keyed by user id, and a decoded checkpoint
 ///     whose `user_id` disagrees with the requested one is refused: it
 ///     would resume the wrong account's deletion.
+///
+/// Usage is a compare-and-swap loop:
+///
+///     var lease = try store.load(userID: id)?.lease
+///     lease = try store.save(checkpoint, lease: lease)   // repeat per phase
+///     try store.clear(userID: id)                        // when it is over
 ///
 /// Nothing here touches credentials, CloudKit, or SwiftData, so loading
 /// and clearing a checkpoint — including cancellation — is safe at any
 /// point in the flow.
 struct AccountDeletionCheckpointStore: Sendable {
 
+    /// Proof that its holder has seen the current state of a checkpoint
+    /// file, and the right to replace it exactly once.
+    ///
+    /// Opaque on purpose: the generation is `fileprivate`, so no caller
+    /// can mint one, guess the next, or reuse a spent one. A save whose
+    /// lease is not the current one lost a race — reload and decide again.
+    struct Lease: Sendable, Equatable {
+        fileprivate let path: String
+        fileprivate let generation: UInt64
+    }
+
+    /// A checkpoint together with the lease needed to replace it.
+    struct Loaded: Sendable, Equatable {
+        var checkpoint: AccountDeletionCheckpoint
+        var lease: Lease
+    }
+
     /// The two halves of an atomic replacement, injectable so tests can
-    /// fail after the temporary file exists but before it is moved into
+    /// fail after the scratch file exists but before it is moved into
     /// place — the failure mode that separates a real atomic write from an
     /// in-place truncating one.
     struct FileWriter: Sendable {
@@ -80,11 +104,10 @@ struct AccountDeletionCheckpointStore: Sendable {
         case unreadable(userID: String)
         /// The stored checkpoint belongs to a different account.
         case userMismatch(expected: String, found: String)
-        /// The write lost a race: a newer checkpoint is already stored, or
-        /// the deletion this one describes was already cleared. Rejected
-        /// rather than applied, because last-writer-wins would rewind the
-        /// phase or resurrect a finished flow. Callers may ignore it —
-        /// it means someone else already moved past this state.
+        /// The write did not present the current lease: another write or a
+        /// `clear` already moved this checkpoint on. Rejected rather than
+        /// applied — last-writer-wins would rewind a phase or resurrect a
+        /// finished flow. Reload and decide from the durable state.
         case staleSave(userID: String)
 
         var description: String {
@@ -94,7 +117,7 @@ struct AccountDeletionCheckpointStore: Sendable {
             case .userMismatch(let expected, let found):
                 return "account-deletion checkpoint belongs to \(found), not \(expected)"
             case .staleSave(let userID):
-                return "account-deletion checkpoint for \(userID) is older than the stored one"
+                return "account-deletion checkpoint for \(userID) moved on; reload before saving"
             }
         }
     }
@@ -120,18 +143,32 @@ struct AccountDeletionCheckpointStore: Sendable {
 
     // MARK: - Serialization
 
-    /// How far each checkpoint file has advanced, and whether it was
-    /// cleared. Keyed by file path, not by user id: the store is a value
+    /// The current generation of a checkpoint file and whether it is
+    /// occupied. Keyed by file path, not by user id: the store is a value
     /// type that callers (and tests) construct freely, so the ordering
     /// state has to belong to the file everyone is writing, not to any one
     /// instance.
-    private struct Watermark {
-        var updatedAt: Int64
-        var cleared: Bool
+    ///
+    /// The generation only ever increases, and it advances on `clear` as
+    /// well as on `save`, so every lease issued before a clear is dead.
+    private struct Slot {
+        var generation: UInt64
+        var occupied: Bool
     }
 
-    private nonisolated(unsafe) static var watermarks: [String: Watermark] = [:]
+    private nonisolated(unsafe) static var slots: [String: Slot] = [:]
     private static let lock = NSLock()
+
+    /// Must be called with `lock` held.
+    private static func slot(forPath path: String, occupied: Bool) -> Slot {
+        if let existing = slots[path] { return existing }
+        // First time this process has touched the file — a checkpoint left
+        // by an earlier launch starts at generation 1, so a caller that
+        // has not loaded it cannot write over it.
+        let seeded = Slot(generation: 1, occupied: occupied)
+        slots[path] = seeded
+        return seeded
+    }
 
     // MARK: - Paths
 
@@ -156,44 +193,69 @@ struct AccountDeletionCheckpointStore: Sendable {
 
     // MARK: - Operations
 
-    /// The user's checkpoint, or `nil` when there is genuinely none.
+    /// The user's checkpoint and the lease that replaces it, or `nil` when
+    /// there is genuinely none.
     ///
     /// Throws `Failure` when a checkpoint exists but cannot be trusted.
     /// "Exists" is decided before reading: a file that is present but
     /// unreadable must not be reported as absence, which the caller would
     /// read as *no deletion in progress*.
-    func load(userID: String) throws -> AccountDeletionCheckpoint? {
+    func load(userID: String) throws -> Loaded? {
         Self.lock.lock()
         defer { Self.lock.unlock() }
-        return try Self.read(url: url(forUserID: userID), userID: userID)
+
+        let destination = url(forUserID: userID)
+        guard let checkpoint = try Self.read(url: destination, userID: userID) else { return nil }
+        let slot = Self.slot(forPath: destination.path, occupied: true)
+        return Loaded(
+            checkpoint: checkpoint,
+            lease: Lease(path: destination.path, generation: slot.generation)
+        )
     }
 
-    /// Replaces the user's checkpoint.
+    /// Replaces the user's checkpoint and returns the lease for the next
+    /// write.
     ///
+    /// `lease` is the one returned by the previous `save`, or by `load` at
+    /// startup; pass `nil` only to create a record where the store has
+    /// none. Anything else means this caller is working from a state the
+    /// store has already moved past — `Failure.staleSave`.
+    ///
+    /// The destination is decoded and validated first, under the same
+    /// lock: a corrupt or foreign file is reported, never overwritten.
     /// Encoding happens before any file I/O, so a failure to encode cannot
-    /// damage the stored document. Throws `Failure.staleSave` when a newer
-    /// checkpoint is already on disk or the deletion was already cleared.
-    func save(_ checkpoint: AccountDeletionCheckpoint) throws {
+    /// damage the stored document.
+    @discardableResult
+    func save(_ checkpoint: AccountDeletionCheckpoint, lease: Lease? = nil) throws -> Lease {
         let data = try JSONEncoder().encode(checkpoint)
         let destination = url(forUserID: checkpoint.userID)
 
         Self.lock.lock()
         defer { Self.lock.unlock() }
 
-        if let watermark = Self.watermarks[destination.path] {
-            // Strictly older always loses. An equal timestamp is a
-            // rewrite of the same state — harmless, EXCEPT after a clear,
-            // where it is exactly the delayed save that would resurrect
-            // the finished deletion.
-            if checkpoint.updatedAt < watermark.updatedAt
-                || (watermark.cleared && checkpoint.updatedAt <= watermark.updatedAt) {
+        // Fail closed on anything already there that we cannot account
+        // for. Overwriting a damaged or foreign checkpoint would destroy
+        // the only record of a deletion that may already have deleted a
+        // CloudKit zone.
+        let existing = try Self.read(url: destination, userID: checkpoint.userID)
+        var slot = Self.slot(forPath: destination.path, occupied: existing != nil)
+        // Keep occupancy honest if the file appeared or vanished outside
+        // this store; the generation is untouched, so live leases survive.
+        slot.occupied = existing != nil
+        Self.slots[destination.path] = slot
+
+        let presented = lease.flatMap { $0.path == destination.path ? $0.generation : nil }
+        if slot.occupied {
+            // Replacing a record requires having seen it.
+            guard presented == slot.generation else { throw Failure.staleSave(userID: checkpoint.userID) }
+        } else {
+            // Creating one requires either no lease at all, or the lease
+            // for this exact empty slot. A lease minted before a `clear`
+            // carries an older generation and is refused, so a write still
+            // in flight cannot resurrect a finished or cancelled deletion.
+            guard presented == nil || presented == slot.generation else {
                 throw Failure.staleSave(userID: checkpoint.userID)
             }
-        } else if let stored = try? Self.read(url: destination, userID: checkpoint.userID),
-                  checkpoint.updatedAt < stored.updatedAt {
-            // No watermark yet (first write of this process against a file
-            // left by an earlier launch) — fall back to what is on disk.
-            throw Failure.staleSave(userID: checkpoint.userID)
         }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -209,26 +271,25 @@ struct AccountDeletionCheckpointStore: Sendable {
             try? FileManager.default.removeItem(at: scratch)
             throw error
         }
-        Self.watermarks[destination.path] = Watermark(updatedAt: checkpoint.updatedAt, cleared: false)
+
+        let next = slot.generation &+ 1
+        Self.slots[destination.path] = Slot(generation: next, occupied: true)
+        return Lease(path: destination.path, generation: next)
     }
 
-    /// Removes the user's checkpoint. Idempotent — clearing a deletion
-    /// that already finished, cancelling twice, or racing another clear is
-    /// not an error.
+    /// Removes the user's checkpoint and retires every outstanding lease.
+    ///
+    /// Idempotent — clearing a deletion that already finished, cancelling
+    /// twice, or racing another clear is not an error. This is the only
+    /// operation allowed to remove a checkpoint the store cannot decode.
     func clear(userID: String) throws {
         let destination = url(forUserID: userID)
 
         Self.lock.lock()
         defer { Self.lock.unlock() }
 
-        // Remember how far the cleared flow had got, so a save still in
-        // flight behind us cannot put it back.
-        let stored = try? Self.read(url: destination, userID: userID)
-        let previous = Self.watermarks[destination.path]?.updatedAt ?? Int64.min
-        Self.watermarks[destination.path] = Watermark(
-            updatedAt: max(previous, stored?.updatedAt ?? Int64.min),
-            cleared: true
-        )
+        let slot = Self.slot(forPath: destination.path, occupied: true)
+        Self.slots[destination.path] = Slot(generation: slot.generation &+ 1, occupied: false)
 
         do {
             try FileManager.default.removeItem(at: destination)

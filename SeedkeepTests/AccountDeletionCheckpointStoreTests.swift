@@ -16,12 +16,11 @@ import SeedkeepKit
 ///   1. Durable and atomic: a crash mid-write never leaves half a JSON
 ///      document, and a failed replacement leaves the PREVIOUS checkpoint
 ///      intact rather than nothing.
-///   2. Ordered: concurrent operations serialize, a stale save cannot
-///      rewind the phase, and a save that lost a race with cancellation
-///      cannot resurrect a finished deletion.
-///   3. Fail-closed: an unreadable checkpoint throws. Returning `nil`
-///      would read as "no deletion in progress" and silently strand a
-///      half-finished deletion.
+///   2. Ordered by the store: every write presents the lease issued by the
+///      previous one, so a delayed write is rejected regardless of the
+///      timestamp it carries or the direction its phase moved.
+///   3. Fail-closed: an unreadable or foreign checkpoint throws — on read
+///      AND on write. Only an explicit `clear` removes one.
 ///   4. Per-user: one signed-in account's checkpoint can never be read,
 ///      overwritten, or cleared by another's.
 @Suite("Account-deletion checkpoint store")
@@ -66,7 +65,7 @@ struct AccountDeletionCheckpointStoreTests {
         let store = AccountDeletionCheckpointStore(directory: makeDirectory())
         let checkpoint = fullCheckpoint()
         try store.save(checkpoint)
-        #expect(try store.load(userID: "u_owner") == checkpoint)
+        #expect(try store.load(userID: "u_owner")?.checkpoint == checkpoint)
     }
 
     @Test("minimal checkpoint (participant, no transfer, no zones) round-trips")
@@ -79,7 +78,7 @@ struct AccountDeletionCheckpointStoreTests {
             updatedAt: 42
         )
         try store.save(checkpoint)
-        let loaded = try #require(try store.load(userID: "u_part"))
+        let loaded = try #require(try store.load(userID: "u_part")).checkpoint
         #expect(loaded == checkpoint)
         #expect(loaded.transferID == nil)
         #expect(loaded.sourceZoneName == nil)
@@ -105,7 +104,7 @@ struct AccountDeletionCheckpointStoreTests {
             updatedAt: 99
         )
         try store.save(checkpoint)
-        let loaded = try #require(try store.load(userID: "u_succ"))
+        let loaded = try #require(try store.load(userID: "u_succ")).checkpoint
         #expect(loaded == checkpoint)
         #expect(loaded.role == .successor)
         #expect(loaded.transferID == "tr_abc123")
@@ -114,14 +113,13 @@ struct AccountDeletionCheckpointStoreTests {
     @Test("every phase survives a round trip, including the local-only crash windows")
     func roundTripEveryPhase() throws {
         let store = AccountDeletionCheckpointStore(directory: makeDirectory())
-        var stamp: Int64 = 1
+        var lease: AccountDeletionCheckpointStore.Lease?
         for phase in AccountDeletionCheckpoint.Phase.allCases {
             var checkpoint = fullCheckpoint()
             checkpoint.phase = phase
-            checkpoint.updatedAt = stamp
-            stamp += 1
-            try store.save(checkpoint)
-            #expect(try store.load(userID: "u_owner") == checkpoint, "\(phase.rawValue) did not survive")
+            lease = try store.save(checkpoint, lease: lease)
+            #expect(try store.load(userID: "u_owner")?.checkpoint == checkpoint,
+                    "\(phase.rawValue) did not survive")
         }
     }
 
@@ -185,15 +183,15 @@ struct AccountDeletionCheckpointStoreTests {
     func overwrite() throws {
         let dir = makeDirectory()
         let store = AccountDeletionCheckpointStore(directory: dir)
-        try store.save(fullCheckpoint())
+        let lease = try store.save(fullCheckpoint())
 
         var advanced = fullCheckpoint()
         advanced.phase = .sourceDeleted
         advanced.lastFailure = nil
         advanced.updatedAt = 1_700_000_999_999
-        try store.save(advanced)
+        try store.save(advanced, lease: lease)
 
-        #expect(try store.load(userID: "u_owner") == advanced)
+        #expect(try store.load(userID: "u_owner")?.checkpoint == advanced)
         #expect(contents(of: dir).count == 1, "left stray files: \(contents(of: dir))")
     }
 
@@ -201,77 +199,85 @@ struct AccountDeletionCheckpointStoreTests {
     func noTemporaryResidue() throws {
         let dir = makeDirectory()
         let store = AccountDeletionCheckpointStore(directory: dir)
-        var stamp: Int64 = 1
+        var lease: AccountDeletionCheckpointStore.Lease?
         for phase in AccountDeletionCheckpoint.Phase.allCases {
             var checkpoint = fullCheckpoint()
             checkpoint.phase = phase
-            checkpoint.updatedAt = stamp
-            stamp += 1
-            try store.save(checkpoint)
+            lease = try store.save(checkpoint, lease: lease)
             // Every intermediate state on disk must be a complete,
             // decodable document — never a truncated write in progress.
-            #expect(try store.load(userID: "u_owner")?.phase == phase)
+            #expect(try store.load(userID: "u_owner")?.checkpoint.phase == phase)
         }
         #expect(contents(of: dir) == [store.url(forUserID: "u_owner").lastPathComponent])
     }
 
-    // MARK: - Ordering under concurrency
+    // MARK: - Ordering: store-issued leases, not caller clocks
 
-    @Test("a stale save is rejected instead of rewinding the phase")
-    func staleSaveRejected() throws {
+    @Test("a spent lease is rejected even when the delayed write carries the same timestamp")
+    func spentLeaseRejectedAtEqualTimestamp() throws {
+        // The regression a timestamp watermark cannot catch: two writes
+        // stamped in the same millisecond, the later one carrying an
+        // EARLIER phase.
         let dir = makeDirectory()
         let store = AccountDeletionCheckpointStore(directory: dir)
-        var newer = fullCheckpoint()
-        newer.phase = .sourceDeleted
-        newer.updatedAt = 2_000
-        try store.save(newer)
+        var advanced = fullCheckpoint()
+        advanced.phase = .sourceDeleted
+        let first = try store.save(advanced)
 
-        var older = fullCheckpoint()
-        older.phase = .destinationReady
-        older.updatedAt = 1_000
+        var next = advanced
+        next.phase = .deletingAccount
+        _ = try store.save(next, lease: first)
+
+        var regression = advanced
+        regression.phase = .destinationReady
+        #expect(regression.updatedAt == next.updatedAt, "the point of this test is an identical stamp")
         #expect(throws: AccountDeletionCheckpointStore.Failure.staleSave(userID: "u_owner")) {
-            try store.save(older)
+            try store.save(regression, lease: first)
         }
-        #expect(try store.load(userID: "u_owner") == newer,
-                "a delayed older save must not regress a deletion that already advanced")
+        #expect(try store.load(userID: "u_owner")?.checkpoint.phase == .deletingAccount,
+                "a spent lease must not rewind the phase")
     }
 
-    @Test("a stale save is rejected even against a file left by a previous launch")
-    func staleSaveRejectedAcrossLaunches() throws {
-        let dir = makeDirectory()
-        var newer = fullCheckpoint()
-        newer.phase = .sourceDeleted
-        newer.updatedAt = 2_000
-        // Written by "a previous launch": encoded straight to disk, so no
-        // in-process watermark exists for this file.
-        try JSONEncoder().encode(newer).write(to: AccountDeletionCheckpointStore(directory: dir)
-            .url(forUserID: "u_owner"))
-
-        let store = AccountDeletionCheckpointStore(directory: dir)
-        var older = fullCheckpoint()
-        older.updatedAt = 1_000
-        #expect(throws: AccountDeletionCheckpointStore.Failure.staleSave(userID: "u_owner")) {
-            try store.save(older)
-        }
-        #expect(try store.load(userID: "u_owner") == newer)
-    }
-
-    @Test("a save that lost the race with clear cannot resurrect the deletion")
-    func saveAfterClearRejected() throws {
+    @Test("a delayed write after clear is rejected even with a newer timestamp")
+    func delayedWriteAfterClearRejected() throws {
+        // The other regression a watermark cannot catch: the resurrecting
+        // write is NEWER than everything the store ever saw.
         let dir = makeDirectory()
         let store = AccountDeletionCheckpointStore(directory: dir)
-        let checkpoint = fullCheckpoint()
-        try store.save(checkpoint)
-        // The flow finished (or was cancelled) and cleaned up.
+        let lease = try store.save(fullCheckpoint())
         try store.clear(userID: "u_owner")
 
-        // A write already in flight when the clear landed.
+        var late = fullCheckpoint()
+        late.phase = .deletingAccount
+        late.updatedAt = 9_999_999_999_999
         #expect(throws: AccountDeletionCheckpointStore.Failure.staleSave(userID: "u_owner")) {
-            try store.save(checkpoint)
+            try store.save(late, lease: lease)
         }
-        #expect(try store.load(userID: "u_owner") == nil,
-                "a cleared deletion must stay cleared")
+        #expect(try store.load(userID: "u_owner") == nil, "a cleared deletion must stay cleared")
         #expect(contents(of: dir).isEmpty)
+    }
+
+    @Test("a write without a lease cannot replace an existing checkpoint")
+    func leaselessWriteCannotReplace() throws {
+        // Covers the cross-launch case: a checkpoint left by an earlier
+        // run must be loaded (and thus seen) before it can be replaced.
+        let dir = makeDirectory()
+        let onDisk = fullCheckpoint()
+        try JSONEncoder().encode(onDisk).write(
+            to: AccountDeletionCheckpointStore(directory: dir).url(forUserID: "u_owner"))
+
+        let store = AccountDeletionCheckpointStore(directory: dir)
+        var blind = fullCheckpoint()
+        blind.phase = .transferPending
+        #expect(throws: AccountDeletionCheckpointStore.Failure.staleSave(userID: "u_owner")) {
+            try store.save(blind)
+        }
+        #expect(try store.load(userID: "u_owner")?.checkpoint == onDisk)
+
+        // Loading yields the lease that authorizes the replacement.
+        let lease = try #require(try store.load(userID: "u_owner")).lease
+        try store.save(blind, lease: lease)
+        #expect(try store.load(userID: "u_owner")?.checkpoint == blind)
     }
 
     @Test("a genuinely new deletion after a clear is accepted")
@@ -283,37 +289,37 @@ struct AccountDeletionCheckpointStoreTests {
 
         var restarted = fullCheckpoint()
         restarted.phase = .transferPending
-        restarted.updatedAt = 1_800_000_000_000
         try store.save(restarted)
-        #expect(try store.load(userID: "u_owner") == restarted)
+        #expect(try store.load(userID: "u_owner")?.checkpoint == restarted)
     }
 
-    @Test("concurrent saves serialize and the newest one wins")
+    @Test("concurrent saves serialize: exactly one wins each generation, the file stays valid")
     func concurrentSaves() async throws {
         let dir = makeDirectory()
         let store = AccountDeletionCheckpointStore(directory: dir)
+        let lease = try store.save(fullCheckpoint())
         let phases: [AccountDeletionCheckpoint.Phase] = [
-            .transferPending, .successorBound, .destinationReady,
             .destinationShareAccepted, .copyComplete, .ownerVerified,
-            .verified, .sourceZoneDeleted, .sourceDeleted,
+            .verified, .sourceZoneDeleted, .sourceDeleted, .deletingAccount,
         ]
 
-        await withTaskGroup(of: Void.self) { group in
-            for (index, phase) in phases.enumerated() {
+        // Every task holds the SAME lease, so exactly one may win.
+        let winners = await withTaskGroup(of: Bool.self) { group -> Int in
+            for phase in phases {
                 group.addTask {
                     var checkpoint = self.fullCheckpoint()
                     checkpoint.phase = phase
-                    checkpoint.updatedAt = Int64(index + 1)
-                    // Losers throw `staleSave` by design; the point is
-                    // that no interleaving corrupts the file.
-                    try? store.save(checkpoint)
+                    do { _ = try store.save(checkpoint, lease: lease); return true } catch { return false }
                 }
             }
+            var count = 0
+            for await won in group where won { count += 1 }
+            return count
         }
 
-        let loaded = try #require(try store.load(userID: "u_owner"))
-        #expect(loaded.phase == .sourceDeleted, "the highest updatedAt must win, got \(loaded.phase)")
-        #expect(loaded.updatedAt == Int64(phases.count))
+        #expect(winners == 1, "a lease authorizes exactly one write, got \(winners)")
+        let loaded = try #require(try store.load(userID: "u_owner")).checkpoint
+        #expect(phases.contains(loaded.phase))
         #expect(contents(of: dir).count == 1, "concurrent saves left residue: \(contents(of: dir))")
     }
 
@@ -355,7 +361,7 @@ struct AccountDeletionCheckpointStoreTests {
         #expect(try store.load(userID: "u_owner") == nil)
     }
 
-    @Test("clear on an unreadable file still removes it")
+    @Test("clear is the only operation that removes a checkpoint the store cannot decode")
     func clearCorrupt() throws {
         let dir = makeDirectory()
         let store = AccountDeletionCheckpointStore(directory: dir)
@@ -379,12 +385,12 @@ struct AccountDeletionCheckpointStoreTests {
         try store.save(owner)
         try store.save(other)
         #expect(contents(of: dir).count == 2)
-        #expect(try store.load(userID: "u_owner") == owner)
-        #expect(try store.load(userID: "u_other") == other)
+        #expect(try store.load(userID: "u_owner")?.checkpoint == owner)
+        #expect(try store.load(userID: "u_other")?.checkpoint == other)
 
         try store.clear(userID: "u_owner")
         #expect(try store.load(userID: "u_owner") == nil)
-        #expect(try store.load(userID: "u_other") == other,
+        #expect(try store.load(userID: "u_other")?.checkpoint == other,
                 "clearing one account's checkpoint must not disturb another's")
     }
 
@@ -399,7 +405,7 @@ struct AccountDeletionCheckpointStoreTests {
 
         try store.save(AccountDeletionCheckpoint(
             userID: hostile, role: .participant, phase: .participantLeaving, updatedAt: 1))
-        #expect(try store.load(userID: hostile)?.userID == hostile)
+        #expect(try store.load(userID: hostile)?.checkpoint.userID == hostile)
         #expect(try store.load(userID: "etc/passwd") == nil,
                 "distinct ids must not collide onto one file")
         #expect(contents(of: dir).count == 1)
@@ -481,6 +487,64 @@ struct AccountDeletionCheckpointStoreTests {
         }
     }
 
+    // MARK: - Fail-closed writing
+
+    @Test("save refuses to overwrite a corrupt checkpoint and leaves the bytes untouched")
+    func saveRefusesCorruptDestination() throws {
+        let dir = makeDirectory()
+        let store = AccountDeletionCheckpointStore(directory: dir)
+        let destination = store.url(forUserID: "u_owner")
+        let damaged = Data("{ half a document".utf8)
+        try damaged.write(to: destination)
+
+        #expect(throws: AccountDeletionCheckpointStore.Failure.unreadable(userID: "u_owner")) {
+            try store.save(fullCheckpoint())
+        }
+        #expect(try Data(contentsOf: destination) == damaged,
+                "a damaged checkpoint is evidence of a failed deletion; only clear may remove it")
+        #expect(contents(of: dir) == [destination.lastPathComponent], "left scratch residue")
+
+        // The documented escape hatch.
+        try store.clear(userID: "u_owner")
+        try store.save(fullCheckpoint())
+        #expect(try store.load(userID: "u_owner")?.checkpoint == fullCheckpoint())
+    }
+
+    @Test("save refuses to overwrite another account's checkpoint")
+    func saveRefusesForeignDestination() throws {
+        let dir = makeDirectory()
+        let store = AccountDeletionCheckpointStore(directory: dir)
+        // A valid checkpoint for u_owner sitting in u_victim's slot.
+        let foreign = try JSONEncoder().encode(fullCheckpoint(userID: "u_owner"))
+        let destination = store.url(forUserID: "u_victim")
+        try foreign.write(to: destination)
+
+        #expect(throws: AccountDeletionCheckpointStore.Failure.userMismatch(
+            expected: "u_victim", found: "u_owner")) {
+            try store.save(fullCheckpoint(userID: "u_victim"))
+        }
+        #expect(try Data(contentsOf: destination) == foreign)
+    }
+
+    @Test("a rejected save never reaches the write seam")
+    func rejectedSaveDoesNoIO() throws {
+        let dir = makeDirectory()
+        let recorder = WriteRecorder()
+        let store = AccountDeletionCheckpointStore(
+            directory: dir,
+            writer: .init(
+                writeTemporary: { data, url in try recorder.recordWrite(data, url) },
+                replace: { source, destination in try recorder.recordReplace(source, destination) }
+            )
+        )
+        try Data("{ broken".utf8).write(to: store.url(forUserID: "u_owner"))
+
+        #expect(throws: AccountDeletionCheckpointStore.Failure.unreadable(userID: "u_owner")) {
+            try store.save(fullCheckpoint())
+        }
+        #expect(recorder.writeCount == 0, "validation must happen before any bytes are written")
+    }
+
     // MARK: - Atomicity
 
     @Test("a save writes a scratch file first and never opens the destination directly")
@@ -516,7 +580,7 @@ struct AccountDeletionCheckpointStoreTests {
     func failedReplacePreservesPrior() throws {
         let dir = makeDirectory()
         let prior = fullCheckpoint()
-        try AccountDeletionCheckpointStore(directory: dir).save(prior)
+        let lease = try AccountDeletionCheckpointStore(directory: dir).save(prior)
         let destination = AccountDeletionCheckpointStore(directory: dir).url(forUserID: "u_owner")
         let priorBytes = try Data(contentsOf: destination)
 
@@ -532,13 +596,13 @@ struct AccountDeletionCheckpointStoreTests {
         )
         var advanced = prior
         advanced.phase = .deletingAccount
-        advanced.updatedAt = prior.updatedAt + 1
 
-        #expect(throws: DiskFull.self) { try failing.save(advanced) }
+        #expect(throws: DiskFull.self) { try failing.save(advanced, lease: lease) }
 
         #expect(try Data(contentsOf: destination) == priorBytes,
                 "the previous checkpoint must survive a failed replacement byte for byte")
-        #expect(try AccountDeletionCheckpointStore(directory: dir).load(userID: "u_owner") == prior)
+        #expect(try AccountDeletionCheckpointStore(directory: dir)
+            .load(userID: "u_owner")?.checkpoint == prior)
         #expect(contents(of: dir) == [destination.lastPathComponent],
                 "a failed save must not leave scratch files behind: \(contents(of: dir))")
     }
@@ -581,24 +645,30 @@ struct AccountDeletionCheckpointStoreTests {
         #expect(checkpoint.disposition == nil)
     }
 
-    @Test("a shared owner cannot claim a completed transfer before the source is gone")
-    func dispositionFailsClosedBeforeSourceDeleted() {
+    @Test("no role may claim a disposition before the account-deletion step itself")
+    func dispositionOnlyAtDeletingAccount() {
+        // The disposition asserts the CloudKit work is DONE. Any earlier
+        // phase means it is not, whatever the role — including the roles
+        // whose CloudKit work is a single step.
+        for role in AccountDeletionCheckpoint.Role.allCases {
+            for phase in AccountDeletionCheckpoint.Phase.allCases where phase != .deletingAccount {
+                var checkpoint = fullCheckpoint()
+                checkpoint.role = role
+                checkpoint.phase = phase
+                #expect(checkpoint.disposition == nil,
+                        "\(role.rawValue) at \(phase.rawValue) must not authorize account deletion")
+            }
+        }
+    }
+
+    @Test("a shared owner that lost its transfer id fails closed at the deletion step")
+    func dispositionRequiresTransferID() {
         var checkpoint = fullCheckpoint()
         checkpoint.role = .sharedOwner
-        for phase: AccountDeletionCheckpoint.Phase in [
-            .transferPending, .successorBound, .destinationReady,
-            .destinationShareAccepted, .copyComplete, .ownerVerified,
-            .verified, .sourceZoneDeleted,
-        ] {
-            checkpoint.phase = phase
-            #expect(checkpoint.disposition == nil, "\(phase.rawValue) must not authorize account deletion")
-        }
-
-        checkpoint.phase = .sourceDeleted
+        checkpoint.phase = .deletingAccount
         #expect(checkpoint.disposition == .transferSourceDeleted(transferID: "tr_abc123"))
 
-        // Losing the transfer id must fail closed, not fall back to a
-        // simpler disposition the server would happily accept.
+        // Never fall back to a simpler disposition the server would accept.
         checkpoint.transferID = nil
         #expect(checkpoint.disposition == nil)
     }
