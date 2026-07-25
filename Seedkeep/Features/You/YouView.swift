@@ -97,37 +97,12 @@ struct YouView: View {
                     titleVisibility: .visible
                 ) {
                     Button("Delete Account", role: .destructive) {
-                        Task {
-                            // Hand this to the coordinator rather than
-                            // calling `DELETE /api/me` here.
-                            //
-                            // The server now demands the device state what
-                            // it did with its CloudKit garden, and it also
-                            // demands a deletion receipt so a lost response
-                            // can be recovered. Both are things this screen
-                            // cannot honestly produce: it cannot see the
-                            // share, and a receipt minted inline is thrown
-                            // away the moment the request fails. The
-                            // coordinator inspects CloudKit for the real
-                            // role, persists the receipt before committing,
-                            // and signs out only once the server confirms.
-                            do {
-                                let outcome = try await appEnv.accountDeletion.start()
-                                guard outcome == .deleted else {
-                                    // A shared owner needs a successor to
-                                    // take the garden first, and that flow
-                                    // has no surface yet. Say so instead of
-                                    // silently doing nothing.
-                                    deleteAccountError = """
-                                    Your iCloud garden has to be handed to someone else first, \
-                                    and this version can't do that yet.
-                                    """
-                                    return
-                                }
-                            } catch {
-                                deleteAccountError = error.localizedDescription
-                            }
-                        }
+                        // Deliberately one line. Everything this button can
+                        // decide — the CloudKit role, the receipt, whether
+                        // to sign out — is decided by the coordinator,
+                        // where it is reachable by tests. A view body is
+                        // not.
+                        Task { deleteAccountError = await appEnv.accountDeletion.deleteAccountForUser() }
                     }
                     Button("Cancel", role: .cancel) { }
                 } message: {

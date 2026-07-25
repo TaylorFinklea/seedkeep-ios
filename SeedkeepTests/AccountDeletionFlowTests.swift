@@ -100,6 +100,7 @@ struct AccountDeletionFlowTests {
             server: LiveAccountDeletionServer(client: client),
             session: AccountDeletionSession(
                 identity: { .init(userID: userID, householdID: householdID) },
+                localStoreOwnerID: { userID },
                 signOut: { [weak auth] in await auth?.signOut() }
             ),
             now: { 1_700_000_000_000 },
@@ -372,6 +373,53 @@ struct AccountDeletionFlowTests {
         #expect(harness.storedCheckpoint?.phase == .deletingAccount)
         let ctx = ModelContext(container)
         #expect(!(try ctx.fetch(FetchDescriptor<LocalSeed>())).isEmpty)
+    }
+
+    @Test("account A's stale deletion never signs out or wipes account B")
+    func staleForeignDeletionLeavesCurrentAccountAlone() async throws {
+        // The launch sweep has to enumerate every checkpoint, because before
+        // sign-in it cannot know which one matters. That makes it the one
+        // place where "some account was deleted" could be mistaken for
+        // "this device's account was deleted" — and acting on that mistake
+        // erases a live user's garden and token on behalf of a dead
+        // account's leftover file.
+        let container = Self.makeContainer("deleteAccountForeign")
+        let defaults = Self.makeDefaults("deleteAccountForeign")
+        let tokenStore = InMemoryTokenStore("tok_b_live")
+        try Self.seedContainer(container)
+        try Self.cacheIdentity(defaults, userID: "u_b", householdID: Self.householdID)
+
+        let session = AccountDeletionMockURLProtocol.makeSession(
+            routes: [
+                "POST /api/account-deletion/receipts/lookup": Data(
+                    #"{"ok":true,"data":{"deleted":true,"deleted_at":1700000000100}}"#.utf8
+                )
+            ]
+        )
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+            bearerToken: "tok_b_live"
+        )
+        let harness = Self.makeHarness(client: client, container: container,
+                                       tokenStore: tokenStore, defaults: defaults,
+                                       userID: "u_b")
+        // Account A finished deleting on this device and left its record
+        // behind; B has signed in since.
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: "u_a_deleted", role: .soloOwner, phase: .deletingAccount,
+            deletionReceipt: "a-receipt-nonce", updatedAt: 1))
+
+        let outcome = try await harness.coordinator.recoverCommittedDeletions()
+
+        #expect(outcome == .idle)
+        #expect(tokenStore.load() == "tok_b_live", "B's session must survive A's leftover record")
+        #expect(harness.auth.loadCachedIdentity() != nil, "B's identity must survive")
+        // A's dead record may go; B's garden may not.
+        #expect(try harness.store.load(userID: "u_a_deleted") == nil)
+        let ctx = ModelContext(container)
+        #expect(!(try ctx.fetch(FetchDescriptor<LocalSeed>())).isEmpty,
+                "B's garden must be untouched")
+        #expect(!(try ctx.fetch(FetchDescriptor<LocalJournalEntry>())).isEmpty)
     }
 }
 

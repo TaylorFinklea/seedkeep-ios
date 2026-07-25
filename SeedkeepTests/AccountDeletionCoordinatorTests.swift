@@ -628,6 +628,7 @@ private final class Harness {
             server: server,
             session: AccountDeletionSession(
                 identity: { AccountDeletionSession.Identity(userID: userID, householdID: householdID) },
+                localStoreOwnerID: { userID },
                 signOut: { recorder.count += 1 }
             ),
             now: { nowMillis },
@@ -1676,7 +1677,7 @@ struct AccountDeletionCoordinatorTests {
             store: harness.store,
             cloudKit: harness.cloudKit,
             server: harness.server,
-            session: AccountDeletionSession(identity: { nil }, signOut: {}),
+            session: AccountDeletionSession(identity: { nil }, localStoreOwnerID: { nil }, signOut: {}),
             now: { 0 }
         )
 
@@ -1928,13 +1929,17 @@ struct AccountDeletionCoordinatorTests {
     /// A coordinator whose session is signed out, exactly as it is on the
     /// launch after a deletion cascaded the token.
     @MainActor
-    private func signedOutCoordinator(_ harness: Harness) -> AccountDeletionCoordinator {
+    private func signedOutCoordinator(
+        _ harness: Harness,
+        localStoreOwner: String? = nil
+    ) -> AccountDeletionCoordinator {
         AccountDeletionCoordinator(
             store: harness.store,
             cloudKit: harness.cloudKit,
             server: harness.server,
             session: AccountDeletionSession(
                 identity: { nil },
+                localStoreOwnerID: { localStoreOwner ?? harness.userID },
                 signOut: { [recorder = harness.signOut] in recorder.count += 1 }
             ),
             now: { 1_700_000_000_000 },
@@ -2054,20 +2059,108 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.signOut.count == 0)
     }
 
-    @Test("recovery finds a checkpoint belonging to an account it cannot name")
-    func recoveryEnumeratesForeignCheckpoints() async throws {
-        // The sweep runs before sign-in, so the only way it can find the
-        // record is by enumerating the store rather than asking for a user.
+    @Test("a stale deletion from account A never erases account B's device")
+    func foreignReceiptNeverErasesTheCurrentAccount() async throws {
+        // Account A was deleted on this device and its record was left
+        // behind (the sweep was offline, say). The user has since signed in
+        // as B, whose garden and token are on this device now. Confirming
+        // A's receipt proves A is gone — it proves nothing whatsoever about
+        // B, and signing out here would erase a live account's data on
+        // behalf of a dead one.
+        let harness = Harness(userID: "u_b")
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: "u_a_deleted", role: .soloOwner, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = signedOutCoordinator(harness, localStoreOwner: "u_b")
+
+        #expect(try await coordinator.recoverCommittedDeletions() == .idle)
+
+        #expect(harness.signOut.count == 0, "B's session and local garden must be untouched")
+        // A's record is dead metadata and may go; that is the only thing a
+        // foreign receipt licenses.
+        #expect(try harness.store.load(userID: "u_a_deleted") == nil)
+    }
+
+    @Test("the sweep still finds the record by enumeration, not by asking for a user")
+    func recoveryEnumeratesWithoutBeingToldTheUser() async throws {
+        // It runs before sign-in, so enumeration is the only way in — but
+        // it erases only when the record belongs to this store's owner.
         let harness = Harness(userID: "u_nobody")
         harness.server.committedReceiptForTesting(Harness.receiptNonce)
         try harness.store.save(AccountDeletionCheckpoint(
-            userID: "u_someone_else", role: .soloOwner, phase: .deletingAccount,
+            userID: "u_store_owner", role: .soloOwner, phase: .deletingAccount,
             deletionReceipt: Harness.receiptNonce, updatedAt: 1))
-        let coordinator = signedOutCoordinator(harness)
+        let coordinator = signedOutCoordinator(harness, localStoreOwner: "u_store_owner")
 
         #expect(try await coordinator.recoverCommittedDeletions() == .deleted)
-        #expect(try harness.store.load(userID: "u_someone_else") == nil)
+        #expect(try harness.store.load(userID: "u_store_owner") == nil)
         #expect(harness.signOut.count == 1)
+    }
+
+    @Test("an unknown local-store owner is never treated as a match")
+    func unknownStoreOwnerDoesNotErase() async throws {
+        // No cached identity means the app cannot say whose data this is.
+        // Leaving stale data behind is recoverable; erasing on a guess is
+        // not.
+        let harness = Harness()
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .noCloudKitGarden, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+        let coordinator = AccountDeletionCoordinator(
+            store: harness.store,
+            cloudKit: harness.cloudKit,
+            server: harness.server,
+            session: AccountDeletionSession(
+                identity: { nil },
+                localStoreOwnerID: { nil },
+                signOut: { [recorder = harness.signOut] in recorder.count += 1 }
+            ),
+            now: { 1_700_000_000_000 },
+            newReceipt: { Harness.receiptNonce })
+
+        #expect(try await coordinator.recoverCommittedDeletions() == .idle)
+        #expect(harness.signOut.count == 0)
+    }
+
+    // MARK: The delete-account button, as behaviour
+
+    @Test("the delete-account button reports success as no message")
+    func buttonReportsSuccess() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .noGarden
+
+        #expect(await harness.coordinator.deleteAccountForUser() == nil)
+        #expect(harness.signOut.count == 1)
+    }
+
+    @Test("the delete-account button refuses a shared owner with truthful copy")
+    func buttonRefusesSharedOwner() async throws {
+        // `start()` settles at waiting, which is NOT success — the button
+        // must never look like it deleted anything.
+        let harness = Harness()
+        harness.cloudKit.role = .sharedOwner(zoneID: ownerZone)
+        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph())
+
+        let message = try #require(await harness.coordinator.deleteAccountForUser())
+        #expect(message.contains("handed to someone else"))
+        #expect(harness.signOut.count == 0)
+        #expect(!harness.server.calls.contains(where: {
+            if case .deleteAccount = $0 { return true }
+            return false
+        }))
+    }
+
+    @Test("the delete-account button surfaces a failure instead of signing out")
+    func buttonSurfacesFailure() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .noGarden
+        harness.server.failures[.deleteAccount] = SeedkeepError(code: "server_error", message: "boom")
+
+        #expect(await harness.coordinator.deleteAccountForUser() != nil)
+        #expect(harness.signOut.count == 0)
+        #expect(harness.stored?.phase == .deletingAccount)
     }
 
 }

@@ -236,6 +236,33 @@ final class AccountDeletionCoordinator {
         return try await drive()
     }
 
+    /// The You ▸ Delete account button, as behaviour rather than as view
+    /// code. Returns `nil` when the account is gone, or user-facing copy
+    /// explaining why it is not.
+    ///
+    /// This lives here so it can be tested. A SwiftUI button body is not
+    /// reachable from a unit test, so anything decided inside one is
+    /// decided unobservably — and the last time this decision lived in the
+    /// view it hand-rolled a disposition, minted a receipt it immediately
+    /// threw away, and signed out on its own. The view is now a single call
+    /// to this method, and everything it can do is pinned by tests.
+    func deleteAccountForUser() async -> String? {
+        do {
+            guard try await start() == .deleted else {
+                // A shared owner needs a successor to take the garden
+                // first, and that flow has no surface yet. Say so rather
+                // than appearing to do nothing.
+                return """
+                Your iCloud garden has to be handed to someone else first, \
+                and this version can't do that yet.
+                """
+            }
+            return nil
+        } catch {
+            return humanizeError(error)
+        }
+    }
+
     /// Finish a deletion that already committed on the server but whose
     /// response never arrived. Call this at launch, BEFORE and INDEPENDENTLY
     /// of session restore.
@@ -257,7 +284,20 @@ final class AccountDeletionCoordinator {
     @discardableResult
     func recoverCommittedDeletions() async throws -> Outcome {
         try Task.checkCancellation()
-        var recovered = false
+        // Who owns the SwiftData store on this device RIGHT NOW. Erasing is
+        // scoped to them and nobody else.
+        //
+        // The sweep has to enumerate every checkpoint, because before sign-in
+        // it cannot know which one matters. But "this file's account is
+        // provably deleted" and "this device's data belongs to that account"
+        // are different claims, and only the second licenses destruction. A
+        // stale record from an account deleted on this device months ago
+        // would otherwise sign out — and wipe the garden of — whoever is
+        // signed in today. Confirming a foreign receipt retires that dead
+        // record and nothing else.
+        let localStoreOwner = session.localStoreOwnerID()
+        var ownDeletionConfirmed = false
+
         for candidate in store.allCheckpoints() {
             let checkpoint = candidate.checkpoint
             guard checkpoint.deletesOwnAccount,
@@ -270,9 +310,16 @@ final class AccountDeletionCoordinator {
             self.checkpoint = checkpoint
             lease = candidate.lease
             try? clear(userID: checkpoint.userID)
-            recovered = true
+            // A nil owner is NOT a match. The identity cache is the only
+            // record of who this store belongs to; without it, refusing to
+            // erase leaves stale data behind, which is the recoverable
+            // failure. Erasing on a guess is not.
+            if let localStoreOwner, checkpoint.userID == localStoreOwner {
+                ownDeletionConfirmed = true
+            }
         }
-        guard recovered else { return .idle }
+
+        guard ownDeletionConfirmed else { return .idle }
         handoff = nil
         pendingDestination = nil
         // Erases local data and returns the app to signed out. Safe to run
@@ -1029,6 +1076,18 @@ struct AccountDeletionSession {
 
     /// `nil` when nobody is signed in.
     var identity: @MainActor () -> Identity?
+
+    /// Who the locally cached data belongs to, whether or not there is a
+    /// live session — the app's own record of "the owner of the local
+    /// store".
+    ///
+    /// Separate from `identity` on purpose. The launch sweep runs before
+    /// sign-in, so `identity` is nil exactly when the question matters, and
+    /// answering it wrong in the permissive direction erases a live
+    /// account's garden on behalf of a dead one. `nil` here means unknown,
+    /// which is treated as "not a match" and never as "anyone".
+    var localStoreOwnerID: @MainActor () -> String?
+
     /// Clears the token, erases local data, and returns the app to signed
     /// out. Called exactly once, after the server confirms the account is
     /// gone.
@@ -1036,9 +1095,11 @@ struct AccountDeletionSession {
 
     init(
         identity: @escaping @MainActor () -> Identity?,
+        localStoreOwnerID: @escaping @MainActor () -> String?,
         signOut: @escaping @MainActor () async -> Void
     ) {
         self.identity = identity
+        self.localStoreOwnerID = localStoreOwnerID
         self.signOut = signOut
     }
 }

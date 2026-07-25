@@ -353,6 +353,11 @@ public final class AppEnvironment {
                     guard let self, case .signedIn(let user, let household) = self.auth.state else { return nil }
                     return .init(userID: user.id, householdID: household.id)
                 },
+                // The cached identity is the app's own record of who owns
+                // the local SwiftData store, and it survives a session the
+                // server has already destroyed — which is exactly the state
+                // the launch sweep runs in.
+                localStoreOwnerID: { [weak self] in self?.auth.loadCachedIdentity()?.user.id },
                 signOut: { [weak self] in await self?.auth.signOut() }
             )
         )
