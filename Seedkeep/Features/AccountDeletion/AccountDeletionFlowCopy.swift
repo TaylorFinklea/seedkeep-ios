@@ -80,6 +80,11 @@ enum AccountDeletionFlowCopy {
             return "Your copy is checked. Waiting for their device to check it too."
         case (.successor, .destinationReady):
             return "Waiting for the current owner to copy their garden across."
+        case (.successor, .verified):
+            return """
+            Both copies match. The owner can still cancel until they delete the original — \
+            waiting for that before this garden is permanently yours.
+            """
         default:
             return nil
         }
@@ -114,6 +119,7 @@ enum AccountDeletionFlowCopy {
             return [PlannedStep(id: "destination", title: "Preparing your garden"),
                     PlannedStep(id: "receive", title: "Receiving the garden"),
                     PlannedStep(id: "verify", title: "Checking the copy"),
+                    PlannedStep(id: "confirm", title: "Confirming the handoff"),
                     PlannedStep(id: "adopt", title: "Making it yours")]
         }
     }
@@ -162,9 +168,15 @@ enum AccountDeletionFlowCopy {
             case .successorBound, .destinationZoneCreated: return 0
             case .destinationReady: return 1
             case .ownerVerified: return 2
-            // Server-verified is not the same as this device owning it.
-            // The garden is only "yours" once the app has been cut over.
-            case .verified, .sourceDeleted, .successorAdopting: return 3
+            // Digests matching is not the fence — the owner may still
+            // cancel until they take the source-deletion lease. This step
+            // says exactly that rather than looking identical to "done".
+            case .verified: return 3
+            // Cancellation is fenced from here on: the lease itself
+            // (`.sourceZoneDeleting`), or the source already gone
+            // (`.sourceDeleted`), or this device actively finishing the
+            // local cutover (`.successorAdopting`).
+            case .sourceZoneDeleting, .sourceDeleted, .successorAdopting: return 4
             default: return nil
             }
         }

@@ -419,7 +419,7 @@ private let reachablePhases: [AccountDeletionCheckpoint.Role: Set<AccountDeletio
                    .destinationShareAccepted, .copyComplete, .ownerVerified, .verified,
                    .sourceZoneDeleting, .sourceZoneDeleted, .sourceDeleted, .deletingAccount],
     .successor: [.successorBound, .destinationZoneCreated, .destinationReady,
-                 .ownerVerified, .verified, .sourceDeleted, .successorAdopting],
+                 .ownerVerified, .verified, .sourceZoneDeleting, .sourceDeleted, .successorAdopting],
 ]
 
 // MARK: - Copy
@@ -1113,7 +1113,7 @@ struct AccountDeletionFlowModelTests {
         }
     }
 
-    @Test("a successor mid-verification also resumes from disk alone")
+    @Test("a successor mid-verification reaches verified and waits — it does not complete")
     func successorResumesVerificationFromDiskAlone() async throws {
         let harness = Harness(userID: "u_succ")
         harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
@@ -1130,7 +1130,9 @@ struct AccountDeletionFlowModelTests {
 
         #expect(!harness.server.inspected, "resuming must never re-present a spent token")
         #expect(harness.server.calls.contains(.putSuccessorVerification("tr_1")))
-        #expect(harness.model.stage == .handoffComplete)
+        #expect(harness.model.stage == .waiting(.verified),
+                "verified alone must never read as complete — the owner can still cancel")
+        #expect(harness.adoption.householdIDs.isEmpty)
     }
 
     @Test("check again is offered only while waiting on the other device")
@@ -1159,14 +1161,15 @@ struct AccountDeletionFlowModelTests {
 
     // MARK: Successor cutover
 
-    @Test("the garden is only called yours after this device has actually adopted it")
+    @Test("the garden is only called yours once cancellation is fenced, never at verified alone")
     func successorAdoptsBeforeClaimingCompletion() async throws {
+        // `.verified` on its own is not the fence — the owner can still
+        // legally cancel until they take the source-deletion lease. Only
+        // once the durable phase is `.sourceDeleting` or `.sourceDeleted`
+        // may this device adopt and report the handoff complete.
         let harness = Harness(userID: "u_succ")
-        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
-        harness.server.seedRow(phase: .ownerVerified, destination: true)
-        harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
-                              records: gardenGraph(in: destinationZoneFromSuccessor))
-        try harness.seedCheckpoint(role: .successor, phase: .ownerVerified,
+        harness.server.seedRow(phase: .sourceDeleting, destination: true)
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
                                    sourceZone: sharedSourceZone,
                                    destinationZone: destinationZoneFromSuccessor)
 
@@ -1178,14 +1181,49 @@ struct AccountDeletionFlowModelTests {
         #expect(harness.stored == nil)
     }
 
+    @Test("verified alone never adopts, even on a fresh resume")
+    func verifiedAloneNeverAdopts() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.server.seedRow(phase: .verified, destination: true)
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
+                                   sourceZone: sharedSourceZone,
+                                   destinationZone: destinationZoneFromSuccessor)
+
+        await harness.model.prepare()
+
+        #expect(harness.model.stage == .waiting(.verified))
+        #expect(harness.adoption.householdIDs.isEmpty)
+        #expect(harness.stored?.phase == .verified)
+    }
+
+    @Test("a transfer the owner cancels while verified is never adopted by the successor")
+    func cancelledVerifiedTransferIsNeverAdopted() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.server.seedRow(phase: .verified, destination: true)
+        harness.server.row = AccountDeletionTransferDTO(
+            id: "tr_1", source_household_id: ownerHouseholdID, owner_user_id: "u_owner",
+            successor_user_id: "u_succ", phase: .cancelled, handoff_expires_at: harness.server.expiresAt,
+            handoff_consumed_at: nil, destination_zone_name: ownerZone.zoneName,
+            destination_zone_owner_name: successorRecordName,
+            destination_share_record_name: CKRecordNameZoneWideShare,
+            destination_share_url: destinationShareURL.absoluteString,
+            owner_digest: nil, successor_digest: nil, created_at: 1, updated_at: 2, cancelled_at: 2)
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
+                                   sourceZone: sharedSourceZone,
+                                   destinationZone: destinationZoneFromSuccessor)
+
+        await harness.model.prepare()
+
+        #expect(harness.adoption.householdIDs.isEmpty, "a withdrawn transfer must never be adopted")
+        #expect(harness.model.stage != .handoffComplete)
+        #expect(harness.stored == nil, "nothing is left to resume once withdrawn")
+    }
+
     @Test("a cutover that fails keeps the handoff resumable and never claims completion")
     func failedAdoptionStaysResumable() async throws {
         let harness = Harness(userID: "u_succ")
-        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
-        harness.server.seedRow(phase: .ownerVerified, destination: true)
-        harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
-                              records: gardenGraph(in: destinationZoneFromSuccessor))
-        try harness.seedCheckpoint(role: .successor, phase: .ownerVerified,
+        harness.server.seedRow(phase: .sourceDeleting, destination: true)
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
                                    sourceZone: sharedSourceZone,
                                    destinationZone: destinationZoneFromSuccessor)
         harness.adoption.error = SeedkeepError(code: "server_error", message: "offline")

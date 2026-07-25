@@ -593,11 +593,24 @@ final class AccountDeletionCoordinator {
         case (.successor, .ownerVerified):
             return try await postSuccessorVerification(current)
 
-        case (.successor, .verified), (.successor, .sourceDeleted):
-            // Both digests matched server-side. The garden is not actually
-            // theirs until this device stops pointing at the departing
-            // owner's shared zone, and the owner is about to delete it —
-            // so the debt is written down before it is paid.
+        case (.successor, .verified):
+            // Both digests matched, but the digest match is not what
+            // fences cancellation — the owner may still legally withdraw
+            // a `verified` transfer right up until they take the
+            // source-deletion lease (only `.sourceZoneDeleting` and later
+            // count as `Phase.sourceIsGone`). Adopting here, or even just
+            // reporting completion, would be a claim the owner could still
+            // retract a moment later. Re-read and wait; the successor has
+            // nothing to DO until the owner moves this forward.
+            let transferID = try transferID(current)
+            return try follow(current, try await server.transfer(id: transferID))
+
+        case (.successor, .sourceZoneDeleting), (.successor, .sourceDeleted):
+            // Cancellation is fenced from here on — the lease
+            // (`.sourceZoneDeleting`) permanently forbids it, and
+            // `.sourceDeleted` is further still. The garden is
+            // irreversibly this device's now, so the debt to actually
+            // adopt it locally is written down before it is paid.
             try advance(current, to: .successorAdopting)
             return .again
 
@@ -862,9 +875,12 @@ final class AccountDeletionCoordinator {
             id: transferID, digest: digest,
             destinationZoneName: zoneName,
             destinationZoneOwnerName: ownerRecordName)
-        guard transfer.phase == .verified else { return try follow(current, transfer) }
-        try advance(current, to: .successorAdopting)
-        return .again
+        // No special-casing `.verified` here: `follow` persists whatever
+        // phase the server actually holds, and `(.successor, .verified)`
+        // itself decides whether to wait or proceed — the SAME rule
+        // whether this device just posted the second digest or is
+        // resuming after a relaunch.
+        return try follow(current, transfer)
     }
 
     // MARK: - The last step
@@ -1023,7 +1039,12 @@ final class AccountDeletionCoordinator {
         case (.sharedOwner, .transferPending),      // nobody has opened the link
              (.sharedOwner, .successorBound),       // no destination published yet
              (.sharedOwner, .ownerVerified),        // successor has not verified
-             (.successor, .destinationReady):       // owner has not copied yet
+             (.successor, .destinationReady),       // owner has not copied yet
+             // Both digests matched, but cancellation is not fenced until
+             // the owner takes the source-deletion lease
+             // (`.sourceZoneDeleting`) — this device has nothing to DO
+             // before then.
+             (.successor, .verified):
             return true
         default:
             return false

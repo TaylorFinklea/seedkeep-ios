@@ -1450,8 +1450,12 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.stored == nil)
     }
 
-    @Test("successor: resume digests the destination and posts verification once the owner has")
+    @Test("successor: posting the second digest reaches verified, and waits there for the lease")
     func successorVerifiesAfterOwner() async throws {
+        // Both digests now match server-side — but the OWNER may still
+        // legally cancel a `verified` transfer right up until they take
+        // the source-deletion lease. `verified` alone must never read as
+        // done: this device settles into waiting, not completion.
         let harness = Harness(userID: "u_succ", householdID: "hh_succ")
         let digest = try gardenDigest(in: destinationZoneFromSuccessor)
         harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
@@ -1464,7 +1468,7 @@ struct AccountDeletionCoordinatorTests {
 
         let outcome = try await harness.coordinator.resume()
 
-        #expect(outcome == .handoffComplete)
+        #expect(outcome == .waiting(.verified))
         #expect(harness.server.calls == [
             .transfer("tr_1"),
             .putSuccessorVerification(id: "tr_1", digest: digest.sha256, counts: digest.counts,
@@ -1472,10 +1476,84 @@ struct AccountDeletionCoordinatorTests {
                                       ownerName: successorRecordName),
         ])
         #expect(harness.server.row?.phase == .verified)
-        #expect(harness.stored == nil)
-        // The successor is finishing somebody else's handoff.
+        #expect(harness.stored?.phase == .verified, "the flow stays resumable — nothing was adopted yet")
+        #expect(harness.adoption.householdIDs.isEmpty, "adoption must not run before cancellation is fenced")
         #expect(harness.signOut.count == 0)
     }
+
+    @Test("successor: verified is re-read on every resume, never assumed durable")
+    func successorResumesAtVerifiedKeepsWaiting() async throws {
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        harness.server.seedRow(phase: .verified, destination: true)
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
+                                   sourceZone: ownerZone,
+                                   destinationZone: destinationZoneFromSuccessor,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        let outcome = try await harness.coordinator.resume()
+
+        #expect(outcome == .waiting(.verified))
+        #expect(harness.server.calls == [.transfer("tr_1")])
+        #expect(harness.adoption.householdIDs.isEmpty)
+        #expect(harness.stored?.phase == .verified)
+    }
+
+    @Test("successor: once the owner takes the deletion lease, cancellation is fenced and adoption proceeds")
+    func successorAdoptsOnceLeaseIsTaken() async throws {
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        harness.server.seedRow(phase: .sourceDeleting, destination: true)
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
+                                   sourceZone: ownerZone,
+                                   destinationZone: destinationZoneFromSuccessor,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        let outcome = try await harness.coordinator.resume()
+
+        #expect(outcome == .handoffComplete)
+        #expect(harness.adoption.householdIDs == [ownerHouseholdID])
+        #expect(harness.stored == nil)
+        #expect(harness.signOut.count == 0, "the successor's OWN account is untouched")
+    }
+
+    @Test("successor: the source already deleted is just as fenced as the lease itself")
+    func successorAdoptsWhenSourceAlreadyDeleted() async throws {
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        harness.server.seedRow(phase: .sourceDeleted, destination: true)
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
+                                   sourceZone: ownerZone,
+                                   destinationZone: destinationZoneFromSuccessor,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        let outcome = try await harness.coordinator.resume()
+
+        #expect(outcome == .handoffComplete)
+        #expect(harness.adoption.householdIDs == [ownerHouseholdID])
+        #expect(harness.stored == nil)
+    }
+
+    @Test("successor: a transfer the owner cancels while verified never adopts, and the checkpoint clears")
+    func successorNeverAdoptsAWithdrawnTransfer() async throws {
+        // The race this whole fence exists for: digests matched, but the
+        // owner's device cancels before taking the lease. Verification's
+        // re-home is reverted server-side (`account-deletion-transfers.ts`
+        // cancel route), so this device must never have claimed the
+        // garden — and here it never even reached the point of trying.
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        harness.server.seedRow(phase: .verified, destination: true)
+        _ = try await harness.server.cancelTransfer(id: "tr_1")
+        try harness.seedCheckpoint(role: .successor, phase: .verified,
+                                   sourceZone: ownerZone,
+                                   destinationZone: destinationZoneFromSuccessor,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        let outcome = try await harness.coordinator.resume()
+
+        #expect(outcome == .idle)
+        #expect(harness.adoption.householdIDs.isEmpty, "a withdrawn transfer must never be adopted")
+        #expect(harness.stored == nil, "nothing is left to resume once withdrawn")
+        #expect(harness.signOut.count == 0, "the successor's own account is untouched either way")
+    }
+
 
     @Test("successor: waits while the owner is still copying")
     func successorWaitsForOwner() async throws {
