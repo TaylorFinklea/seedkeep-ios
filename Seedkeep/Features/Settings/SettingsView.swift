@@ -287,7 +287,7 @@ struct SettingsContent: View {
                                 }
                             }
                             Button(role: .destructive) {
-                                Task { await appEnv.leaveSharedHousehold() }
+                                Task { await appEnv.leaveSharedHouseholdSurfacingErrors() }
                             } label: {
                                 Label("Leave shared garden", systemImage: "rectangle.portrait.and.arrow.right")
                             }

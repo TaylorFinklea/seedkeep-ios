@@ -122,10 +122,35 @@ protocol AccountDeletionServerOperating {
         destinationZoneName: String,
         destinationZoneOwnerName: String
     ) async throws -> AccountDeletionTransferDTO
+    /// `POST /transfers/:id/source-deleting` — acquire the exclusive
+    /// source-deletion lease. The server CAS-moves `verified` →
+    /// `source_deleting`, revalidates that the successor still owns the
+    /// re-homed household, and permanently closes cancellation. Nothing
+    /// may delete the source zone without holding this.
+    func acquireSourceDeletionLease(id: String) async throws -> AccountDeletionTransferDTO
     func markSourceDeleted(id: String) async throws -> AccountDeletionTransferDTO
     func cancelTransfer(id: String) async throws -> AccountDeletionTransferDTO
+
+    /// `POST /transfers/:id/inspect` — read a handoff WITHOUT consuming
+    /// its single-use token or binding a successor, so a device can check
+    /// it is looking at the right garden before spending the one chance
+    /// the rightful participant has.
+    func inspectHandoff(id: String, token: String) async throws -> AccountDeletionHandoffInspection
+
+    /// `POST /transfers/:id/handoff-token` — mint a replacement link for a
+    /// transfer still waiting on a successor. The raw token exists only in
+    /// memory, so a relaunch has no way to re-present the old one.
+    func rotateHandoffToken(id: String) async throws -> WireResponses.AccountDeletionTransferOne
+
     /// `DELETE /api/me`. The last irreversible step of every flow.
-    func deleteAccount(disposition: AccountDeletionDisposition) async throws -> Bool
+    /// `receiptHash` is the SHA-256 of a nonce the caller persisted first;
+    /// the server writes a receipt row inside the deletion transaction.
+    func deleteAccount(disposition: AccountDeletionDisposition, receiptHash: String) async throws -> Bool
+
+    /// `POST /receipts/lookup`, unauthenticated. `nil` means no receipt —
+    /// the deletion did not commit. Any other failure throws; a missing
+    /// receipt and an unreachable server must never look alike.
+    func deletionReceipt(token: String) async throws -> AccountDeletionReceiptDTO?
 }
 
 /// Thin pass-through to `SeedkeepClient`. Holds no state and makes no
@@ -175,6 +200,10 @@ struct LiveAccountDeletionServer: AccountDeletionServerOperating {
             destinationZoneOwnerName: destinationZoneOwnerName)
     }
 
+    func acquireSourceDeletionLease(id: String) async throws -> AccountDeletionTransferDTO {
+        try await client.acquireAccountDeletionTransferSourceDeleting(id: id)
+    }
+
     func markSourceDeleted(id: String) async throws -> AccountDeletionTransferDTO {
         try await client.markAccountDeletionTransferSourceDeleted(id: id)
     }
@@ -183,295 +212,27 @@ struct LiveAccountDeletionServer: AccountDeletionServerOperating {
         try await client.cancelAccountDeletionTransfer(id: id)
     }
 
-    func deleteAccount(disposition: AccountDeletionDisposition) async throws -> Bool {
-        try await client.deleteAccount(disposition: disposition)
-    }
-}
-
-// MARK: - Live CloudKit
-
-/// The real CloudKit implementation.
-///
-/// Its one non-obvious job is telling absence apart from failure. CloudKit
-/// reports a missing zone three different ways depending on how it went
-/// missing (`unknownItem`, `zoneNotFound`, `userDeletedZone`) and wraps any
-/// of them in a `partialFailure` when the operation was a batch. Everything
-/// else — a network drop, a throttle, a permission error — must NOT read as
-/// "already deleted", because the caller uses that answer to authorise
-/// erasing the account that owns the garden.
-@MainActor
-struct LiveAccountDeletionCloudKit: AccountDeletionCloudKitOperating {
-
-    enum OperationFailure: Error, CustomStringConvertible {
-        case destinationShareHasNoURL
-        var description: String {
-            switch self {
-            case .destinationShareHasNoURL:
-                return "the destination share could not produce a link"
-            }
-        }
+    func inspectHandoff(id: String, token: String) async throws -> AccountDeletionHandoffInspection {
+        try await client.inspectAccountDeletionTransfer(id: id, token: token)
     }
 
-    private let containerID: String
-    private let container: CKContainer
-    private let isEnabled: @MainActor () -> Bool
-    private let participantZoneID: @MainActor () -> CKRecordZone.ID?
-    private let ownedHouseholdID: @MainActor () -> String?
-    private let rebuildOwnGardenScope: @MainActor () async -> Void
-
-    init(
-        containerIdentifier: String = "iCloud.app.seedkeep",
-        isEnabled: @escaping @MainActor () -> Bool,
-        participantZoneID: @escaping @MainActor () -> CKRecordZone.ID?,
-        ownedHouseholdID: @escaping @MainActor () -> String?,
-        rebuildOwnGardenScope: @escaping @MainActor () async -> Void
-    ) {
-        self.containerID = containerIdentifier
-        self.container = CKContainer(identifier: containerIdentifier)
-        self.isEnabled = isEnabled
-        self.participantZoneID = participantZoneID
-        self.ownedHouseholdID = ownedHouseholdID
-        self.rebuildOwnGardenScope = rebuildOwnGardenScope
+    func rotateHandoffToken(id: String) async throws -> WireResponses.AccountDeletionTransferOne {
+        try await client.rotateAccountDeletionHandoffToken(id: id)
     }
 
-    // MARK: Role
+    func deleteAccount(disposition: AccountDeletionDisposition, receiptHash: String) async throws -> Bool {
+        try await client.deleteAccount(disposition: disposition, deletionReceiptHash: receiptHash)
+    }
 
-    func currentRole() async throws -> AccountDeletionCloudKitRole {
-        guard isEnabled() else { return .noGarden }
-        // Participant first: a device that adopted somebody else's garden
-        // must never be mistaken for the owner of a zone it merely reads.
-        if let zoneID = participantZoneID() { return .participant(sharedZoneID: zoneID) }
-        guard let householdID = ownedHouseholdID() else { return .noGarden }
-
-        let zoneID = CKRecordZone.ID(zoneName: SeedkeepZoneProvisioner.zoneName(householdID: householdID),
-                                     ownerName: CKCurrentUserDefaultName)
+    func deletionReceipt(token: String) async throws -> AccountDeletionReceiptDTO? {
         do {
-            _ = try await container.privateCloudDatabase.recordZone(for: zoneID)
-        } catch let error where Self.meansAbsent(error) {
-            return .noGarden
-        }
-
-        // Only an ACCEPTED participant makes this a shared garden. A
-        // dangling invitation nobody took up leaves nothing behind when the
-        // zone goes, so it must not force the whole transfer flow on a user
-        // who is really deleting a solo garden.
-        let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID)
-        let share: CKShare?
-        do {
-            share = try await container.privateCloudDatabase.record(for: shareID) as? CKShare
-        } catch let error where Self.meansAbsent(error) {
-            share = nil
-        }
-        let others = share?.participants.filter {
-            $0.role != .owner && $0.acceptanceStatus == .accepted
-        } ?? []
-        return others.isEmpty ? .soloOwner(zoneID: zoneID) : .sharedOwner(zoneID: zoneID)
-    }
-
-    // MARK: Participant
-
-    func leaveSharedGarden(zoneID: CKRecordZone.ID) async throws {
-        // A participant leaves by deleting the share record out of THEIR
-        // shared database; CloudKit drops them from the share and the zone
-        // stops being visible. Idempotent, because a retry after a partial
-        // failure finds it already gone.
-        let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID)
-        do {
-            _ = try await container.sharedCloudDatabase.modifyRecords(saving: [], deleting: [shareID])
-        } catch let error where Self.meansAbsent(error) {
-            // Already left.
-        }
-        // Clearing the participant marker and rebuilding the user's own
-        // garden scope is app state, not CloudKit state, but it belongs to
-        // the same step: a device that left the share while still marked as
-        // a participant would relaunch pointed at a zone it can no longer
-        // read.
-        await rebuildOwnGardenScope()
-    }
-
-    func sharedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool {
-        try await zoneIsAbsent(zoneID, in: container.sharedCloudDatabase)
-    }
-
-    // MARK: Owner
-
-    func deleteOwnedZone(zoneID: CKRecordZone.ID) async throws {
-        do {
-            _ = try await container.privateCloudDatabase.modifyRecordZones(saving: [], deleting: [zoneID])
-        } catch let error where Self.meansAbsent(error) {
-            // A retry after a delete that actually landed.
-        }
-    }
-
-    func ownedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool {
-        try await zoneIsAbsent(zoneID, in: container.privateCloudDatabase)
-    }
-
-    private func zoneIsAbsent(_ zoneID: CKRecordZone.ID, in database: CKDatabase) async throws -> Bool {
-        do {
-            _ = try await database.recordZone(for: zoneID)
-            return false
-        } catch let error where Self.meansAbsent(error) {
-            return true
-        }
-    }
-
-    // MARK: Records
-
-    func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> [CKRecord] {
-        let database = database(for: zoneID)
-        var collected: [CKRecord] = []
-        var token: CKServerChangeToken?
-        // A nil token asks for the zone's entire contents; the loop exists
-        // only because CloudKit pages large zones.
-        while true {
-            let page = try await Self.fetchPage(database: database, zoneID: zoneID, token: token)
-            collected.append(contentsOf: page.records)
-            token = page.token
-            guard page.moreComing else { break }
-        }
-        return collected
-    }
-
-    private struct Page {
-        var records: [CKRecord]
-        var token: CKServerChangeToken?
-        var moreComing: Bool
-    }
-
-    private static func fetchPage(
-        database: CKDatabase,
-        zoneID: CKRecordZone.ID,
-        token: CKServerChangeToken?
-    ) async throws -> Page {
-        try await withCheckedThrowingContinuation { continuation in
-            let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
-            configuration.previousServerChangeToken = token
-            let operation = CKFetchRecordZoneChangesOperation(
-                recordZoneIDs: [zoneID], configurationsByRecordZoneID: [zoneID: configuration])
-            operation.fetchAllChanges = false
-            var page = Page(records: [], token: token, moreComing: false)
-            operation.recordWasChangedBlock = { _, result in
-                if case .success(let record) = result { page.records.append(record) }
-            }
-            operation.recordZoneChangeTokensUpdatedBlock = { _, newToken, _ in
-                page.token = newToken
-            }
-            operation.recordZoneFetchResultBlock = { _, result in
-                switch result {
-                case .success(let (newToken, _, moreComing)):
-                    page.token = newToken
-                    page.moreComing = moreComing
-                case .failure:
-                    break   // reported by fetchRecordZoneChangesResultBlock
-                }
-            }
-            operation.fetchRecordZoneChangesResultBlock = { result in
-                switch result {
-                case .success: continuation.resume(returning: page)
-                case .failure(let error): continuation.resume(throwing: error)
-                }
-            }
-            database.add(operation)
-        }
-    }
-
-    /// CloudKit refuses oversized modify operations, and a cascade
-    /// generation can be arbitrarily large. Chunking inside one generation
-    /// is safe: records in the same generation never depend on each other.
-    private static let saveChunkSize = 300
-
-    func saveRecords(
-        _ records: [CKRecord],
-        policy: CKModifyRecordsOperation.RecordSavePolicy,
-        in zoneID: CKRecordZone.ID
-    ) async throws {
-        let database = database(for: zoneID)
-        var index = 0
-        while index < records.count {
-            let chunk = Array(records[index..<min(index + Self.saveChunkSize, records.count)])
-            try await Self.save(chunk, policy: policy, to: database)
-            index += chunk.count
-        }
-    }
-
-    private static func save(
-        _ records: [CKRecord],
-        policy: CKModifyRecordsOperation.RecordSavePolicy,
-        to database: CKDatabase
-    ) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
-            operation.savePolicy = policy
-            // All-or-nothing: a half-saved generation would let the next one
-            // reference records that are not there.
-            operation.isAtomic = true
-            operation.modifyRecordsResultBlock = { result in
-                switch result {
-                case .success: continuation.resume()
-                case .failure(let error): continuation.resume(throwing: error)
-                }
-            }
-            database.add(operation)
-        }
-    }
-
-    // MARK: Shares
-
-    func acceptShare(at url: URL) async throws -> CKRecordZone.ID {
-        let flow = SeedkeepShareFlow(containerIdentifier: containerID)
-        let metadata = try await flow.fetchMetadata(url: url)
-        return try await flow.acceptZoneWideShare(metadata)
-    }
-
-    func createDestination(householdID: String, title: String) async throws -> AccountDeletionDestination {
-        let provisioner = SeedkeepZoneProvisioner(containerIdentifier: containerID)
-        let zone = try await provisioner.ensureZone(householdID: householdID)
-        // The root has to exist before the zone can be shared; the copy
-        // overwrites it moments later under an all-keys policy.
-        _ = try await provisioner.ensureHousehold(householdID: householdID, name: title)
-
-        let flow = SeedkeepShareFlow(containerIdentifier: containerID)
-        let share = try await flow.makeOrFetchZoneWideShare(householdID: householdID, title: title)
-        if share.publicPermission != .readWrite {
-            // The departing owner has to gain write access without the
-            // successor knowing their Apple ID, so the share is joinable by
-            // link. The link is a capability, and it only ever travels
-            // inside the authenticated transfer row, readable by the two
-            // bound parties.
-            share.publicPermission = .readWrite
-            _ = try await container.privateCloudDatabase.modifyRecords(saving: [share], deleting: [])
-        }
-        guard let url = share.url else { throw OperationFailure.destinationShareHasNoURL }
-
-        return AccountDeletionDestination(
-            zoneID: zone.zoneID,
-            ownerRecordName: try await container.userRecordID().recordName,
-            shareRecordName: share.recordID.recordName,
-            shareURL: url)
-    }
-
-    // MARK: Plumbing
-
-    private func database(for zoneID: CKRecordZone.ID) -> CKDatabase {
-        zoneID.ownerName == CKCurrentUserDefaultName
-            ? container.privateCloudDatabase
-            : container.sharedCloudDatabase
-    }
-
-    /// The three ways CloudKit says "that zone or record is not there", and
-    /// nothing else. `partialFailure` is unwrapped because a batch
-    /// operation buries the real code one level down.
-    static func meansAbsent(_ error: Error) -> Bool {
-        guard let ckError = error as? CKError else { return false }
-        switch ckError.code {
-        case .unknownItem, .zoneNotFound, .userDeletedZone:
-            return true
-        case .partialFailure:
-            let partials = ckError.partialErrorsByItemID?.values ?? [:].values
-            return !partials.isEmpty && partials.allSatisfy { meansAbsent($0) }
-        default:
-            return false
+            return try await client.lookupAccountDeletionReceipt(token: token)
+        } catch let error as SeedkeepError where error.code == "receipt_not_found" {
+            // A definitive "no such receipt": the deletion did not commit.
+            // Only this one code may be flattened to nil — a transport
+            // failure has to stay an error, or a network blip would read
+            // as proof the account survived.
+            return nil
         }
     }
 }

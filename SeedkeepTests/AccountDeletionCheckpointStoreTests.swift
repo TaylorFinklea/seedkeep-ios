@@ -683,6 +683,8 @@ struct AccountDeletionCheckpointStoreTests {
             (.destinationReady, .destinationReady),
             (.ownerVerified, .ownerVerified),
             (.verified, .verified),
+            // The owner's exclusive lease to destroy the source zone.
+            (.sourceDeleting, .sourceZoneDeleting),
             (.sourceDeleted, .sourceDeleted),
             // A cancelled transfer has no resumable step: the checkpoint
             // is removed, not rewritten.
@@ -709,7 +711,13 @@ struct AccountDeletionCheckpointStoreTests {
             (.copyComplete, .destinationReady),
             (.ownerVerified, .ownerVerified),
             (.verified, .verified),
-            (.sourceZoneDeleted, .verified),
+            // Both sit inside the lease: from `.sourceZoneDeleting` the
+            // server has already committed and closed cancellation, and by
+            // `.sourceZoneDeleted` the zone is actually gone. Reporting
+            // `.verified` for either would tell a resumed flow the source
+            // is still safely cancellable when it is not.
+            (.sourceZoneDeleting, .sourceDeleting),
+            (.sourceZoneDeleted, .sourceDeleting),
             (.sourceDeleted, .sourceDeleted),
             (.deletingAccount, nil),
         ]

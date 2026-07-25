@@ -6,8 +6,7 @@ import SeedkeepKit
 
 /// E2E integration tests for the account-deletion flow (M5, YouView sequence).
 ///
-/// The production sequence (YouView) is:
-///   1. `_ = try await client.deleteAccount(disposition: .noCloudKitGarden)`  → DELETE /api/me
+///   1. `deleteAccount(disposition:deletionReceiptHash:)` → DELETE /api/me
 ///   2. `await auth.signOut()` (only on success)
 ///
 /// The eraser is wired as in AppEnvironment.live(): `auth.wireLocalDataEraser`
@@ -17,6 +16,7 @@ import SeedkeepKit
 struct AccountDeletionFlowTests {
 
     private static let householdID = "hh_del"
+    private static let deletionReceiptHash = String(repeating: "d", count: 64)
 
     private static func makeContainer(_ name: String) -> ModelContainer {
         makeTestContainer(name: name)
@@ -111,10 +111,20 @@ struct AccountDeletionFlowTests {
         }
 
         // Replicate the YouView sequence exactly.
-        let deleted = try await client.deleteAccount(disposition: .noCloudKitGarden)
+        let deleted = try await client.deleteAccount(
+            disposition: .noCloudKitGarden,
+            deletionReceiptHash: Self.deletionReceiptHash
+        )
         await auth.signOut()
 
         #expect(deleted == true, "deleteAccount() must return true on ok:true response")
+        let requestBody = try #require(AccountDeletionMockURLProtocol.lastBody())
+        let body = try #require(
+            JSONSerialization.jsonObject(with: requestBody) as? [String: Any]
+        )
+        #expect(Set(body.keys) == ["cloudkit_disposition", "deletion_receipt_hash"])
+        #expect(body["cloudkit_disposition"] as? String == "no_cloudkit_garden")
+        #expect(body["deletion_receipt_hash"] as? String == Self.deletionReceiptHash)
         #expect(tokenStore.load() == nil, "signOut must clear the keychain token")
         #expect(auth.loadCachedIdentity() == nil, "signOut must clear the cached identity")
         guard case .signedOut = auth.state else {
@@ -165,7 +175,10 @@ struct AccountDeletionFlowTests {
         // Replicate YouView's catch branch: deleteAccount throws → signOut NOT called.
         var threwError = false
         do {
-            _ = try await client.deleteAccount(disposition: .noCloudKitGarden)
+            _ = try await client.deleteAccount(
+                disposition: .noCloudKitGarden,
+                deletionReceiptHash: Self.deletionReceiptHash
+            )
         } catch {
             threwError = true
             // signOut() is intentionally NOT called here — mirroring YouView's catch branch.
@@ -218,6 +231,7 @@ private func countRows<T: PersistentModel>(of type: T.Type, in context: ModelCon
 /// stubbed with different methods independently.
 final class AccountDeletionMockURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var routes: [String: Data] = [:]
+    nonisolated(unsafe) static var capturedBody: Data?
     nonisolated(unsafe) static var fallbackStatus: Int = 200
     nonisolated(unsafe) static var fallbackBody: Data = Data(
         #"{"ok":false,"error":{"code":"not_found","message":"unstubbed"}}"#.utf8
@@ -231,10 +245,32 @@ final class AccountDeletionMockURLProtocol: URLProtocol, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         Self.routes = routes
+        Self.capturedBody = nil
         Self.fallbackStatus = fallbackStatus
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [AccountDeletionMockURLProtocol.self]
         return URLSession(configuration: config)
+    }
+
+    static func lastBody() -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedBody
+    }
+
+    private static func drainBody(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -245,6 +281,7 @@ final class AccountDeletionMockURLProtocol: URLProtocol, @unchecked Sendable {
         let path = request.url?.path ?? ""
         let method = request.httpMethod ?? "GET"
         let key = "\(method) \(path)"
+        Self.capturedBody = Self.drainBody(request)
         let body = Self.routes[key] ?? Self.routes[path] ?? Self.fallbackBody
         let status = Self.routes[key] != nil || Self.routes[path] != nil ? 200 : Self.fallbackStatus
         Self.lock.unlock()

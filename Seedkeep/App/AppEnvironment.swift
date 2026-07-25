@@ -328,7 +328,12 @@ public final class AppEnvironment {
         let coordinator = AccountDeletionCoordinator(
             store: AccountDeletionCheckpointStore(),
             cloudKit: LiveAccountDeletionCloudKit(
-                isEnabled: { FeatureFlags.cloudKitHouseholdSyncEnabled },
+                // NOTE: no feature-flag gate. Whether the app is currently
+                // syncing to CloudKit says nothing about whether a zone or
+                // an accepted share exists in the account — the kill switch,
+                // a reinstall, or a second device all break that inference,
+                // and getting it wrong deletes the account while the garden
+                // lives on. Role inspection asks CloudKit itself.
                 participantZoneID: { [weak self] in self?.loadParticipantMarker()?.zoneID },
                 ownedHouseholdID: { [weak self] in
                     guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
@@ -336,8 +341,11 @@ public final class AppEnvironment {
                 },
                 // Leaving the share is only half of a participant's exit;
                 // the marker has to go and the user's own garden has to come
-                // back, which is exactly `leaveSharedHousehold`.
-                rebuildOwnGardenScope: { [weak self] in await self?.leaveSharedHousehold() }
+                // back. This THROWS on purpose: a rebuild that quietly
+                // failed used to let the flow march on to account deletion
+                // with the device still pointed at a zone it can no longer
+                // read.
+                rebuildOwnGardenScope: { [weak self] in try await self?.leaveSharedHousehold() }
             ),
             server: LiveAccountDeletionServer(client: client),
             session: AccountDeletionSession(
@@ -491,7 +499,15 @@ public final class AppEnvironment {
 
     /// Leave the shared household: clear the marker + wipe the shared local data + drop the participant
     /// coordinator so the next sync rebuilds the OWNER coordinator (the user's own zone re-syncs).
-    func leaveSharedHousehold() async {
+    ///
+    /// THROWS. This used to surface a banner and return normally, which
+    /// reads as success to any caller that is not a person looking at the
+    /// screen — and account deletion is exactly such a caller. A swallowed
+    /// wipe or token-reset failure would let the deletion flow advance to
+    /// `DELETE /api/me` with this device still marked as a participant of a
+    /// share it has already left. The Settings affordance keeps the old
+    /// behaviour via `leaveSharedHouseholdSurfacingErrors()`.
+    func leaveSharedHousehold() async throws {
         let signedInHousehold: HouseholdDTO?
         if case .signedIn(_, let household) = auth.state { signedInHousehold = household }
         else { signedInHousehold = nil }
@@ -499,32 +515,44 @@ public final class AppEnvironment {
         if let coordinator {
             coordinator.wipeAndClear()
             guard !coordinator.requiresWipeRetry else {
-                if let message = coordinator.lastHumanizedError { presentBanner(message) }
-                return
+                throw LeaveSharedHouseholdError.wipeNeedsRetry(message: coordinator.lastHumanizedError)
             }
         } else {
-            do {
-                try HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
-            } catch {
-                surfaceError(error)
-                return
-            }
+            try HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
         }
         // Reset the OWNER token so the rebuilt owner coordinator does a FULL re-fetch — re-downloading
         // the user's own (parked, intact) CloudKit zone into the just-wiped SwiftData. Without this, the
         // resumed cursor sees no changes since adopt and the user's own garden would stay empty locally.
-        do {
-            if let household = signedInHousehold {
-                try HouseholdCloudCoordinator.resetStateToken(
-                    at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
-            }
-        } catch {
-            surfaceError(error)
-            return
+        if let household = signedInHousehold {
+            try HouseholdCloudCoordinator.resetStateToken(
+                at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
         }
         clearParticipantMarker()
         cloudCoordinator = nil; cloudCoordinatorKey = nil
         await syncIfPossible()
+    }
+
+    /// The SwiftData wipe reported that it has to be retried before the
+    /// device can safely stop being a participant.
+    enum LeaveSharedHouseholdError: Error, LocalizedError {
+        case wipeNeedsRetry(message: String?)
+
+        var errorDescription: String? {
+            switch self {
+            case .wipeNeedsRetry(let message):
+                return message ?? "The shared garden could not be cleared from this device. Try again."
+            }
+        }
+    }
+
+    /// Settings' "Leave shared garden" button: same work, errors shown in
+    /// the banner rather than thrown at a caller that has no user to tell.
+    func leaveSharedHouseholdSurfacingErrors() async {
+        do {
+            try await leaveSharedHousehold()
+        } catch {
+            surfaceError(error)
+        }
     }
 
     // MARK: - R1 27d.18 — participant journal recovery review inbox

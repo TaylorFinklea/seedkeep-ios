@@ -60,17 +60,18 @@ public actor SeedkeepClient {
     /// confirms the deletion. Callers should follow up with `signOut()` to
     /// clear the local token and cached identity.
     ///
-    /// `disposition` is REQUIRED and carries a body: the server has no way
-    /// to see CloudKit, so it refuses (400 `cloudkit_disposition_required`)
-    /// unless the device states what it did with the garden, and refuses
-    /// again (409 `cloudkit_transfer_required`) if that claim contradicts a
-    /// durable transfer row. Call this only after the CloudKit work the
-    /// disposition asserts has actually succeeded — this is the last,
-    /// irreversible step of every deletion flow.
+    /// `disposition` and `deletionReceiptHash` are REQUIRED. The server has
+    /// no way to see CloudKit, so it refuses unless the device states what it
+    /// did with the garden. The receipt hash is a lowercase SHA-256 digest of
+    /// a capability token persisted before this irreversible request.
     @discardableResult
-    public func deleteAccount(disposition: AccountDeletionDisposition) async throws -> Bool {
+    public func deleteAccount(
+        disposition: AccountDeletionDisposition,
+        deletionReceiptHash: String
+    ) async throws -> Bool {
         struct Body: Encodable {
             let cloudkit_disposition: String
+            let deletion_receipt_hash: String
             /// Omitted (never null) for every disposition but the
             /// transfer one — the server body is a strict Zod object.
             let transfer_id: String?
@@ -81,6 +82,7 @@ public actor SeedkeepClient {
             path: "/api/me",
             body: Body(
                 cloudkit_disposition: disposition.wireValue,
+                deletion_receipt_hash: deletionReceiptHash,
                 transfer_id: disposition.transferID
             )
         )
@@ -89,12 +91,12 @@ public actor SeedkeepClient {
 
     // MARK: - Account-deletion transfers
 
-    // The shared-owner handoff (spec § "Coordination API"; server:
-    // `src/routes/account-deletion-transfers.ts` under
-    // `/api/account-deletion`). Every route below is authenticated and
-    // idempotent: repeating a step that already landed returns the
-    // durable state, so the coordinator can retry any phase from its
-    // checkpoint. A 409 `phase_conflict` carries the durable phase in
+    // The shared-owner handoff (server:
+    // `src/routes/account-deletion-transfers.ts`, mounted under
+    // `/api/account-deletion`). Transfer routes are authenticated and
+    // idempotent. Receipt lookup is deliberately unauthenticated because
+    // successful account deletion has already destroyed the session.
+    // A 409 `phase_conflict` carries the durable phase in
     // `SeedkeepError.conflictPhase`.
 
     private static let transfersPath = "/api/account-deletion/transfers"
@@ -107,6 +109,45 @@ public actor SeedkeepClient {
     /// only its hash.
     public func createAccountDeletionTransfer() async throws -> WireResponses.AccountDeletionTransferOne {
         try await postJSON(path: Self.transfersPath, body: EmptyBody())
+    }
+
+    /// `POST /api/account-deletion/transfers/:id/inspect` — checks a
+    /// capability without consuming it or binding the authenticated user.
+    /// The token stays in the strict JSON body so it cannot leak into logs.
+    public func inspectAccountDeletionTransfer(
+        id: String,
+        token: String
+    ) async throws -> AccountDeletionHandoffInspection {
+        struct Body: Encodable { let token: String }
+        return try await postJSON(
+            path: "\(Self.transfersPath)/\(id)/inspect",
+            body: Body(token: token)
+        )
+    }
+
+    /// `POST /api/account-deletion/transfers/:id/handoff-token` — rotates
+    /// the pending owner's handoff capability and returns its new raw token.
+    public func rotateAccountDeletionHandoffToken(
+        id: String
+    ) async throws -> WireResponses.AccountDeletionTransferOne {
+        try await postJSON(
+            path: "\(Self.transfersPath)/\(id)/handoff-token",
+            body: EmptyBody()
+        )
+    }
+
+    /// `POST /api/account-deletion/receipts/lookup` — recovers the result
+    /// of account deletion using the receipt capability after authentication
+    /// has been destroyed with the account.
+    public func lookupAccountDeletionReceipt(
+        token: String
+    ) async throws -> AccountDeletionReceiptDTO {
+        struct Body: Encodable { let receipt_token: String }
+        return try await postJSON(
+            path: "/api/account-deletion/receipts/lookup",
+            body: Body(receipt_token: token),
+            auth: false
+        )
     }
 
     /// `POST /api/account-deletion/transfers/:id/accept` — the successor
@@ -205,6 +246,19 @@ public actor SeedkeepClient {
                 destination_zone_name: destinationZoneName,
                 destination_zone_owner_name: destinationZoneOwnerName
             )
+        )
+        return res.transfer
+    }
+
+    /// `POST /api/account-deletion/transfers/:id/source-deleting` —
+    /// atomically acquires the owner's exclusive source-zone deletion lease.
+    @discardableResult
+    public func acquireAccountDeletionTransferSourceDeleting(
+        id: String
+    ) async throws -> AccountDeletionTransferDTO {
+        let res: WireResponses.AccountDeletionTransferOne = try await postJSON(
+            path: "\(Self.transfersPath)/\(id)/source-deleting",
+            body: EmptyBody()
         )
         return res.transfer
     }
@@ -1831,9 +1885,10 @@ public actor SeedkeepClient {
 
     private func postJSON<Body: Encodable, T: Decodable & Sendable>(
         path: String,
-        body: Body
+        body: Body,
+        auth: Bool = true
     ) async throws -> T {
-        try await sendJSON(method: "POST", path: path, body: body)
+        try await sendJSON(method: "POST", path: path, body: body, auth: auth)
     }
 
     private func patchJSON<Body: Encodable, T: Decodable & Sendable>(
@@ -1846,13 +1901,14 @@ public actor SeedkeepClient {
     private func sendJSON<Body: Encodable, T: Decodable & Sendable>(
         method: String,
         path: String,
-        body: Body
+        body: Body,
+        auth: Bool = true
     ) async throws -> T {
         let url = configuration.baseURL.appendingPathComponent(path)
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if auth, let token = bearerToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let encoder = JSONEncoder()
         // Skip nil-valued optional fields so PATCH only sends what changed.
         encoder.outputFormatting = []

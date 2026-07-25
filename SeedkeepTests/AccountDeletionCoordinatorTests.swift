@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import CloudKit
+import CryptoKit
 @testable import Seedkeep
 import SeedkeepKit
 import SeedkeepCloudKit
@@ -126,6 +127,10 @@ private final class FakeCloudKit: AccountDeletionCloudKitOperating {
     var deletionIsNoop = false
     var recordsByZone: [String: [CKRecord]] = [:]
     var acceptedZoneID = destinationZoneFromOwner
+    /// Silently drops this record name on save \u2014 a partial copy that
+    /// reports success, which is exactly the shape of regression the
+    /// source-vs-destination comparison exists to catch.
+    var dropRecordNamedOnSave: String?
     var destinationOwnerRecordName = successorRecordName
 
     func seed(zone: CKRecordZone.ID, records: [CKRecord] = []) {
@@ -194,6 +199,7 @@ private final class FakeCloudKit: AccountDeletionCloudKitOperating {
         guard presentZones.contains(zoneKey(zoneID)) else { throw CKError(.zoneNotFound) }
         var stored = recordsByZone[zoneKey(zoneID)] ?? []
         for record in records {
+            if record.recordID.recordName == dropRecordNamedOnSave { continue }
             if let index = stored.firstIndex(where: { $0.recordID.recordName == record.recordID.recordName }) {
                 // CloudKit's optimistic concurrency: a record built from
                 // scratch carries no change tag, so replacing an existing
@@ -262,7 +268,8 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
     enum Op: Hashable {
         case createTransfer, transfer, acceptTransfer, putDestination
         case putOwnerVerification, putSuccessorVerification
-        case markSourceDeleted, cancelTransfer, deleteAccount
+        case acquireSourceDeletionLease, markSourceDeleted, cancelTransfer
+        case inspectHandoff, rotateHandoffToken, deleteAccount, deletionReceipt
     }
 
     enum Call: Equatable {
@@ -273,9 +280,13 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
         case putOwnerVerification(id: String, digest: String, counts: [String: Int])
         case putSuccessorVerification(id: String, digest: String, counts: [String: Int],
                                       zoneName: String, ownerName: String)
+        case acquireSourceDeletionLease(String)
         case markSourceDeleted(String)
         case cancelTransfer(String)
-        case deleteAccount(AccountDeletionDisposition)
+        case inspectHandoff(id: String, token: String)
+        case rotateHandoffToken(String)
+        case deleteAccount(disposition: AccountDeletionDisposition, receiptHash: String)
+        case deletionReceipt(String)
     }
 
     private(set) var calls: [Call] = []
@@ -287,6 +298,22 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
     /// Lets a test hand back a transfer whose digests disagree even though
     /// the phase claims verification succeeded.
     var allowMismatchedVerification = false
+    /// The server revalidates that the successor still owns the re-homed
+    /// household before granting the source-deletion lease.
+    var successorStillOwns = true
+    /// Receipt hashes written inside a committed deletion transaction.
+    /// They deliberately outlive the account, exactly like the real row.
+    private(set) var committedReceipts: Set<String> = []
+    /// How `DELETE /api/me` behaves.
+    enum DeleteAccountBehaviour {
+        case confirmed
+        /// The server answers `{ deleted: false }`.
+        case declined
+        /// The deletion COMMITS — receipt and all — and then the response
+        /// is lost. Modelled as the 401 a cascaded session produces.
+        case committedThenLost
+    }
+    var deleteAccountBehaviour: DeleteAccountBehaviour = .confirmed
 
     private static func blank(id: String, phase: AccountDeletionTransferPhase,
                               expiresAt: Int64) -> AccountDeletionTransferDTO {
@@ -352,7 +379,8 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
                  destination: Bool = true) {
         row = Self.blank(id: id, phase: phase, expiresAt: handoffExpiresAt)
         _ = updated(
-            successor: .some("u_succ"),
+            // Nobody is bound until the token is actually spent.
+            successor: .some(phase == .pendingSuccessor ? nil : "u_succ"),
             destinationZoneName: .some(destination ? destinationZoneFromOwner.zoneName : nil),
             destinationZoneOwnerName: .some(destination ? successorRecordName : nil),
             destinationShareRecordName: .some(destination ? CKRecordNameZoneWideShare : nil),
@@ -462,7 +490,12 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
             throw SeedkeepError(code: "not_found", message: "no transfer")
         }
         if current.phase == .sourceDeleted { return current }
-        guard current.phase == .verified else { throw conflict() }
+        // The lease is mandatory: `verified` alone no longer authorises this.
+        guard current.phase == .sourceDeleting else { throw conflict() }
+        guard successorStillOwns else {
+            throw SeedkeepError(code: "successor_unavailable", message: "successor is gone",
+                                conflictPhase: current.phase.rawValue, httpStatus: 409)
+        }
         return updated(phase: .sourceDeleted)
     }
 
@@ -473,12 +506,57 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
             throw SeedkeepError(code: "not_found", message: "no transfer")
         }
         if current.phase == .cancelled { return current }
-        guard current.phase != .sourceDeleted else { throw conflict() }
+        guard current.phase != .sourceDeleting, current.phase != .sourceDeleted else {
+            throw conflict()
+        }
         return updated(phase: .cancelled)
     }
 
-    func deleteAccount(disposition: AccountDeletionDisposition) async throws -> Bool {
-        calls.append(.deleteAccount(disposition))
+    func acquireSourceDeletionLease(id: String) async throws -> AccountDeletionTransferDTO {
+        calls.append(.acquireSourceDeletionLease(id))
+        try check(.acquireSourceDeletionLease)
+        guard let current = row, current.id == id else {
+            throw SeedkeepError(code: "not_found", message: "no transfer")
+        }
+        if current.phase == .sourceDeleting || current.phase == .sourceDeleted { return current }
+        guard current.phase == .verified else { throw conflict() }
+        guard successorStillOwns else {
+            throw SeedkeepError(code: "successor_unavailable", message: "successor is gone",
+                                conflictPhase: current.phase.rawValue, httpStatus: 409)
+        }
+        return updated(phase: .sourceDeleting)
+    }
+
+    func inspectHandoff(id: String, token: String) async throws -> AccountDeletionHandoffInspection {
+        calls.append(.inspectHandoff(id: id, token: token))
+        try check(.inspectHandoff)
+        guard let current = row, current.id == id, token == mintedToken else {
+            throw SeedkeepError(code: "invalid_token", message: "bad handoff", httpStatus: 403)
+        }
+        // Deliberately reads without writing: no binding, no consumption,
+        // no phase change. A coordinator that relies on inspect to advance
+        // anything breaks here.
+        return AccountDeletionHandoffInspection(
+            transfer_id: current.id,
+            source_household_id: current.source_household_id,
+            phase: current.phase,
+            handoff_expires_at: current.handoff_expires_at)
+    }
+
+    func rotateHandoffToken(id: String) async throws -> WireResponses.AccountDeletionTransferOne {
+        calls.append(.rotateHandoffToken(id))
+        try check(.rotateHandoffToken)
+        guard let current = row, current.id == id else {
+            throw SeedkeepError(code: "not_found", message: "no transfer")
+        }
+        guard current.phase == .pendingSuccessor else { throw conflict() }
+        mintedToken = "handoff-token-rotated"
+        row = Self.blank(id: current.id, phase: .pendingSuccessor, expiresAt: handoffExpiresAt)
+        return .init(transfer: row!, handoff_token: mintedToken)
+    }
+
+    func deleteAccount(disposition: AccountDeletionDisposition, receiptHash: String) async throws -> Bool {
+        calls.append(.deleteAccount(disposition: disposition, receiptHash: receiptHash))
         try check(.deleteAccount)
         if case .transferSourceDeleted(let id) = disposition {
             guard let current = row, current.id == id, current.phase == .sourceDeleted else {
@@ -486,7 +564,35 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
                                     message: "no source-deleted transfer", httpStatus: 409)
             }
         }
-        return accountDeleted
+        switch deleteAccountBehaviour {
+        case .confirmed:
+            committedReceipts.insert(receiptHash)
+            return true
+        case .declined:
+            return false
+        case .committedThenLost:
+            // The row is written inside the deletion transaction, so it
+            // survives even though the caller never learns the outcome.
+            committedReceipts.insert(receiptHash)
+            throw SeedkeepError(code: "unauthorized", message: "session gone", httpStatus: 401)
+        }
+    }
+
+    func deletionReceipt(token: String) async throws -> AccountDeletionReceiptDTO? {
+        calls.append(.deletionReceipt(token))
+        try check(.deletionReceipt)
+        guard committedReceipts.contains(FakeDeletionServer.hash(token)) else { return nil }
+        return AccountDeletionReceiptDTO(deleted: true, deleted_at: 1_700_000_000_100)
+    }
+
+    /// Stands in for a receipt row a previous launch's deletion committed.
+    func committedReceiptForTesting(_ token: String) {
+        committedReceipts.insert(FakeDeletionServer.hash(token))
+    }
+
+    /// Mirrors the server's `sha256(raw).hex`.
+    static func hash(_ raw: String) -> String {
+        SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -505,6 +611,10 @@ private final class Harness {
     let coordinator: AccountDeletionCoordinator
     let userID: String
 
+    /// Fixed so a test can assert exactly what was persisted and hashed.
+    static let receiptNonce = "receipt-nonce-fixed"
+    var receiptHash: String { FakeDeletionServer.hash(Harness.receiptNonce) }
+
     init(userID: String = "u_owner", householdID: String = ownerHouseholdID, nowMillis: Int64 = 1_700_000_000_000) {
         self.userID = userID
         directory = FileManager.default.temporaryDirectory
@@ -520,7 +630,8 @@ private final class Harness {
                 identity: { AccountDeletionSession.Identity(userID: userID, householdID: householdID) },
                 signOut: { recorder.count += 1 }
             ),
-            now: { nowMillis }
+            now: { nowMillis },
+            newReceipt: { Harness.receiptNonce }
         )
     }
 
@@ -570,6 +681,7 @@ let ownerFailureStepNames = [
     "accept destination share",
     "copy batch",
     "post owner verification",
+    "acquire deletion lease",
     "delete source zone",
 ]
 
@@ -616,14 +728,25 @@ private func stageOwnerFailure(_ step: String, in harness: Harness) throws -> Ac
                                    destinationOwnerRecordName: successorRecordName)
         return .copyComplete
 
-    case "delete source zone":
+    case "acquire deletion lease":
         let digest = try gardenDigest()
         try harness.stageSharedOwner(serverPhase: .verified, ownerDigest: digest, successorDigest: digest)
-        harness.cloudKit.failures[.deleteOwnedZone] = FakeCloudKit.Failure.injected(.deleteOwnedZone)
+        harness.server.failures[.acquireSourceDeletionLease] = boom
         try harness.seedCheckpoint(role: .sharedOwner, phase: .verified,
                                    destinationZone: destinationZoneFromOwner,
                                    destinationOwnerRecordName: successorRecordName)
         return .verified
+
+    case "delete source zone":
+        let digest = try gardenDigest()
+        try harness.stageSharedOwner(serverPhase: .verified, ownerDigest: digest, successorDigest: digest)
+        harness.cloudKit.failures[.deleteOwnedZone] = FakeCloudKit.Failure.injected(.deleteOwnedZone)
+        // The lease is taken first, so the resumable step is the delete
+        // itself — and cancellation is already closed by then.
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .verified,
+                                   destinationZone: destinationZoneFromOwner,
+                                   destinationOwnerRecordName: successorRecordName)
+        return .sourceZoneDeleting
 
     default:
         Issue.record("unknown owner failure step \(step)")
@@ -647,7 +770,7 @@ struct AccountDeletionCoordinatorTests {
         let outcome = try await harness.coordinator.start()
 
         #expect(outcome == .deleted)
-        #expect(harness.server.calls == [.deleteAccount(.noCloudKitGarden)])
+        #expect(harness.server.calls == [.deleteAccount(disposition: .noCloudKitGarden, receiptHash: harness.receiptHash)])
         #expect(harness.cloudKit.calls == [.currentRole])
         #expect(harness.signOut.count == 1)
         #expect(harness.stored == nil)
@@ -667,7 +790,7 @@ struct AccountDeletionCoordinatorTests {
             .leaveSharedGarden(zoneKey(ownerZone)),
             .sharedZoneIsAbsent(zoneKey(ownerZone)),
         ])
-        #expect(harness.server.calls == [.deleteAccount(.participantLeftShare)])
+        #expect(harness.server.calls == [.deleteAccount(disposition: .participantLeftShare, receiptHash: harness.receiptHash)])
         #expect(harness.signOut.count == 1)
         #expect(harness.stored == nil)
     }
@@ -686,7 +809,7 @@ struct AccountDeletionCoordinatorTests {
             .deleteOwnedZone(zoneKey(ownerZone)),
             .ownedZoneIsAbsent(zoneKey(ownerZone)),
         ])
-        #expect(harness.server.calls == [.deleteAccount(.ownerZoneDeleted)])
+        #expect(harness.server.calls == [.deleteAccount(disposition: .ownerZoneDeleted, receiptHash: harness.receiptHash)])
         #expect(harness.signOut.count == 1)
     }
 
@@ -744,7 +867,8 @@ struct AccountDeletionCoordinatorTests {
         #expect(outcome == .deleted)
         // No role inspection and — critically — no second zone deletion.
         #expect(harness.cloudKit.calls.isEmpty)
-        #expect(harness.server.calls == [.deleteAccount(.ownerZoneDeleted)])
+        #expect(harness.server.calls == [.deleteAccount(disposition: .ownerZoneDeleted,
+                                                        receiptHash: harness.receiptHash)])
     }
 
     // MARK: Fail-closed CloudKit verification
@@ -821,11 +945,13 @@ struct AccountDeletionCoordinatorTests {
                          names: ["household:hh_owner", "location:l1", "seed:s1"], policy: .allKeys),
             .saveRecords(zone: zoneKey(destinationZoneFromOwner),
                          names: ["seedPhoto:p1"], policy: .allKeys),
+            .fetchRecords(zoneKey(ownerZone)),
             .fetchRecords(zoneKey(destinationZoneFromOwner)),
             .deleteOwnedZone(zoneKey(ownerZone)),
             .ownedZoneIsAbsent(zoneKey(ownerZone)),
         ])
-        #expect(harness.server.calls.last == .deleteAccount(.transferSourceDeleted(transferID: "tr_1")))
+        #expect(harness.server.calls.last == .deleteAccount(
+            disposition: .transferSourceDeleted(transferID: "tr_1"), receiptHash: harness.receiptHash))
         #expect(harness.server.calls.dropLast().contains(.markSourceDeleted("tr_1")))
         #expect(harness.signOut.count == 1)
         #expect(harness.stored == nil)
@@ -1027,14 +1153,19 @@ struct AccountDeletionCoordinatorTests {
 
         #expect(outcome == .waiting(.ownerVerified))
         #expect(harness.cloudKit.savedBatches.isEmpty)
-        #expect(harness.cloudKit.calls == [.fetchRecords(zoneKey(destinationZoneFromOwner))])
+        // Both sides are read: the destination is compared against the
+        // SOURCE, not merely re-hashed and posted back.
+        #expect(harness.cloudKit.calls == [
+            .fetchRecords(zoneKey(ownerZone)),
+            .fetchRecords(zoneKey(destinationZoneFromOwner)),
+        ])
     }
 
     @Test("resume at source-zone-deleted skips CloudKit and finishes on the server")
     func resumeFromSourceZoneDeleted() async throws {
         let harness = Harness()
         let digest = try gardenDigest()
-        try harness.stageSharedOwner(serverPhase: .verified, ownerDigest: digest, successorDigest: digest)
+        try harness.stageSharedOwner(serverPhase: .sourceDeleting, ownerDigest: digest, successorDigest: digest)
         harness.cloudKit.presentZones.remove(zoneKey(ownerZone))   // it really is gone
         try harness.seedCheckpoint(role: .sharedOwner, phase: .sourceZoneDeleted,
                                    destinationZone: destinationZoneFromOwner,
@@ -1046,7 +1177,8 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.cloudKit.calls.isEmpty)
         #expect(harness.server.calls == [
             .markSourceDeleted("tr_1"),
-            .deleteAccount(.transferSourceDeleted(transferID: "tr_1")),
+            .deleteAccount(disposition: .transferSourceDeleted(transferID: "tr_1"),
+                           receiptHash: harness.receiptHash),
         ])
         #expect(harness.signOut.count == 1)
     }
@@ -1061,7 +1193,8 @@ struct AccountDeletionCoordinatorTests {
 
         #expect(outcome == .deleted)
         #expect(harness.cloudKit.calls.isEmpty)
-        #expect(harness.server.calls == [.deleteAccount(.transferSourceDeleted(transferID: "tr_1"))])
+        #expect(harness.server.calls == [.deleteAccount(
+            disposition: .transferSourceDeleted(transferID: "tr_1"), receiptHash: harness.receiptHash)])
     }
 
     @Test("resume with no checkpoint does nothing at all")
@@ -1072,19 +1205,38 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.server.calls.isEmpty)
     }
 
-    @Test("an expired handoff is re-issued rather than left dead")
-    func expiredHandoffIsReissued() async throws {
-        let harness = Harness(nowMillis: 2_000)
+    @Test("a relaunch with no link in memory rotates the handoff token")
+    func coldResumeRotatesHandoff() async throws {
+        // The raw token lives only in memory and the server keeps just its
+        // hash, so after a relaunch there is no way to re-present the old
+        // link. Settling at "waiting" with nothing to show the user is the
+        // bug; rotating recovers it and kills the stale link.
+        let harness = Harness()
         harness.cloudKit.role = .sharedOwner(zoneID: ownerZone)
-        harness.server.handoffExpiresAt = 1_000
         harness.server.seedRow(phase: .pendingSuccessor, destination: false)
-        harness.server.handoffExpiresAt = 9_000_000_000_000
         try harness.seedCheckpoint(role: .sharedOwner, phase: .transferPending)
 
         let outcome = try await harness.coordinator.resume()
 
         #expect(outcome == .waiting(.transferPending))
-        #expect(harness.server.calls == [.transfer("tr_1"), .createTransfer])
+        #expect(harness.server.calls == [.transfer("tr_1"), .rotateHandoffToken("tr_1")])
+        #expect(harness.coordinator.handoff?.token == "handoff-token-rotated")
+        #expect(harness.coordinator.handoff?.transferID == "tr_1")
+        let raw = try String(contentsOf: harness.store.url(forUserID: harness.userID), encoding: .utf8)
+        #expect(!raw.contains("handoff-token-rotated"))
+    }
+
+    @Test("a resume that still holds the link does not churn the token")
+    func warmResumeKeepsHandoff() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .sharedOwner(zoneID: ownerZone)
+        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph())
+
+        _ = try await harness.coordinator.start()
+        #expect(harness.coordinator.handoff?.token == "handoff-token-abc")
+        _ = try await harness.coordinator.resume()
+
+        #expect(!harness.server.calls.contains(.rotateHandoffToken("tr_1")))
         #expect(harness.coordinator.handoff?.token == "handoff-token-abc")
     }
 
@@ -1106,7 +1258,8 @@ struct AccountDeletionCoordinatorTests {
         #expect(outcome == .deleted)
         // The source zone is already gone server-side; nothing re-deletes it.
         #expect(!harness.cloudKit.calls.contains(.deleteOwnedZone(zoneKey(ownerZone))))
-        #expect(harness.server.calls.last == .deleteAccount(.transferSourceDeleted(transferID: "tr_1")))
+        #expect(harness.server.calls.last == .deleteAccount(
+            disposition: .transferSourceDeleted(transferID: "tr_1"), receiptHash: harness.receiptHash))
     }
 
     @Test("a conflict that rewinds the flow rewrites the checkpoint to the durable phase")
@@ -1186,7 +1339,7 @@ struct AccountDeletionCoordinatorTests {
     @Test("cancel is refused once the source zone is gone")
     func cancelRefusedAfterSourceDeletion() async throws {
         let harness = Harness()
-        try harness.stageSharedOwner(serverPhase: .verified)
+        try harness.stageSharedOwner(serverPhase: .sourceDeleting)
         try harness.seedCheckpoint(role: .sharedOwner, phase: .sourceZoneDeleted,
                                    destinationZone: destinationZoneFromOwner,
                                    destinationOwnerRecordName: successorRecordName)
@@ -1223,7 +1376,7 @@ struct AccountDeletionCoordinatorTests {
         harness.cloudKit.seed(zone: ownerZone, records: gardenGraph())
         harness.server.seedRow(phase: .pendingSuccessor, destination: false)
 
-        let outcome = try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "tok")
+        let outcome = try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "handoff-token-abc")
 
         #expect(outcome == .waiting(.destinationReady))
         #expect(harness.cloudKit.calls == [
@@ -1231,7 +1384,8 @@ struct AccountDeletionCoordinatorTests {
             .createDestination(householdID: ownerHouseholdID),
         ])
         #expect(harness.server.calls == [
-            .acceptTransfer(id: "tr_1", token: "tok"),
+            .inspectHandoff(id: "tr_1", token: "handoff-token-abc"),
+            .acceptTransfer(id: "tr_1", token: "handoff-token-abc"),
             .putDestination(id: "tr_1", zoneName: destinationZoneFromSuccessor.zoneName,
                             ownerName: successorRecordName,
                             shareRecordName: CKRecordNameZoneWideShare,
@@ -1254,7 +1408,7 @@ struct AccountDeletionCoordinatorTests {
                                                                    ownerName: CKCurrentUserDefaultName))
 
         await #expect(throws: AccountDeletionCoordinatorError.notASourceParticipant) {
-            try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "tok")
+            try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "handoff-token-abc")
         }
 
         #expect(harness.server.calls.isEmpty)
@@ -1272,7 +1426,7 @@ struct AccountDeletionCoordinatorTests {
 
         await #expect(throws: AccountDeletionCoordinatorError.sourceHouseholdMismatch(
             expected: ownerHouseholdID, found: "hh_stranger")) {
-            try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "tok")
+            try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "handoff-token-abc")
         }
 
         #expect(!harness.cloudKit.calls.contains(.createDestination(householdID: ownerHouseholdID)))
@@ -1428,7 +1582,7 @@ struct AccountDeletionCoordinatorTests {
     func markSourceDeletedFailureKeepsAccount() async throws {
         let harness = Harness()
         let digest = try gardenDigest()
-        try harness.stageSharedOwner(serverPhase: .verified, ownerDigest: digest, successorDigest: digest)
+        try harness.stageSharedOwner(serverPhase: .sourceDeleting, ownerDigest: digest, successorDigest: digest)
         harness.cloudKit.presentZones.remove(zoneKey(ownerZone))
         harness.server.failures[.markSourceDeleted] = SeedkeepError(code: "server_error", message: "boom")
         try harness.seedCheckpoint(role: .sharedOwner, phase: .sourceZoneDeleted,
@@ -1459,7 +1613,7 @@ struct AccountDeletionCoordinatorTests {
     func deleteAccountDeclinedKeepsSession() async throws {
         let harness = Harness()
         harness.cloudKit.role = .noGarden
-        harness.server.accountDeleted = false
+        harness.server.deleteAccountBehaviour = .declined
 
         await #expect(throws: AccountDeletionCoordinatorError.accountDeletionNotConfirmed) {
             try await harness.coordinator.start()
@@ -1531,4 +1685,241 @@ struct AccountDeletionCoordinatorTests {
         }
         #expect(harness.cloudKit.calls.isEmpty)
     }
+
+    // MARK: Source-deletion lease (the point of no return)
+
+    @Test("the source zone is destroyed only while holding the server lease")
+    func sourceDeletionRequiresTheLease() async throws {
+        let harness = Harness()
+        let digest = try gardenDigest()
+        try harness.stageSharedOwner(serverPhase: .verified, ownerDigest: digest, successorDigest: digest)
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .verified,
+                                   destinationZone: destinationZoneFromOwner,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        _ = try await harness.coordinator.resume()
+
+        let leaseIndex = try #require(harness.server.calls.firstIndex(of: .acquireSourceDeletionLease("tr_1")))
+        let deleteIndex = try #require(harness.cloudKit.calls.firstIndex(of: .deleteOwnedZone(zoneKey(ownerZone))))
+        // Ordering across two fakes is checked by existence + the phase the
+        // checkpoint passed through; the lease call must exist at all.
+        #expect(leaseIndex >= 0)
+        #expect(deleteIndex >= 0)
+        #expect(harness.server.row?.phase == .sourceDeleted)
+    }
+
+    @Test("a lease refused because the successor is gone leaves the garden alone")
+    func leaseRefusedKeepsSource() async throws {
+        let harness = Harness()
+        let digest = try gardenDigest()
+        try harness.stageSharedOwner(serverPhase: .verified, ownerDigest: digest, successorDigest: digest)
+        // The successor deleted their account, or lost the re-homed
+        // ownership, between verification and now.
+        harness.server.successorStillOwns = false
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .verified,
+                                   destinationZone: destinationZoneFromOwner,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        await #expect(throws: SeedkeepError.self) { try await harness.coordinator.resume() }
+
+        #expect(!harness.cloudKit.calls.contains(.deleteOwnedZone(zoneKey(ownerZone))))
+        #expect(harness.cloudKit.presentZones.contains(zoneKey(ownerZone)))
+        #expect(harness.stored?.phase == .verified)
+        #expect(harness.signOut.count == 0)
+    }
+
+    @Test("cancel is refused the moment the deletion lease is held, even with the zone intact")
+    func cancelRefusedUnderLease() async throws {
+        // This is the crash window the lease exists to close: the zone may
+        // still be there, but the server has already committed to the
+        // deletion and will not accept a cancellation.
+        let harness = Harness()
+        try harness.stageSharedOwner(serverPhase: .sourceDeleting)
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .sourceZoneDeleting,
+                                   destinationZone: destinationZoneFromOwner,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        await #expect(throws: AccountDeletionCoordinatorError.cancelAfterSourceDeletion) {
+            try await harness.coordinator.cancel()
+        }
+        #expect(harness.server.calls.isEmpty)
+        #expect(harness.stored?.phase == .sourceZoneDeleting)
+    }
+
+    @Test("a crash between the CloudKit delete and the checkpoint resumes without harm")
+    func resumeAfterCrashUnderLease() async throws {
+        let harness = Harness()
+        let digest = try gardenDigest()
+        try harness.stageSharedOwner(serverPhase: .sourceDeleting, ownerDigest: digest, successorDigest: digest)
+        // The zone really is gone; only the checkpoint advance was lost.
+        harness.cloudKit.presentZones.remove(zoneKey(ownerZone))
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .sourceZoneDeleting,
+                                   destinationZone: destinationZoneFromOwner,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        let outcome = try await harness.coordinator.resume()
+
+        #expect(outcome == .deleted)
+        #expect(harness.server.row?.phase == .sourceDeleted)
+        #expect(harness.signOut.count == 1)
+    }
+
+    // MARK: Source-vs-destination equality
+
+    @Test("a copy that silently drops a record keeps the source and posts nothing")
+    func silentlyTruncatedCopyIsRefused() async throws {
+        // Both parties hash the DESTINATION, so a truncated copy would make
+        // two matching documents over the same incomplete garden. Only a
+        // source-vs-destination comparison catches it.
+        let harness = Harness()
+        try harness.stageSharedOwner(serverPhase: .destinationReady)
+        harness.cloudKit.dropRecordNamedOnSave = "seedPhoto:p1"
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .destinationReady)
+
+        await #expect(throws: (any Error).self) { try await harness.coordinator.resume() }
+
+        #expect(!harness.server.calls.contains(where: {
+            if case .putOwnerVerification = $0 { return true }
+            return false
+        }), "a copy that does not equal the source must never be advertised as verified")
+        #expect(harness.cloudKit.presentZones.contains(zoneKey(ownerZone)))
+        #expect(harness.signOut.count == 0)
+        #expect(harness.stored?.phase == .copyComplete)
+    }
+
+    @Test("owner verification carries the digest of a destination that equals the source")
+    func ownerVerificationRequiresEquality() async throws {
+        let harness = Harness()
+        try harness.stageSharedOwner(serverPhase: .destinationReady, checkpointPhase: .destinationReady)
+
+        _ = try await harness.coordinator.resume()
+
+        let expected = try gardenDigest()
+        #expect(harness.server.calls.contains(
+            .putOwnerVerification(id: "tr_1", digest: expected.sha256, counts: expected.counts)))
+    }
+
+    // MARK: Deletion receipt (response-loss recovery)
+
+    @Test("the receipt nonce is persisted before DELETE /api/me is ever called")
+    func receiptPersistedBeforeDeletion() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .noGarden
+        harness.server.failures[.deleteAccount] = SeedkeepError(code: "server_error", message: "boom")
+
+        await #expect(throws: SeedkeepError.self) { try await harness.coordinator.start() }
+
+        // A nonce we cannot name afterwards is a deletion we can never
+        // confirm, so it has to reach the disk first.
+        #expect(harness.stored?.deletionReceipt == Harness.receiptNonce)
+        #expect(harness.signOut.count == 0)
+    }
+
+    @Test("a committed deletion whose response was lost is confirmed by the receipt")
+    func lostResponseIsRecoveredByReceipt() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .noGarden
+        harness.server.deleteAccountBehaviour = .committedThenLost
+
+        let outcome = try await harness.coordinator.start()
+
+        #expect(outcome == .deleted)
+        #expect(harness.server.calls.contains(.deletionReceipt(Harness.receiptNonce)))
+        #expect(harness.signOut.count == 1)
+        #expect(harness.stored == nil)
+    }
+
+    @Test("an unauthorized response with no receipt is never treated as success")
+    func unauthorizedWithoutReceiptIsNotSuccess() async throws {
+        // `DELETE /api/me` cascades the session, so 401 is exactly what a
+        // lost success looks like — and exactly what an expired token looks
+        // like. Only the receipt can tell them apart.
+        let harness = Harness()
+        harness.cloudKit.role = .noGarden
+        harness.server.failures[.deleteAccount] =
+            SeedkeepError(code: "unauthorized", message: "no session", httpStatus: 401)
+
+        await #expect(throws: SeedkeepError.self) { try await harness.coordinator.start() }
+
+        #expect(harness.server.calls.contains(.deletionReceipt(Harness.receiptNonce)))
+        #expect(harness.signOut.count == 0, "a 401 alone must never sign the user out")
+        #expect(harness.stored?.phase == .deletingAccount)
+        #expect(harness.stored?.deletionReceipt == Harness.receiptNonce)
+    }
+
+    @Test("an unreachable receipt lookup keeps the flow resumable rather than guessing")
+    func unreachableReceiptLookupIsNotSuccess() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .noGarden
+        harness.server.failures[.deleteAccount] =
+            SeedkeepError(code: "unauthorized", message: "no session", httpStatus: 401)
+        harness.server.failures[.deletionReceipt] =
+            SeedkeepError(code: "network", message: "offline")
+
+        await #expect(throws: SeedkeepError.self) { try await harness.coordinator.start() }
+
+        #expect(harness.signOut.count == 0)
+        #expect(harness.stored?.phase == .deletingAccount)
+    }
+
+    @Test("a relaunch after a lost response confirms via the receipt and never deletes twice")
+    func relaunchAfterLostResponseUsesReceipt() async throws {
+        let harness = Harness()
+        // A previous launch got as far as committing the deletion.
+        harness.server.committedReceiptForTesting(Harness.receiptNonce)
+        try harness.store.save(AccountDeletionCheckpoint(
+            userID: harness.userID, role: .noCloudKitGarden, phase: .deletingAccount,
+            deletionReceipt: Harness.receiptNonce, updatedAt: 1))
+
+        let outcome = try await harness.coordinator.resume()
+
+        #expect(outcome == .deleted)
+        #expect(harness.server.calls == [.deletionReceipt(Harness.receiptNonce)],
+                "the account is already gone; asking again could only fail")
+        #expect(harness.signOut.count == 1)
+        #expect(harness.stored == nil)
+    }
+
+    // MARK: Non-consuming handoff inspection
+
+    @Test("successor: the handoff is inspected before its single-use token is spent")
+    func handoffInspectedBeforeAccept() async throws {
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: ownerZone)
+        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph())
+        harness.server.seedRow(phase: .pendingSuccessor, destination: false)
+
+        _ = try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "handoff-token-abc")
+
+        let inspect = try #require(harness.server.calls.firstIndex(
+            of: .inspectHandoff(id: "tr_1", token: "handoff-token-abc")))
+        let accept = try #require(harness.server.calls.firstIndex(
+            of: .acceptTransfer(id: "tr_1", token: "handoff-token-abc")))
+        #expect(inspect < accept)
+    }
+
+    @Test("successor: a handoff for the wrong garden does not consume the token")
+    func wrongGardenLeavesTokenUnspent() async throws {
+        // The rightful participant gets exactly one chance at this link. A
+        // curious user in a different garden must not burn it for them.
+        let harness = Harness(userID: "u_succ", householdID: "hh_succ")
+        let otherZone = CKRecordZone.ID(zoneName: "seedkeep-hh_stranger", ownerName: "_stranger")
+        harness.cloudKit.role = .participant(sharedZoneID: otherZone)
+        harness.cloudKit.seed(zone: otherZone)
+        harness.server.seedRow(phase: .pendingSuccessor, destination: false)
+
+        await #expect(throws: AccountDeletionCoordinatorError.sourceHouseholdMismatch(
+            expected: ownerHouseholdID, found: "hh_stranger")) {
+            try await harness.coordinator.acceptHandoff(transferID: "tr_1", token: "handoff-token-abc")
+        }
+
+        #expect(!harness.server.calls.contains(where: {
+            if case .acceptTransfer = $0 { return true }
+            return false
+        }), "the token must still be spendable by the rightful participant")
+        #expect(harness.server.row?.phase == .pendingSuccessor)
+        #expect(harness.server.row?.successor_user_id == nil)
+        #expect(harness.stored == nil)
+    }
+
 }

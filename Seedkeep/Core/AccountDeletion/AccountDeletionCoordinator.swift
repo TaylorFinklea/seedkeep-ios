@@ -1,4 +1,5 @@
 import CloudKit
+import CryptoKit
 import Foundation
 import Observation
 import SeedkeepCloudKit
@@ -88,6 +89,7 @@ final class AccountDeletionCoordinator {
     private let server: any AccountDeletionServerOperating
     private let session: AccountDeletionSession
     private let now: @MainActor () -> Int64
+    private let newReceipt: @MainActor () -> String
 
     /// The durable state as this coordinator last saw it. Observable so a
     /// progress surface can render the current phase and last failure.
@@ -108,13 +110,33 @@ final class AccountDeletionCoordinator {
         cloudKit: any AccountDeletionCloudKitOperating,
         server: any AccountDeletionServerOperating,
         session: AccountDeletionSession,
-        now: @escaping @MainActor () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
+        now: @escaping @MainActor () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+        newReceipt: @escaping @MainActor () -> String = AccountDeletionCoordinator.randomReceiptNonce
     ) {
         self.store = store
         self.cloudKit = cloudKit
         self.server = server
         self.session = session
         self.now = now
+        self.newReceipt = newReceipt
+    }
+
+    /// 256 bits from the system CSPRNG. Only ever presented to the server
+    /// as a SHA-256, so its only job is to be unguessable.
+    static func randomReceiptNonce() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            // The system RNG does not fail in practice, and a predictable
+            // nonce here would only weaken a lookup that reveals nothing
+            // but "was this deletion committed" — still, prefer entropy we
+            // can account for over a fixed value.
+            bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max) }
+        }
+        return Data(bytes).base64EncodedString()
+    }
+
+    static func receiptHash(of nonce: String) -> String {
+        SHA256.hash(data: Data(nonce.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Entry points
@@ -182,13 +204,23 @@ final class AccountDeletionCoordinator {
         guard case .participant(let sharedZoneID) = try await cloudKit.currentRole() else {
             throw AccountDeletionCoordinatorError.notASourceParticipant
         }
-        let transfer = try await server.acceptTransfer(id: transferID, token: token)
         let visibleHouseholdID = SeedkeepRecordNames.householdID(fromZoneName: sharedZoneID.zoneName)
+
+        // Look before spending. The token is single-use and binding is
+        // irreversible, so a user who happens to participate in a DIFFERENT
+        // garden must not be able to burn the one chance the rightful
+        // successor has just by opening the link. Inspection is the
+        // non-consuming read that makes the check possible before the fact
+        // rather than after it.
+        let inspection = try await server.inspectHandoff(id: transferID, token: token)
+        guard inspection.source_household_id == visibleHouseholdID else {
+            throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
+                expected: inspection.source_household_id, found: visibleHouseholdID)
+        }
+
+        let transfer = try await server.acceptTransfer(id: transferID, token: token)
+        // The row could in principle have moved between the two calls.
         guard transfer.source_household_id == visibleHouseholdID else {
-            // Bound to a garden this device cannot see. Building a
-            // destination from here would copy nothing, and two digests over
-            // nothing agree perfectly — which would authorise deleting the
-            // real garden.
             throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
                 expected: transfer.source_household_id, found: visibleHouseholdID)
         }
@@ -318,6 +350,9 @@ final class AccountDeletionCoordinator {
         case (.sharedOwner, .verified):
             return try await deleteSourceZone(current)
 
+        case (.sharedOwner, .sourceZoneDeleting):
+            return try await deleteLeasedSourceZone(current)
+
         case (.sharedOwner, .sourceZoneDeleted):
             let transferID = try transferID(current)
             _ = try await server.markSourceDeleted(id: transferID)
@@ -365,14 +400,17 @@ final class AccountDeletionCoordinator {
         let transfer: AccountDeletionTransferDTO
         if let existingID = current.transferID {
             var durable = try await server.transfer(id: existingID)
-            if durable.phase == .pendingSuccessor, durable.handoff_expires_at <= now() {
-                // The spec caps the TOKEN's life, not the request's, so a
-                // dead link on a transfer nobody has taken up is re-issued
-                // rather than abandoned. Re-issuing invalidates the stale
-                // link.
-                let reissued = try await server.createTransfer()
-                remember(reissued)
-                durable = reissued.transfer
+            if durable.phase == .pendingSuccessor, handoff?.transferID != durable.id {
+                // No link in memory. The raw token was never written down —
+                // the server keeps only its hash — so a relaunch, or an
+                // expiry, leaves the owner with a transfer and nothing to
+                // share. Rotating mints a usable link and invalidates the
+                // stale one; the spec caps the TOKEN's life, not the
+                // request's. Skipped while we still hold the link, so
+                // repeated resumes do not churn the user's URL.
+                let rotated = try await server.rotateHandoffToken(id: existingID)
+                remember(rotated)
+                durable = rotated.transfer
             }
             transfer = durable
         } else {
@@ -435,12 +473,37 @@ final class AccountDeletionCoordinator {
 
     private func postOwnerVerification(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
         let transferID = try transferID(current)
+        let source = try sourceZoneID(current)
         let destination = try destinationZoneID(current)
-        // Read back rather than hash the plan: the claim being made is about
-        // what is IN the destination zone, not about what was sent to it.
+
+        // BOTH sides, and compared here.
+        //
+        // The server's dual gate gets one document from the owner and one
+        // from the successor — but both are computed from the DESTINATION,
+        // so on their own they only prove the two devices are looking at the
+        // same zone. A copy that silently dropped a record would produce two
+        // perfectly matching documents over the same truncated garden and
+        // authorise deleting the complete original. The comparison that
+        // actually matters is this one: destination == source, made by the
+        // only device that can still see both. Re-reading the source is safe
+        // at this phase — nothing has deleted it, and nothing may until the
+        // lease is taken much later.
+        let sourceRecords = try await cloudKit.fetchRecords(in: source)
+        let sourceDigest = try HouseholdGraphDigester.digest(of: sourceRecords, in: source)
         let copied = try await cloudKit.fetchRecords(in: destination)
-        let digest = try HouseholdGraphDigester.digest(of: copied, in: destination)
-        return try follow(current, try await server.putOwnerVerification(id: transferID, digest: digest))
+        let destinationDigest = try HouseholdGraphDigester.digest(of: copied, in: destination)
+
+        guard sourceDigest.sha256 == destinationDigest.sha256 else {
+            throw AccountDeletionCoordinatorError.copyDoesNotMatchSource(
+                source: sourceDigest.sha256, destination: destinationDigest.sha256)
+        }
+        guard sourceDigest.counts == destinationDigest.counts else {
+            throw AccountDeletionCoordinatorError.recordCountMismatch(
+                owner: sourceDigest.counts, successor: destinationDigest.counts)
+        }
+
+        return try follow(current,
+                          try await server.putOwnerVerification(id: transferID, digest: destinationDigest))
     }
 
     private func deleteSourceZone(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
@@ -451,7 +514,30 @@ final class AccountDeletionCoordinator {
         guard transfer.phase == .verified else { return try follow(current, transfer) }
         try assertAuthorizesSourceDeletion(transfer, current)
 
+        // Take the lease, and do not touch CloudKit until it is granted.
+        //
+        // Reading `verified` is not authorisation, it is a memory of one:
+        // between this read and the delete, a second owner device can cancel
+        // a still-`verified` transfer, or the successor can vanish. Either
+        // leaves the source destroyed with no route to `source_deleted` and
+        // therefore no route to deleting the account. The lease closes that
+        // window from the server side — it revalidates successor ownership
+        // and permanently forbids cancellation — and moving the checkpoint
+        // to `.sourceZoneDeleting` closes it from this side, because
+        // `cancel()` refuses from there even while the zone still exists.
+        let leased = try await server.acquireSourceDeletionLease(id: transferID)
+        guard leased.phase == .sourceDeleting || leased.phase == .sourceDeleted else {
+            return try follow(current, leased)
+        }
+        return try follow(current, leased)
+    }
+
+    /// Runs only under the server's source-deletion lease.
+    private func deleteLeasedSourceZone(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
         let source = try sourceZoneID(current)
+        // Idempotent by construction: deleting an already-absent zone is a
+        // no-op, so a crash between the delete and this checkpoint advance
+        // resumes straight through.
         try await cloudKit.deleteOwnedZone(zoneID: source)
         guard try await cloudKit.ownedZoneIsAbsent(zoneID: source) else {
             throw AccountDeletionCoordinatorError.zoneStillPresent(zoneName: source.zoneName)
@@ -572,9 +658,47 @@ final class AccountDeletionCoordinator {
             throw AccountDeletionCoordinatorError.dispositionUnavailable(
                 phase: current.phase, role: current.role)
         }
-        guard try await server.deleteAccount(disposition: disposition) else {
-            throw AccountDeletionCoordinatorError.accountDeletionNotConfirmed
+        // A nonce from a previous attempt means the destructive call may
+        // already have committed without us hearing about it.
+        if let existing = current.deletionReceipt,
+           try await server.deletionReceipt(token: existing) != nil {
+            return try await finishDeletedAccount(current)
         }
+
+        // Mint and PERSIST before the destructive call. Deleting the account
+        // cascades the session that authorised it, so once the request is in
+        // flight there is no credential left to ask "did that happen?". This
+        // nonce is the only thing that can answer, and a nonce we cannot
+        // name afterwards is no better than none.
+        var pending = current
+        if pending.deletionReceipt == nil {
+            let minted = newReceipt()
+            try advance(current, to: .deletingAccount) { $0.deletionReceipt = minted }
+            pending = checkpoint ?? pending
+        }
+        let receipt = try requireReceipt(pending)
+
+        do {
+            guard try await server.deleteAccount(
+                disposition: disposition, receiptHash: Self.receiptHash(of: receipt)) else {
+                throw AccountDeletionCoordinatorError.accountDeletionNotConfirmed
+            }
+        } catch {
+            // 401 is what a LOST SUCCESS looks like — the session is gone
+            // because the deletion took it — and it is also what a merely
+            // expired token looks like. Never infer success from the status;
+            // ask for the receipt, which only exists if the transaction
+            // committed. A lookup that itself fails proves nothing either,
+            // so it leaves the original error standing and the flow
+            // resumable.
+            let confirmed = (try? await server.deletionReceipt(token: receipt)).flatMap { $0 }
+            guard confirmed != nil else { throw error }
+            return try await finishDeletedAccount(pending)
+        }
+        return try await finishDeletedAccount(pending)
+    }
+
+    private func finishDeletedAccount(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
         // The account no longer exists. A checkpoint file that refuses to go
         // away must not keep the user in a signed-in session holding a dead
         // token, so removal is best effort and sign-out is not.
@@ -583,6 +707,13 @@ final class AccountDeletionCoordinator {
         pendingDestination = nil
         await session.signOut()
         return .settled(.deleted)
+    }
+
+    private func requireReceipt(_ current: AccountDeletionCheckpoint) throws -> String {
+        guard let receipt = current.deletionReceipt else {
+            throw AccountDeletionCoordinatorError.deletionReceiptUnavailable
+        }
+        return receipt
     }
 
     // MARK: - Durable-phase reconciliation
@@ -678,11 +809,16 @@ final class AccountDeletionCoordinator {
         }
     }
 
-    /// True once the source garden is gone, which is the point of no return
-    /// for cancellation.
+    /// True once cancelling is no longer a safe answer.
+    ///
+    /// This deliberately starts at `.sourceZoneDeleting` — one step BEFORE
+    /// the garden is actually gone. From there the server holds a lease it
+    /// will not release, so a client-side cancel could only produce a
+    /// transfer the server refuses to cancel, or worse, a local flow that
+    /// forgets a deletion the server has already committed to.
     private static func sourceIsGone(_ phase: AccountDeletionCheckpoint.Phase) -> Bool {
         switch phase {
-        case .sourceZoneDeleted, .sourceDeleted, .deletingAccount: return true
+        case .sourceZoneDeleting, .sourceZoneDeleted, .sourceDeleted, .deletingAccount: return true
         default: return false
         }
     }
@@ -876,6 +1012,11 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
     case digestMismatch(owner: String, successor: String)
     /// The hashes agree but the per-type censuses do not.
     case recordCountMismatch(owner: [String: Int], successor: [String: Int])
+    /// The copied destination is not equal to the source it came from.
+    case copyDoesNotMatchSource(source: String, destination: String)
+    /// The deletion nonce could not be established, so a lost response
+    /// would be unrecoverable. Refuse rather than delete blind.
+    case deletionReceiptUnavailable
     /// The destination the server recorded is not the zone this device is
     /// working with.
     case destinationOwnershipMismatch(expected: String, found: String)
@@ -918,6 +1059,10 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
             return "The copied garden does not match the original, so the original was kept."
         case .recordCountMismatch:
             return "The copied garden has a different number of records, so the original was kept."
+        case .copyDoesNotMatchSource:
+            return "The copy does not match your garden yet, so nothing was deleted."
+        case .deletionReceiptUnavailable:
+            return "Could not prepare a safe deletion. Nothing was changed."
         case .destinationOwnershipMismatch(let expected, let found):
             return "The successor's garden moved (expected \(expected), found \(found)); the original was kept."
         case .destinationUnavailable:

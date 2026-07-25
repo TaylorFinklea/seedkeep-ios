@@ -72,6 +72,19 @@ struct AccountDeletionTransferClientTests {
     },"handoff_token":"raw-handoff-token-value"}}
     """#
 
+    private static let inspectionJSON = #"""
+    {"ok":true,"data":{
+      "transfer_id":"tr_abc123",
+      "source_household_id":"hh_1",
+      "phase":"pending_successor",
+      "handoff_expires_at":1900000000000
+    }}
+    """#
+
+    private static let receiptJSON = #"""
+    {"ok":true,"data":{"deleted":true,"deleted_at":1800000000000}}
+    """#
+
     private func makeClient(responseBody: String, status: Int = 200) -> SeedkeepClient {
         let session = TransferStub.makeSession(responseBody: Data(responseBody.utf8), status: status)
         return SeedkeepClient(
@@ -246,6 +259,86 @@ struct AccountDeletionTransferClientTests {
         #expect(body["destination_zone_owner_name"] as? String == "_succ_owner")
     }
 
+    // MARK: - POST /transfers/:id/source-deleting
+
+    @Test("source deleting: POST .../source-deleting with an empty JSON body")
+    func acquireSourceDeleting() async throws {
+        let response = Self.fullTransferJSON.replacingOccurrences(
+            of: #""phase":"verified""#,
+            with: #""phase":"source_deleting""#
+        )
+        let client = makeClient(responseBody: response)
+        let transfer = try await client.acquireAccountDeletionTransferSourceDeleting(id: "tr_abc123")
+
+        _ = try assertRequest(
+            method: "POST",
+            path: "/api/account-deletion/transfers/tr_abc123/source-deleting"
+        )
+        #expect(try capturedBody().isEmpty, "source-deleting accepts no body fields")
+        #expect(transfer.phase == .sourceDeleting)
+    }
+
+    // MARK: - POST /transfers/:id/inspect
+
+    @Test("inspect: POST .../inspect with the capability token only in the body")
+    func inspectTransfer() async throws {
+        let client = makeClient(responseBody: Self.inspectionJSON)
+        let inspection = try await client.inspectAccountDeletionTransfer(
+            id: "tr_abc123",
+            token: "raw-handoff-token-value"
+        )
+
+        let req = try assertRequest(
+            method: "POST",
+            path: "/api/account-deletion/transfers/tr_abc123/inspect"
+        )
+        let body = try capturedBody()
+        #expect(Set(body.keys) == ["token"], "inspect body is strict: only `token`")
+        #expect(body["token"] as? String == "raw-handoff-token-value")
+        let requestURL = req.url?.absoluteString ?? ""
+        #expect(requestURL.contains("raw-handoff-token-value") == false)
+        #expect(inspection.transfer_id == "tr_abc123")
+        #expect(inspection.source_household_id == "hh_1")
+        #expect(inspection.phase == .pendingSuccessor)
+        #expect(inspection.handoff_expires_at == 1_900_000_000_000)
+    }
+
+    // MARK: - POST /transfers/:id/handoff-token
+
+    @Test("handoff token rotation: POST .../handoff-token returns the new raw token")
+    func rotateHandoffToken() async throws {
+        let client = makeClient(responseBody: Self.freshTransferJSON)
+        let result = try await client.rotateAccountDeletionHandoffToken(id: "tr_new")
+
+        _ = try assertRequest(
+            method: "POST",
+            path: "/api/account-deletion/transfers/tr_new/handoff-token"
+        )
+        #expect(try capturedBody().isEmpty, "handoff-token rotation accepts no body fields")
+        #expect(result.transfer.id == "tr_new")
+        #expect(result.handoff_token == "raw-handoff-token-value")
+    }
+
+    // MARK: - POST /receipts/lookup
+
+    @Test("receipt lookup: POST /receipts/lookup is unauthenticated and decodes the receipt")
+    func lookupReceipt() async throws {
+        let client = makeClient(responseBody: Self.receiptJSON)
+        let receipt = try await client.lookupAccountDeletionReceipt(token: "raw-receipt-token")
+
+        let req = try #require(TransferStub.lastRequest())
+        #expect(req.httpMethod == "POST")
+        #expect(req.url?.path == "/api/account-deletion/receipts/lookup")
+        #expect(req.url?.query == nil, "receipt capability must be in the body, not the URL")
+        #expect(req.value(forHTTPHeaderField: "Authorization") == nil,
+                "the deleted session is gone; receipt lookup must not carry Authorization")
+        let body = try capturedBody()
+        #expect(Set(body.keys) == ["receipt_token"], "receipt lookup body is strict")
+        #expect(body["receipt_token"] as? String == "raw-receipt-token")
+        #expect(receipt.deleted)
+        #expect(receipt.deleted_at == 1_800_000_000_000)
+    }
+
     // MARK: - POST /transfers/:id/source-deleted
 
     @Test("source deleted: POST .../source-deleted")
@@ -312,7 +405,7 @@ struct AccountDeletionTransferClientTests {
     /// already have been irreversibly deleted — which is why the exact
     /// bytes are pinned here, not just the method and path.
     @Test(
-        "deleteAccount sends the exact disposition body; transfer_id only for the transfer case",
+        "deleteAccount sends the receipt hash and exact disposition body; transfer_id only for the transfer case",
         arguments: [
             (AccountDeletionDisposition.noCloudKitGarden, "no_cloudkit_garden", String?.none),
             (.participantLeftShare, "participant_left_share", nil),
@@ -325,18 +418,23 @@ struct AccountDeletionTransferClientTests {
         wire: String,
         transferID: String?
     ) async throws {
+        let deletionReceiptHash = String(repeating: "d", count: 64)
         let client = makeClient(responseBody: #"{"ok":true,"data":{"deleted":true}}"#)
-        let deleted = try await client.deleteAccount(disposition: disposition)
+        let deleted = try await client.deleteAccount(
+            disposition: disposition,
+            deletionReceiptHash: deletionReceiptHash
+        )
         #expect(deleted)
 
         _ = try assertRequest(method: "DELETE", path: "/api/me")
         let body = try capturedBody()
         #expect(body["cloudkit_disposition"] as? String == wire)
+        #expect(body["deletion_receipt_hash"] as? String == deletionReceiptHash)
         if let transferID {
-            #expect(Set(body.keys) == ["cloudkit_disposition", "transfer_id"])
+            #expect(Set(body.keys) == ["cloudkit_disposition", "deletion_receipt_hash", "transfer_id"])
             #expect(body["transfer_id"] as? String == transferID)
         } else {
-            #expect(Set(body.keys) == ["cloudkit_disposition"],
+            #expect(Set(body.keys) == ["cloudkit_disposition", "deletion_receipt_hash"],
                     "transfer_id must be omitted, not null, for \(wire)")
         }
     }
@@ -359,7 +457,10 @@ struct AccountDeletionTransferClientTests {
         """#
         let client = makeClient(responseBody: refusal, status: 400)
         do {
-            _ = try await client.deleteAccount(disposition: .ownerZoneDeleted)
+            _ = try await client.deleteAccount(
+                disposition: .ownerZoneDeleted,
+                deletionReceiptHash: String(repeating: "d", count: 64)
+            )
             Issue.record("a refused deletion must throw")
         } catch let error as SeedkeepError {
             #expect(error.code == "cloudkit_disposition_required")
@@ -374,11 +475,38 @@ struct AccountDeletionTransferClientTests {
         """#
         let client = makeClient(responseBody: refusal, status: 409)
         do {
-            _ = try await client.deleteAccount(disposition: .ownerZoneDeleted)
+            _ = try await client.deleteAccount(
+                disposition: .ownerZoneDeleted,
+                deletionReceiptHash: String(repeating: "d", count: 64)
+            )
             Issue.record("a blocked deletion must throw")
         } catch let error as SeedkeepError {
             #expect(error.code == "cloudkit_transfer_required")
             #expect(error.httpStatus == 409)
+        }
+    }
+
+    @Test(
+        "deletion receipt failures surface as typed errors",
+        arguments: [
+            (400, "deletion_receipt_required"),
+            (409, "deletion_receipt_conflict"),
+        ]
+    )
+    func deletionReceiptFailure(status: Int, code: String) async throws {
+        let refusal = """
+        {"ok":false,"error":{"code":"\(code)","message":"receipt failure"}}
+        """
+        let client = makeClient(responseBody: refusal, status: status)
+        do {
+            _ = try await client.deleteAccount(
+                disposition: .noCloudKitGarden,
+                deletionReceiptHash: String(repeating: "d", count: 64)
+            )
+            Issue.record("a refused deletion must throw")
+        } catch let error as SeedkeepError {
+            #expect(error.code == code)
+            #expect(error.httpStatus == status)
         }
     }
 
@@ -394,6 +522,7 @@ struct AccountDeletionTransferClientTests {
             "destination_ready",
             "owner_verified",
             "verified",
+            "source_deleting",
             "source_deleted",
             "cancelled",
         ]
@@ -420,6 +549,36 @@ struct AccountDeletionTransferClientTests {
     }
 
     // MARK: - Error envelope
+
+    @Test("403 invalid_token from inspection surfaces with status and code")
+    func invalidInspectionTokenError() async throws {
+        let refusal = #"""
+        {"ok":false,"error":{"code":"invalid_token","message":"Handoff token is not valid for this transfer."}}
+        """#
+        let client = makeClient(responseBody: refusal, status: 403)
+        do {
+            _ = try await client.inspectAccountDeletionTransfer(id: "tr_abc123", token: "wrong-token")
+            Issue.record("an invalid inspection token must throw")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "invalid_token")
+            #expect(error.httpStatus == 403)
+        }
+    }
+
+    @Test("404 receipt_not_found from receipt lookup surfaces with status and code")
+    func receiptNotFoundError() async throws {
+        let refusal = #"""
+        {"ok":false,"error":{"code":"receipt_not_found","message":"Account deletion receipt not found."}}
+        """#
+        let client = makeClient(responseBody: refusal, status: 404)
+        do {
+            _ = try await client.lookupAccountDeletionReceipt(token: "unknown-receipt-token")
+            Issue.record("a missing receipt must throw")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "receipt_not_found")
+            #expect(error.httpStatus == 404)
+        }
+    }
 
     @Test("409 phase conflict: code, message and durable phase all survive")
     func phaseConflictError() async throws {

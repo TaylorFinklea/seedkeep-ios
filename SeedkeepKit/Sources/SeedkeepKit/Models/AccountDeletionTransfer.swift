@@ -16,9 +16,10 @@ import Foundation
 /// `account-deletion-transfers.ts` verbatim, in the same order:
 ///
 ///     pending_successor → successor_bound → destination_ready
-///       → owner_verified → verified → source_deleted
+///       → owner_verified → verified → source_deleting → source_deleted
 ///
-/// Any non-terminal phase can move to `cancelled`.
+/// Cancellation is legal before `source_deleting`; acquiring that lease
+/// closes cancellation before the owner begins irreversible source deletion.
 ///
 /// Deliberately strict: a phase this build cannot name fails decoding
 /// rather than degrading to a default. The coordinator uses the phase to
@@ -35,11 +36,47 @@ public enum AccountDeletionTransferPhase: String, Codable, CaseIterable, Sendabl
     case ownerVerified = "owner_verified"
     /// Both digests agreed; server membership has been re-homed.
     case verified
+    /// The owner's exclusive lease to destroy the source CloudKit zone.
+    /// Cancellation is closed from this phase onward.
+    case sourceDeleting = "source_deleting"
     /// The owner reported the source zone verifiably absent. Only from
     /// here will `DELETE /api/me` complete for a shared owner.
     case sourceDeleted = "source_deleted"
     /// Abandoned before source deletion. The original garden is untouched.
     case cancelled
+}
+
+/// The non-consuming subset of transfer state returned when a successor
+/// inspects a handoff capability before accepting it.
+public struct AccountDeletionHandoffInspection: Codable, Sendable, Equatable {
+    public let transfer_id: String
+    public let source_household_id: String
+    public let phase: AccountDeletionTransferPhase
+    public let handoff_expires_at: Int64
+
+    public init(
+        transfer_id: String,
+        source_household_id: String,
+        phase: AccountDeletionTransferPhase,
+        handoff_expires_at: Int64
+    ) {
+        self.transfer_id = transfer_id
+        self.source_household_id = source_household_id
+        self.phase = phase
+        self.handoff_expires_at = handoff_expires_at
+    }
+}
+
+/// Capability receipt proving that a prior account-deletion transaction
+/// committed even when its HTTP response was lost.
+public struct AccountDeletionReceiptDTO: Codable, Sendable, Equatable {
+    public let deleted: Bool
+    public let deleted_at: Int64
+
+    public init(deleted: Bool, deleted_at: Int64) {
+        self.deleted = deleted
+        self.deleted_at = deleted_at
+    }
 }
 
 /// What the device did about its CloudKit garden before asking the server

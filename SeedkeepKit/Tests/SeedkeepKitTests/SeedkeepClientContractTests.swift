@@ -379,7 +379,10 @@ struct SeedkeepClientContractTests {
         {"ok":true,"data":{"deleted":true}}
         """#.utf8)
         let client = makeClient(responseBody: responseBody)
-        _ = try? await client.deleteAccount(disposition: .noCloudKitGarden)
+        _ = try? await client.deleteAccount(
+            disposition: .noCloudKitGarden,
+            deletionReceiptHash: String(repeating: "d", count: 64)
+        )
         try assertRequest(
             method: "DELETE",
             path: "/api/me"

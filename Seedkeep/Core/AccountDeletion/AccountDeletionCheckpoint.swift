@@ -98,8 +98,17 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
         case copyComplete = "copy_complete"
         /// The owner's digest is posted; waiting on the successor's.
         case ownerVerified = "owner_verified"
-        /// Both digests matched. The source zone may now be deleted.
+        /// Both digests matched. The owner may now ASK for the deletion
+        /// lease — not delete anything.
         case verified
+        /// Owner-only: the server granted the exclusive source-deletion
+        /// lease (`source_deleting`) and has permanently closed
+        /// cancellation for this transfer. Only from here is destroying
+        /// the only copy of the garden safe: without the lease, a second
+        /// device cancelling — or the successor departing — between the
+        /// phase read and the CloudKit delete would leave the source gone
+        /// and no route to `source_deleted`.
+        case sourceZoneDeleting = "source_zone_deleting"
         /// Owner-only: the source zone is gone but the server does not
         /// know yet. This is the one window where an absent source zone is
         /// expected rather than alarming (spec § "Failure invariants":
@@ -123,6 +132,7 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
             case .destinationReady: self = .destinationReady
             case .ownerVerified: self = .ownerVerified
             case .verified: self = .verified
+            case .sourceDeleting: self = .sourceZoneDeleting
             case .sourceDeleted: self = .sourceDeleted
             case .cancelled: return nil
             }
@@ -138,7 +148,9 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
             case .successorBound, .destinationZoneCreated: return .successorBound
             case .destinationReady, .destinationShareAccepted, .copyComplete: return .destinationReady
             case .ownerVerified: return .ownerVerified
-            case .verified, .sourceZoneDeleted: return .verified
+            case .verified: return .verified
+            // The lease is held from here on: the zone may already be gone.
+            case .sourceZoneDeleting, .sourceZoneDeleted: return .sourceDeleting
             case .sourceDeleted: return .sourceDeleted
             case .participantLeaving, .ownerDeletingZone, .deletingAccount: return nil
             }
@@ -181,6 +193,25 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
     var sourceZoneOwnerName: String?
     var destinationZoneName: String?
     var destinationZoneOwnerName: String?
+    /// Random nonce presented (as a SHA-256 hash) with `DELETE /api/me`,
+    /// minted and persisted BEFORE that call.
+    ///
+    /// Deleting the account cascades the session that authorised it, so if
+    /// the response is lost there is no credential left to ask "did that
+    /// actually happen?". This nonce is the answer: the server writes a
+    /// receipt row inside the deletion transaction, and
+    /// `POST /api/account-deletion/receipts/lookup` will confirm it
+    /// unauthenticated. Without it a lost response is indistinguishable
+    /// from a rejected one, and the app would either strand a signed-in
+    /// user on a deleted account or — far worse — treat an ordinary 401 as
+    /// proof of deletion.
+    ///
+    /// Unlike the handoff token, this one IS persisted here. It is not a
+    /// capability: it grants no access to any account or garden, only the
+    /// ability to learn whether the deletion keyed to this random value
+    /// committed. The handoff token, by contrast, lets a stranger become
+    /// the successor of a live garden, which is why it never touches disk.
+    var deletionReceipt: String?
     var lastFailure: Failure?
     /// Epoch milliseconds, set by the caller that advanced the phase. The
     /// store uses it to reject a stale write that lost a race.
@@ -237,6 +268,7 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
         case sourceZoneOwnerName = "source_zone_owner_name"
         case destinationZoneName = "destination_zone_name"
         case destinationZoneOwnerName = "destination_zone_owner_name"
+        case deletionReceipt = "deletion_receipt"
         case lastFailure = "last_failure"
         case updatedAt = "updated_at"
     }
@@ -250,6 +282,7 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
         sourceZoneOwnerName: String? = nil,
         destinationZoneName: String? = nil,
         destinationZoneOwnerName: String? = nil,
+        deletionReceipt: String? = nil,
         lastFailure: Failure? = nil,
         updatedAt: Int64
     ) {
@@ -261,6 +294,7 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
         self.sourceZoneOwnerName = sourceZoneOwnerName
         self.destinationZoneName = destinationZoneName
         self.destinationZoneOwnerName = destinationZoneOwnerName
+        self.deletionReceipt = deletionReceipt
         self.lastFailure = lastFailure
         self.updatedAt = updatedAt
     }

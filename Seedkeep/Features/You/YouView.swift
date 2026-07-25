@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import SwiftData
 import SeedkeepKit
@@ -11,6 +12,7 @@ struct YouView: View {
     @State private var showDeleteAccountConfirm = false
     @State private var deleteAccountError: String?
     @State private var selectedContribution: ContributionSelection?
+
 
     /// Phase 4D · the user's catalog corrections — newest first, capped
     /// at 20. Tombstones (`deletedAt != nil`) are filtered out so the
@@ -96,27 +98,32 @@ struct YouView: View {
                 ) {
                     Button("Delete Account", role: .destructive) {
                         Task {
-                            // Interim: `DELETE /api/me` now requires the
-                            // device to state what it did with its
-                            // CloudKit garden, and this screen cannot
-                            // know. Claiming `no_cloudkit_garden` while a
-                            // zone is live would delete the account and
-                            // orphan the garden, so the only honest
-                            // disposition here is the one that is true
-                            // when CloudKit sync is off. The resumable
-                            // role-aware flow replaces this surface.
-                            guard !FeatureFlags.cloudKitHouseholdSyncEnabled else {
-                                deleteAccountError = """
-                                Account deletion needs an update. Your iCloud garden has to be \
-                                handled first, and this version can't do that yet.
-                                """
-                                return
-                            }
+                            // Hand this to the coordinator rather than
+                            // calling `DELETE /api/me` here.
+                            //
+                            // The server now demands the device state what
+                            // it did with its CloudKit garden, and it also
+                            // demands a deletion receipt so a lost response
+                            // can be recovered. Both are things this screen
+                            // cannot honestly produce: it cannot see the
+                            // share, and a receipt minted inline is thrown
+                            // away the moment the request fails. The
+                            // coordinator inspects CloudKit for the real
+                            // role, persists the receipt before committing,
+                            // and signs out only once the server confirms.
                             do {
-                                _ = try await appEnv.client.deleteAccount(
-                                    disposition: .noCloudKitGarden
-                                )
-                                await auth.signOut()
+                                let outcome = try await appEnv.accountDeletion.start()
+                                guard outcome == .deleted else {
+                                    // A shared owner needs a successor to
+                                    // take the garden first, and that flow
+                                    // has no surface yet. Say so instead of
+                                    // silently doing nothing.
+                                    deleteAccountError = """
+                                    Your iCloud garden has to be handed to someone else first, \
+                                    and this version can't do that yet.
+                                    """
+                                    return
+                                }
                             } catch {
                                 deleteAccountError = error.localizedDescription
                             }
