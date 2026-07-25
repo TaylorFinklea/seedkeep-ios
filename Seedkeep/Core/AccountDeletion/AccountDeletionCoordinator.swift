@@ -97,6 +97,20 @@ final class AccountDeletionCoordinator {
     /// Non-nil only between minting a handoff and the successor accepting.
     private(set) var handoff: Handoff?
 
+    /// The handoff only while it is still worth sending.
+    ///
+    /// A token lives 72 hours. Nothing in a long-running app forces that
+    /// deadline into view, so without this an owner who left the sheet
+    /// open over a weekend would keep sharing a link the server will
+    /// reject — and `openOrResumeTransfer` would never rotate it, because
+    /// it only rotates when it holds NO link for the transfer. Expiry is
+    /// therefore treated as absence: the stale token is not shareable, and
+    /// the next resume mints a fresh one.
+    var liveHandoff: Handoff? {
+        guard let handoff, handoff.expiresAt > now() else { return nil }
+        return handoff
+    }
+
     /// The right to replace the checkpoint file exactly once. Dropped on any
     /// rejected write so the next attempt has to reload rather than fight
     /// another writer for the file.
@@ -188,6 +202,9 @@ final class AccountDeletionCoordinator {
     struct HandoffPreview: Equatable, Sendable {
         let transferID: String
         let sourceHouseholdID: String
+        /// The durable server phase, so the surface can tell a live offer
+        /// from one that was already taken or withdrawn.
+        let phase: AccountDeletionTransferPhase
         /// Epoch milliseconds.
         let expiresAt: Int64
     }
@@ -202,8 +219,27 @@ final class AccountDeletionCoordinator {
     /// possible before the fact rather than after it — which is also what
     /// lets the UI show somebody what they are about to take on and wait
     /// for them to say yes.
+    ///
+    /// The offer must also still BE an offer. The inspection route is
+    /// deliberately non-consuming and keeps answering for a transfer that
+    /// has moved on, so a second participant opening a link somebody else
+    /// already accepted would otherwise be shown a live invitation and an
+    /// enabled Accept button, and learn the truth only from the failure.
+    /// The durable phase is the only thing that can say so up front.
+    ///
+    /// Acceptance does NOT apply this guard: a successor whose accept
+    /// response was lost is legitimately looking at a `successor_bound`
+    /// row and must still be able to replay their own idempotent accept.
     func previewHandoff(transferID: String, token: String) async throws -> HandoffPreview {
-        try await inspectHandoff(transferID: transferID, token: token).preview
+        let preview = try await inspectHandoff(transferID: transferID, token: token).preview
+        guard preview.expiresAt > now() else {
+            throw AccountDeletionCoordinatorError.handoffExpired
+        }
+        switch preview.phase {
+        case .pendingSuccessor: return preview
+        case .cancelled: throw AccountDeletionCoordinatorError.handoffWithdrawn
+        default: throw AccountDeletionCoordinatorError.handoffAlreadyUsed
+        }
     }
 
     /// `previewHandoff` plus the zone the proof was made against, which
@@ -227,6 +263,7 @@ final class AccountDeletionCoordinator {
         }
         return (HandoffPreview(transferID: inspection.transfer_id,
                                sourceHouseholdID: inspection.source_household_id,
+                               phase: inspection.phase,
                                expiresAt: inspection.handoff_expires_at),
                 sharedZoneID)
     }
@@ -357,12 +394,27 @@ final class AccountDeletionCoordinator {
 
     /// Abandon a transfer and forget the local deletion.
     ///
-    /// Legal only while the original garden is still there. Once the source
-    /// zone is gone the user is committed: cancelling would leave them with
-    /// no garden, an account the server refuses to delete, and no way back.
+    /// Legal for a SHARED OWNER only, and only while the original garden is
+    /// still there. Two separate refusals, for two separate reasons:
+    ///
+    ///   - Once the source zone is gone the user is committed: cancelling
+    ///     would leave them with no garden, an account the server refuses
+    ///     to delete, and no way back.
+    ///   - Every other role has already begun — or may already have
+    ///     finished — an irreversible CloudKit step by the time it has a
+    ///     checkpoint at all. `participantLeaving` is written BEFORE the
+    ///     share is left and stays put if leaving succeeds but the absence
+    ///     check fails; `ownerDeletingZone` is the same over a zone that
+    ///     may already be deleted. Nothing here can tell those apart from
+    ///     "not started", and clearing the checkpoint would throw away the
+    ///     only record that the work is owed. A successor, meanwhile, has
+    ///     no deletion of their own to abandon.
     func cancel() async throws {
         let identity = try requireIdentity()
         guard let current = try reload(userID: identity.userID) else { return }
+        guard current.role == .sharedOwner else {
+            throw AccountDeletionCoordinatorError.cancelNotAvailable(role: current.role)
+        }
         guard !current.phase.sourceIsGone else {
             throw AccountDeletionCoordinatorError.cancelAfterSourceDeletion
         }
@@ -500,7 +552,15 @@ final class AccountDeletionCoordinator {
             return try await postSuccessorVerification(current)
 
         case (.successor, .verified), (.successor, .sourceDeleted):
-            // Both digests matched; the rest is the departing owner's.
+            // Both digests matched server-side. The garden is not actually
+            // theirs until this device stops pointing at the departing
+            // owner's shared zone, and the owner is about to delete it —
+            // so the debt is written down before it is paid.
+            try advance(current, to: .successorAdopting)
+            return .again
+
+        case (.successor, .successorAdopting):
+            try await session.adoptTransferredGarden(try sourceHouseholdID(current))
             try clear(userID: current.userID)
             return .settled(.handoffComplete)
 
@@ -519,7 +579,7 @@ final class AccountDeletionCoordinator {
         let transfer: AccountDeletionTransferDTO
         if let existingID = current.transferID {
             var durable = try await server.transfer(id: existingID)
-            if durable.phase == .pendingSuccessor, handoff?.transferID != durable.id {
+            if durable.phase == .pendingSuccessor, liveHandoff?.transferID != durable.id {
                 // No link in memory. The raw token was never written down —
                 // the server keeps only its hash — so a relaunch, or an
                 // expiry, leaves the owner with a transfer and nothing to
@@ -761,8 +821,8 @@ final class AccountDeletionCoordinator {
             destinationZoneName: zoneName,
             destinationZoneOwnerName: ownerRecordName)
         guard transfer.phase == .verified else { return try follow(current, transfer) }
-        try clear(userID: current.userID)
-        return .settled(.handoffComplete)
+        try advance(current, to: .successorAdopting)
+        return .again
     }
 
     // MARK: - The last step
@@ -1106,14 +1166,32 @@ struct AccountDeletionSession {
     /// gone.
     var signOut: @MainActor () async -> Void
 
+    /// Cut this device over to a garden it has just received as a
+    /// successor: adopt the server-rehomed household, stop being a
+    /// participant of the departing owner's share, and rebuild the
+    /// CloudKit scope as the owner of the destination zone.
+    ///
+    /// THROWS on purpose. Until this succeeds the app is still pointed at
+    /// a shared zone the departing owner is about to delete, so a silent
+    /// failure would leave the successor watching their new garden
+    /// disappear. The coordinator holds the checkpoint at
+    /// `.successorAdopting` until it lands, which is what makes the crash
+    /// window between server verification and local adoption recoverable.
+    ///
+    /// The parameter is the household id the garden now lives under —
+    /// unchanged by the transfer, but re-homed to this user server-side.
+    var adoptTransferredGarden: @MainActor (String) async throws -> Void
+
     init(
         identity: @escaping @MainActor () -> Identity?,
         localStoreOwnerID: @escaping @MainActor () -> String?,
-        signOut: @escaping @MainActor () async -> Void
+        signOut: @escaping @MainActor () async -> Void,
+        adoptTransferredGarden: @escaping @MainActor (String) async throws -> Void
     ) {
         self.identity = identity
         self.localStoreOwnerID = localStoreOwnerID
         self.signOut = signOut
+        self.adoptTransferredGarden = adoptTransferredGarden
     }
 }
 
@@ -1152,6 +1230,15 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
     case deletionAlreadyInProgress(phase: AccountDeletionCheckpoint.Phase)
     /// Cancelling is refused once the original garden is gone.
     case cancelAfterSourceDeletion
+    /// Cancelling is refused for a role whose irreversible CloudKit step
+    /// may already have run.
+    case cancelNotAvailable(role: AccountDeletionCheckpoint.Role)
+    /// The handoff link is past its 72-hour life.
+    case handoffExpired
+    /// Somebody has already accepted this handoff.
+    case handoffAlreadyUsed
+    /// The departing owner withdrew the transfer.
+    case handoffWithdrawn
     /// The transfer was withdrawn after the source zone was deleted — the
     /// one state the client cannot resolve on its own.
     case transferCancelledAfterSourceDeletion(transferID: String)
@@ -1195,6 +1282,23 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
             return "Something else is already in progress on this account (\(phase.rawValue))."
         case .cancelAfterSourceDeletion:
             return "The original garden has already been handed over; deletion has to finish."
+        case .cancelNotAvailable(let role):
+            switch role {
+            case .participant:
+                return "Leaving the shared garden has already started, so this has to finish."
+            case .soloOwner:
+                return "Deleting your iCloud garden has already started, so this has to finish."
+            case .successor:
+                return "This is somebody else's handoff — there is no deletion here to cancel."
+            case .noCloudKitGarden, .sharedOwner:
+                return "This step has already started, so it has to finish."
+            }
+        case .handoffExpired:
+            return "This handoff link has expired. Ask for a new one."
+        case .handoffAlreadyUsed:
+            return "This garden has already been handed to someone. The link is no longer usable."
+        case .handoffWithdrawn:
+            return "This handoff was withdrawn, so it is no longer available."
         case .transferCancelledAfterSourceDeletion(let transferID):
             return "Transfer \(transferID) was cancelled after the original garden was deleted."
         case .accountDeletionNotConfirmed:

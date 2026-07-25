@@ -37,6 +37,11 @@ private let foreignSharedZone = CKRecordZone.ID(zoneName: "seedkeep-hh_someone_e
 private let destinationShareURL = URL(string: "https://www.icloud.com/share/0destination")!
 private let successorRecordName = "_successor_ck_user"
 
+/// The destination as the SUCCESSOR addresses it: their own private
+/// database, so `ownerName` is the current-user placeholder.
+private let destinationZoneFromSuccessor = CKRecordZone.ID(zoneName: "seedkeep-hh_owner",
+                                                           ownerName: CKCurrentUserDefaultName)
+
 private func zoneKey(_ zoneID: CKRecordZone.ID) -> String {
     "\(zoneID.zoneName)|\(zoneID.ownerName)"
 }
@@ -74,9 +79,14 @@ private final class StubCloudKit: AccountDeletionCloudKitOperating {
         absentZones.insert(zoneKey(zoneID))
     }
 
+    /// The destructive step lands but the verification read still sees the
+    /// zone. That is the window in which "nothing has happened yet" and
+    /// "the share is already gone" look identical from a checkpoint.
+    var reportSharedZoneAbsent = true
+
     func sharedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool {
         calls.append("sharedZoneIsAbsent")
-        return absentZones.contains(zoneKey(zoneID))
+        return reportSharedZoneAbsent && absentZones.contains(zoneKey(zoneID))
     }
 
     func deleteOwnedZone(zoneID: CKRecordZone.ID) async throws {
@@ -85,9 +95,11 @@ private final class StubCloudKit: AccountDeletionCloudKitOperating {
         recordsByZone[zoneKey(zoneID)] = nil
     }
 
+    var reportOwnedZoneAbsent = true
+
     func ownedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool {
         calls.append("ownedZoneIsAbsent")
-        return absentZones.contains(zoneKey(zoneID))
+        return reportOwnedZoneAbsent && absentZones.contains(zoneKey(zoneID))
     }
 
     func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> [CKRecord] {
@@ -152,6 +164,10 @@ private final class StubServer: AccountDeletionServerOperating {
     var deleteAccountError: Error?
     var inspectError: Error?
     var accountDeleted = true
+    /// Number of `acceptTransfer` calls that BIND the successor and then
+    /// lose the response, exactly as a dropped reply looks from the device.
+    var acceptResponsesToLose = 0
+    var rotateError: Error?
 
     func seedRow(id: String = "tr_1",
                  phase: AccountDeletionTransferPhase,
@@ -203,7 +219,14 @@ private final class StubServer: AccountDeletionServerOperating {
 
     func acceptTransfer(id: String, token: String) async throws -> AccountDeletionTransferDTO {
         calls.append(.acceptTransfer(id: id, token: token))
-        return moved(to: .successorBound)
+        // Idempotent replay, like the real route: a bound successor
+        // re-presenting their token reads the same state back.
+        let bound = row?.phase == .pendingSuccessor ? moved(to: .successorBound) : row!
+        if acceptResponsesToLose > 0 {
+            acceptResponsesToLose -= 1
+            throw SeedkeepError(code: "server_error", message: "response lost")
+        }
+        return bound
     }
 
     func putDestination(id: String, zoneName: String, zoneOwnerName: String,
@@ -260,6 +283,8 @@ private final class StubServer: AccountDeletionServerOperating {
     func rotateHandoffToken(id: String) async throws
         -> WireResponses.AccountDeletionTransferOne {
         calls.append(.rotateHandoffToken(id))
+        if let rotateError { throw rotateError }
+        seedRow(id: id, phase: .pendingSuccessor)
         return .init(transfer: row!, handoff_token: rotatedToken)
     }
 
@@ -289,12 +314,34 @@ private final class StubServer: AccountDeletionServerOperating {
 @MainActor
 private final class SignOutRecorder { var count = 0 }
 
+/// Stands in for the app-scope cutover a successor's device performs once
+/// the garden is theirs: re-home the household, drop the participant
+/// marker, rebuild the owner coordinator, sync.
+@MainActor
+private final class AdoptionRecorder {
+    private(set) var householdIDs: [String] = []
+    var error: Error?
+    func adopt(_ householdID: String) throws {
+        if let error { throw error }
+        householdIDs.append(householdID)
+    }
+}
+
+/// A clock a test can move. Handoff tokens expire, and the only way to see
+/// what the app does about that is to let time pass.
+@MainActor
+private final class TestClock {
+    var millis: Int64 = 1_700_000_000_000
+}
+
 @MainActor
 private final class Harness {
     let store: AccountDeletionCheckpointStore
     let cloudKit = StubCloudKit()
     let server = StubServer()
     let signOut = SignOutRecorder()
+    let adoption = AdoptionRecorder()
+    let clock = TestClock()
     let coordinator: AccountDeletionCoordinator
     let model: AccountDeletionFlowModel
     let userID: String
@@ -309,6 +356,8 @@ private final class Harness {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         store = AccountDeletionCheckpointStore(directory: directory)
         let recorder = signOut
+        let adopter = adoption
+        let clockRef = clock
         let isSignedIn = { signedIn }
         coordinator = AccountDeletionCoordinator(
             store: store,
@@ -322,9 +371,10 @@ private final class Harness {
                         : nil
                 },
                 localStoreOwnerID: { userID },
-                signOut: { recorder.count += 1 }
+                signOut: { recorder.count += 1 },
+                adoptTransferredGarden: { try adopter.adopt($0) }
             ),
-            now: { 1_700_000_000_000 },
+            now: { clockRef.millis },
             newReceipt: { "receipt-nonce-fixed" })
         model = AccountDeletionFlowModel(coordinator: coordinator)
     }
@@ -359,7 +409,7 @@ private let reachablePhases: [AccountDeletionCheckpoint.Role: Set<AccountDeletio
                    .destinationShareAccepted, .copyComplete, .ownerVerified, .verified,
                    .sourceZoneDeleting, .sourceZoneDeleted, .sourceDeleted, .deletingAccount],
     .successor: [.successorBound, .destinationZoneCreated, .destinationReady,
-                 .ownerVerified, .verified, .sourceDeleted],
+                 .ownerVerified, .verified, .sourceDeleted, .successorAdopting],
 ]
 
 // MARK: - Copy
@@ -610,12 +660,81 @@ struct AccountDeletionFlowModelTests {
         }
     }
 
-    @Test("a successor is never offered a cancel — it is not their account")
-    func successorHasNoCancel() throws {
+    @Test("cancel is never offered for a role whose destructive step may already have run")
+    func cancelIsSharedOwnerOnly() throws {
+        // A participant's `participantLeaving` and a solo owner's
+        // `ownerDeletingZone` are written BEFORE the CloudKit step, and
+        // stay put if the step lands but its verification does not. From
+        // the outside those are indistinguishable from "nothing happened
+        // yet", so offering to cancel would let the app throw away the
+        // only resumable record of a share already left or a zone already
+        // deleted — and then say nothing was removed.
+        let cases: [(AccountDeletionCheckpoint.Role, AccountDeletionCheckpoint.Phase)] = [
+            (.participant, .participantLeaving),
+            (.participant, .deletingAccount),
+            (.soloOwner, .ownerDeletingZone),
+            (.soloOwner, .deletingAccount),
+            (.noCloudKitGarden, .deletingAccount),
+            (.successor, .successorBound),
+            (.successor, .destinationReady),
+            (.successor, .ownerVerified),
+        ]
+        for (role, phase) in cases {
+            let harness = Harness()
+            try harness.seedCheckpoint(role: role, phase: phase)
+            harness.model.reload()
+            #expect(!harness.model.canCancel,
+                    "\(role.rawValue)/\(phase.rawValue) must not offer cancel")
+        }
+    }
+
+    @Test("a share this device already left is not cancellable and is never called untouched")
+    func participantCancelIsRefusedAfterTheShareWasLeft() async throws {
         let harness = Harness()
-        try harness.seedCheckpoint(role: .successor, phase: .destinationReady)
-        harness.model.reload()
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        // Leaving lands; the absence check is what fails. The durable
+        // phase is still `participantLeaving`.
+        harness.cloudKit.reportSharedZoneAbsent = false
+
+        await harness.model.prepare()
+        await harness.model.confirm()
+
+        #expect(harness.cloudKit.calls.contains("leaveSharedGarden"))
+        #expect(harness.stored?.phase == .participantLeaving)
         #expect(!harness.model.canCancel)
+
+        await harness.model.cancel()
+
+        guard case .failed = harness.model.stage else {
+            Issue.record("cancel must be refused, got \(harness.model.stage)")
+            return
+        }
+        #expect(harness.model.statusLine != "Deletion cancelled. Nothing was removed.")
+        #expect(harness.stored?.phase == .participantLeaving,
+                "the only resumable record must survive")
+    }
+
+    @Test("a zone this device already deleted is not cancellable")
+    func soloOwnerCancelIsRefusedAfterTheZoneWasDeleted() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .soloOwner(zoneID: ownerZone)
+        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph(in: ownerZone))
+        harness.cloudKit.reportOwnedZoneAbsent = false
+
+        await harness.model.prepare()
+        await harness.model.confirm()
+
+        #expect(harness.cloudKit.calls.contains("deleteOwnedZone"))
+        #expect(harness.stored?.phase == .ownerDeletingZone)
+        #expect(!harness.model.canCancel)
+
+        await harness.model.cancel()
+
+        guard case .failed = harness.model.stage else {
+            Issue.record("cancel must be refused, got \(harness.model.stage)")
+            return
+        }
+        #expect(harness.stored?.phase == .ownerDeletingZone)
     }
 
     @Test("cancelling before the source is gone withdraws the transfer and forgets the deletion")
@@ -815,6 +934,287 @@ struct AccountDeletionFlowModelTests {
         #expect(!harness.server.inspected, "a bound successor has nothing left to inspect")
         #expect(harness.model.stage == .waiting(.destinationReady))
     }
+
+    @Test("a lost accept response is recovered by Retry, not abandoned")
+    func lostAcceptResponseIsRecoveredByRetry() async throws {
+        // The server binds the successor and the reply never arrives. The
+        // token is spent, so a device that has already forgotten it can
+        // never finish — the link must be held until acceptance produced
+        // something durable.
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .pendingSuccessor)
+        harness.server.acceptResponsesToLose = 1
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+        await harness.model.acceptOffer()
+
+        guard case .failed = harness.model.stage else {
+            Issue.record("expected the lost response to surface, got \(harness.model.stage)")
+            return
+        }
+        #expect(harness.model.canRetry)
+        #expect(harness.stored == nil, "nothing durable was written")
+
+        await harness.model.retry()
+
+        // Retry re-presented the RETAINED token to the idempotent accept
+        // route rather than resuming a checkpoint that does not exist.
+        #expect(harness.server.calls.filter {
+            if case .acceptTransfer = $0 { return true }
+            return false
+        }.count == 2)
+        #expect(harness.stored?.role == .successor)
+        #expect(harness.model.stage == .waiting(.destinationReady))
+    }
+
+    // MARK: Handoff token expiry
+
+    @Test("a handoff that expires while the app is still running is rotated, not shared")
+    func expiredHandoffIsRotatedWithoutRelaunch() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .sharedOwner(zoneID: ownerZone)
+        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph(in: ownerZone))
+        harness.server.expiresAt = harness.clock.millis + 1_000
+
+        await harness.model.prepare()
+        await harness.model.confirm()
+        #expect(harness.model.handoffLink != nil)
+
+        // 72 hours later, same process, same coordinator.
+        harness.clock.millis += 72 * 60 * 60 * 1000
+        harness.server.expiresAt = harness.clock.millis + 72 * 60 * 60 * 1000
+        await harness.model.retryOrRefresh()
+
+        #expect(harness.server.calls.contains(.rotateHandoffToken("tr_1")))
+        let url = try #require(harness.model.handoffLink)
+        let parsed = try #require(AccountDeletionHandoffLink(url: url))
+        #expect(parsed.token == harness.server.rotatedToken)
+    }
+
+    @Test("an expired link is withheld when rotation cannot reach the server")
+    func expiredLinkIsWithheldUntilRotationSucceeds() async throws {
+        let harness = Harness()
+        harness.cloudKit.role = .sharedOwner(zoneID: ownerZone)
+        harness.cloudKit.seed(zone: ownerZone, records: gardenGraph(in: ownerZone))
+        harness.server.expiresAt = harness.clock.millis + 1_000
+
+        await harness.model.prepare()
+        await harness.model.confirm()
+
+        harness.clock.millis += 72 * 60 * 60 * 1000
+        harness.server.rotateError = SeedkeepError(code: "server_error", message: "offline")
+        await harness.model.retryOrRefresh()
+
+        #expect(harness.model.handoffLink == nil,
+                "a known-expired link must never be offered for sharing")
+    }
+
+    // MARK: Stale offers
+
+    @Test("a link somebody else already used is refused with truthful copy")
+    func alreadyUsedLinkIsRefused() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        // The inspect route is non-consuming and still answers for a
+        // transfer that has moved on, so the phase is the only thing that
+        // can tell the truth here.
+        harness.server.seedRow(phase: .successorBound, destination: false)
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+
+        guard case .handoffRefused(let message) = harness.model.stage else {
+            Issue.record("expected a refusal, got \(harness.model.stage)")
+            return
+        }
+        #expect(message.localizedCaseInsensitiveContains("already"))
+        #expect(!harness.server.acceptedTransfer)
+    }
+
+    @Test("a withdrawn transfer is refused as withdrawn, not as used")
+    func withdrawnLinkIsRefused() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .cancelled, destination: false)
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+
+        guard case .handoffRefused(let message) = harness.model.stage else {
+            Issue.record("expected a refusal, got \(harness.model.stage)")
+            return
+        }
+        #expect(message.localizedCaseInsensitiveContains("no longer"))
+        #expect(!harness.server.acceptedTransfer)
+    }
+
+    @Test("an expired offer is refused as expired")
+    func expiredOfferIsRefused() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.expiresAt = harness.clock.millis - 1
+        harness.server.seedRow(phase: .pendingSuccessor)
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+
+        guard case .handoffRefused(let message) = harness.model.stage else {
+            Issue.record("expected a refusal, got \(harness.model.stage)")
+            return
+        }
+        #expect(message.localizedCaseInsensitiveContains("expired"))
+        #expect(!harness.server.acceptedTransfer)
+    }
+
+    // MARK: Successor resume without a link
+
+    @Test("every successor waiting phase resumes from disk alone, with no token")
+    func successorResumesFromDiskAlone() async throws {
+        for phase in [AccountDeletionCheckpoint.Phase.successorBound,
+                      .destinationZoneCreated, .destinationReady] {
+            let harness = Harness(userID: "u_succ")
+            harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+            harness.server.seedRow(phase: .destinationReady, destination: true)
+            harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
+                                  records: gardenGraph(in: destinationZoneFromSuccessor))
+            try harness.seedCheckpoint(role: .successor, phase: phase,
+                                       sourceZone: sharedSourceZone,
+                                       destinationZone: phase == .successorBound
+                                        ? nil : destinationZoneFromSuccessor)
+            harness.model.reload()
+            #expect(harness.model.hasHandoffInProgress,
+                    "\(phase.rawValue) must be discoverable without a link")
+
+            await harness.model.prepare()
+
+            #expect(!harness.server.inspected, "resuming must never re-present a spent token")
+            #expect(harness.model.stage == .waiting(.destinationReady),
+                    "\(phase.rawValue) resumed to \(harness.model.stage)")
+            #expect(harness.model.canCheckAgain)
+        }
+    }
+
+    @Test("a successor mid-verification also resumes from disk alone")
+    func successorResumesVerificationFromDiskAlone() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .ownerVerified, destination: true)
+        harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
+                              records: gardenGraph(in: destinationZoneFromSuccessor))
+        try harness.seedCheckpoint(role: .successor, phase: .ownerVerified,
+                                   sourceZone: sharedSourceZone,
+                                   destinationZone: destinationZoneFromSuccessor)
+        harness.model.reload()
+        #expect(harness.model.hasHandoffInProgress)
+
+        await harness.model.prepare()
+
+        #expect(!harness.server.inspected, "resuming must never re-present a spent token")
+        #expect(harness.server.calls.contains(.putSuccessorVerification("tr_1")))
+        #expect(harness.model.stage == .handoffComplete)
+    }
+
+    @Test("check again is offered only while waiting on the other device")
+    func checkAgainOnlyWhileWaiting() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .destinationReady, destination: true)
+        try harness.seedCheckpoint(role: .successor, phase: .destinationReady,
+                                   sourceZone: sharedSourceZone,
+                                   destinationZone: destinationZoneFromSuccessor)
+
+        harness.model.reload()
+        #expect(!harness.model.canCheckAgain, "nothing has been driven yet")
+
+        await harness.model.prepare()
+        #expect(harness.model.canCheckAgain)
+
+        // The owner posted their digest; Check Again must actually pick it up.
+        harness.server.seedRow(phase: .ownerVerified, destination: true)
+        harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
+                              records: gardenGraph(in: destinationZoneFromSuccessor))
+        await harness.model.checkAgain()
+
+        #expect(harness.server.calls.contains(.putSuccessorVerification("tr_1")))
+    }
+
+    // MARK: Successor cutover
+
+    @Test("the garden is only called yours after this device has actually adopted it")
+    func successorAdoptsBeforeClaimingCompletion() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .ownerVerified, destination: true)
+        harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
+                              records: gardenGraph(in: destinationZoneFromSuccessor))
+        try harness.seedCheckpoint(role: .successor, phase: .ownerVerified,
+                                   sourceZone: sharedSourceZone,
+                                   destinationZone: destinationZoneFromSuccessor)
+
+        await harness.model.prepare()
+
+        #expect(harness.adoption.householdIDs == [ownerHouseholdID],
+                "the device must be cut over to the garden it now owns")
+        #expect(harness.model.stage == .handoffComplete)
+        #expect(harness.stored == nil)
+    }
+
+    @Test("a cutover that fails keeps the handoff resumable and never claims completion")
+    func failedAdoptionStaysResumable() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .ownerVerified, destination: true)
+        harness.cloudKit.seed(zone: destinationZoneFromSuccessor,
+                              records: gardenGraph(in: destinationZoneFromSuccessor))
+        try harness.seedCheckpoint(role: .successor, phase: .ownerVerified,
+                                   sourceZone: sharedSourceZone,
+                                   destinationZone: destinationZoneFromSuccessor)
+        harness.adoption.error = SeedkeepError(code: "server_error", message: "offline")
+
+        await harness.model.prepare()
+
+        #expect(harness.model.stage != .handoffComplete)
+        #expect(harness.model.canRetry)
+        #expect(harness.stored?.phase == .successorAdopting,
+                "the crash window between verification and adoption must be durable")
+
+        harness.adoption.error = nil
+        await harness.model.retry()
+
+        #expect(harness.adoption.householdIDs == [ownerHouseholdID])
+        #expect(harness.model.stage == .handoffComplete)
+        #expect(harness.stored == nil)
+    }
+
+    // MARK: The You ▸ Delete account action
+
+    @Test("the You ▸ Delete account action only presents; it sends nothing")
+    func youDeleteAccountActionOnlyPresents() {
+        // This is the exact function the button body calls. If YouView ever
+        // regains a direct deletion, it cannot go through here.
+        let harness = Harness()
+        harness.cloudKit.role = .soloOwner(zoneID: ownerZone)
+
+        harness.model.presentFromYou()
+
+        #expect(harness.model.stage == .confirming)
+        #expect(harness.server.calls.isEmpty)
+        #expect(harness.cloudKit.calls.isEmpty)
+        #expect(harness.stored == nil)
+    }
+
+    @Test("the You ▸ Delete account action shows progress, not a question, mid-deletion")
+    func youDeleteAccountActionResumesRatherThanReasking() throws {
+        let harness = Harness()
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .copyComplete)
+
+        harness.model.presentFromYou()
+
+        #expect(harness.model.stage != .confirming)
+        #expect(harness.server.calls.isEmpty, "presenting still sends nothing")
+    }
 }
 
 // MARK: - Universal-link routing
@@ -887,5 +1287,56 @@ struct AccountDeletionHandoffLinkTests {
             == .invite(code: "code99"))
         #expect(IncomingLink(url: URL(string: "https://seedkeep.app/")!) == nil)
         #expect(IncomingLink(url: URL(string: "https://www.icloud.com/share/0abc")!) == nil)
+    }
+}
+
+// MARK: - Root presentation routing
+
+/// What the app root does with a handoff link, as a decision the root
+/// actually consults.
+///
+/// The deferral this defends is not cosmetic: a modal presented over
+/// `SignInView` makes the sign-in the link is waiting for unreachable, and
+/// dismissing it is the only way out — which throws the capability away.
+@Suite("Deletion handoff root routing")
+struct AccountDeletionRootRouteTests {
+
+    private let link = AccountDeletionHandoffLink(transferID: "tr_42", token: "abc")
+
+    @Test("a link that arrives signed out presents nothing and stays pending")
+    func signedOutPresentsNothing() {
+        #expect(AccountDeletionRootRoute.decide(pendingLink: link,
+                                                isSignedIn: false,
+                                                hasHandoffInProgress: false) == .none)
+    }
+
+    @Test("the same held link presents the moment the user signs in")
+    func signingInPresentsTheHeldLink() {
+        #expect(AccountDeletionRootRoute.decide(pendingLink: link,
+                                                isSignedIn: true,
+                                                hasHandoffInProgress: false)
+                == .acceptHandoff(link))
+    }
+
+    @Test("a handoff already accepted presents a token-free resume surface")
+    func acceptedHandoffResumesWithoutALink() {
+        #expect(AccountDeletionRootRoute.decide(pendingLink: nil,
+                                                isSignedIn: true,
+                                                hasHandoffInProgress: true)
+                == .resumeHandoff)
+    }
+
+    @Test("a fresh link wins over a resume, and a signed-out device gets neither")
+    func precedenceAndSignedOutSuppression() {
+        #expect(AccountDeletionRootRoute.decide(pendingLink: link,
+                                                isSignedIn: true,
+                                                hasHandoffInProgress: true)
+                == .acceptHandoff(link))
+        #expect(AccountDeletionRootRoute.decide(pendingLink: nil,
+                                                isSignedIn: false,
+                                                hasHandoffInProgress: true) == .none)
+        #expect(AccountDeletionRootRoute.decide(pendingLink: nil,
+                                                isSignedIn: true,
+                                                hasHandoffInProgress: false) == .none)
     }
 }

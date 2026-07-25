@@ -106,3 +106,53 @@ enum IncomingLink: Equatable {
         }
     }
 }
+
+/// What the app root should be presenting for a garden handoff.
+///
+/// Extracted from the view because the decision is the interesting part
+/// and a SwiftUI body is not reachable from a test. Two rules it exists to
+/// enforce:
+///
+///   1. **Never present over the sign-in screen.** A modal on top of
+///      `SignInView` makes the very sign-in the link is waiting for
+///      unreachable, and the only way out of it — dismissal — throws the
+///      capability away. A link that arrives signed out is HELD by the
+///      caller and presented the moment authentication lands.
+///   2. **A spent link is not the only way back in.** Acceptance consumes
+///      the token, so a successor who relaunches mid-handoff has nothing
+///      to tap. A durable successor checkpoint therefore opens the same
+///      surface with no token at all.
+enum AccountDeletionRootRoute: Equatable {
+    /// A freshly opened link, ready to be inspected.
+    case acceptHandoff(AccountDeletionHandoffLink)
+    /// A handoff already accepted on this device, resumed from disk.
+    case resumeHandoff
+    /// Nothing to present. A pending link is still held by the caller.
+    case none
+
+    /// The route as a `.sheet(item:)` value. `nil` for `.none`.
+    struct Presentation: Identifiable, Equatable {
+        /// `nil` means resume a handoff already accepted on this device;
+        /// its single-use token is long gone and is not needed.
+        let link: AccountDeletionHandoffLink?
+        var id: String { link?.transferID ?? "resume" }
+    }
+
+    var presentation: Presentation? {
+        switch self {
+        case .acceptHandoff(let link): return Presentation(link: link)
+        case .resumeHandoff: return Presentation(link: nil)
+        case .none: return nil
+        }
+    }
+
+    static func decide(
+        pendingLink: AccountDeletionHandoffLink?,
+        isSignedIn: Bool,
+        hasHandoffInProgress: Bool
+    ) -> AccountDeletionRootRoute {
+        guard isSignedIn else { return .none }
+        if let pendingLink { return .acceptHandoff(pendingLink) }
+        return hasHandoffInProgress ? .resumeHandoff : .none
+    }
+}

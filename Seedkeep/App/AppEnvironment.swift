@@ -358,7 +358,10 @@ public final class AppEnvironment {
                 // server has already destroyed — which is exactly the state
                 // the launch sweep runs in.
                 localStoreOwnerID: { [weak self] in self?.auth.loadCachedIdentity()?.user.id },
-                signOut: { [weak self] in await self?.auth.signOut() }
+                signOut: { [weak self] in await self?.auth.signOut() },
+                adoptTransferredGarden: { [weak self] householdID in
+                    try await self?.adoptTransferredGarden(householdID: householdID)
+                }
             )
         )
         accountDeletionCoordinator = coordinator
@@ -548,6 +551,45 @@ public final class AppEnvironment {
             PendingShareInbox.shared.deposit(metadata)
             surfaceError(error)
         }
+    }
+
+    /// Cut this device over to a garden it has just received as a
+    /// successor in an account-deletion handoff.
+    ///
+    /// Until this runs, the app is still a PARTICIPANT of the departing
+    /// owner's shared zone — the marker, the CloudKit coordinator, and the
+    /// active-garden scope all point there. The owner is about to delete
+    /// that zone. So "the garden is yours" is not true when the digests
+    /// match; it is true when this has happened:
+    ///
+    ///   1. Re-read the session. The server re-homed household ownership
+    ///      at `verified`, so the cached identity now names a household
+    ///      this user owns rather than one they merely joined.
+    ///   2. Stop being a participant. The destination zone lives in THIS
+    ///      device's private database; keeping the marker would keep
+    ///      pointing every read at the doomed shared zone.
+    ///   3. Reset the owner state token, so the rebuilt owner coordinator
+    ///      does a FULL fetch of the destination zone instead of resuming
+    ///      a cursor that belongs to the source zone's change history.
+    ///   4. Drop the cached coordinator and sync, which rebuilds it as the
+    ///      owner of the destination.
+    ///
+    /// Local SwiftData is deliberately NOT wiped: its rows are scoped to
+    /// this same household id and are exactly the contents that were
+    /// copied, so wiping would throw away a correct local garden and make
+    /// the successor wait on a full re-download for nothing.
+    ///
+    /// THROWS, and the coordinator holds `.successorAdopting` until it
+    /// returns, so a failure here is retried rather than papered over with
+    /// a completion screen.
+    func adoptTransferredGarden(householdID: String) async throws {
+        await auth.restoreSession()
+        clearParticipantMarker()
+        try HouseholdCloudCoordinator.resetStateToken(
+            at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: householdID))
+        cloudCoordinator = nil
+        cloudCoordinatorKey = nil
+        await syncIfPossible()
     }
 
     /// Leave the shared household: clear the marker + wipe the shared local data + drop the participant

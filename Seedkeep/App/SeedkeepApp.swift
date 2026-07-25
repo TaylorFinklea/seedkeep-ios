@@ -97,6 +97,10 @@ struct RootView: View {
     @Binding var pendingInviteCode: String?
     @Binding var pendingHandoff: AccountDeletionHandoffLink?
     @State private var whatsNewRelease: ChangelogRelease?
+    /// Per-session acknowledgement that the successor-resume sheet was
+    /// closed. The checkpoint it comes from is durable, so without this the
+    /// sheet would reopen the instant it is dismissed.
+    @State private var resumeDismissed = false
 
     var body: some View {
         ZStack {
@@ -145,13 +149,45 @@ struct RootView: View {
                 signedOutInviteView(code: route.code)
             }
         }
-        // A shared-garden handoff. Presented at the ROOT, above both the
-        // signed-in and signed-out branches, because the link has to be
-        // held rather than dropped when it arrives with nobody signed in
-        // — the sheet says so, and re-inspects the moment auth lands.
-        .sheet(item: $pendingHandoff) { link in
-            AccountDeletionHandoffAcceptView(model: appEnv.accountDeletionFlow, link: link)
+        // A shared-garden handoff, presented only once there is an account
+        // to accept it with. `AccountDeletionRootRoute` owns that decision
+        // — a modal over `SignInView` would hide the sign-in the link is
+        // waiting for, and the only way out of it would throw the
+        // capability away. A handoff already accepted on this device
+        // reopens the same surface with no token at all, which is the only
+        // way back in after the single-use link has been spent.
+        .sheet(item: Binding(
+            get: { handoffRoute.presentation },
+            set: { newValue in
+                guard newValue == nil else { return }
+                // Which one was dismissed decides what stops presenting: a
+                // link is consumed by closing it, but a durable successor
+                // checkpoint outlives the sheet and would re-present
+                // forever without a per-session acknowledgement.
+                if pendingHandoff != nil { pendingHandoff = nil } else { resumeDismissed = true }
+            }
+        )) { presentation in
+            AccountDeletionHandoffAcceptView(model: appEnv.accountDeletionFlow,
+                                             link: presentation.link)
         }
+        .onChange(of: isSignedIn) { _, signedIn in
+            // Sign-in is what a held link and a relaunched successor
+            // checkpoint were both waiting for.
+            if signedIn { appEnv.accountDeletionFlow.reload() }
+        }
+    }
+
+    private var isSignedIn: Bool {
+        if case .signedIn = auth.state { return true }
+        return false
+    }
+
+    private var handoffRoute: AccountDeletionRootRoute {
+        AccountDeletionRootRoute.decide(
+            pendingLink: pendingHandoff,
+            isSignedIn: isSignedIn,
+            hasHandoffInProgress: !resumeDismissed
+                && appEnv.accountDeletionFlow.hasHandoffInProgress)
     }
 
     @ViewBuilder

@@ -70,6 +70,11 @@ final class AccountDeletionFlowModel {
     /// view, a log, or a diagnostic dump.
     @ObservationIgnored private var pendingHandoff: AccountDeletionHandoffLink?
 
+    /// True between starting an acceptance and proving it landed. While it
+    /// is set, `pendingHandoff` is the only thing that can finish the
+    /// transfer, so Retry must re-present the token rather than resume.
+    @ObservationIgnored private var acceptanceUnfinished = false
+
     init(coordinator: AccountDeletionCoordinator) {
         self.coordinator = coordinator
     }
@@ -127,33 +132,56 @@ final class AccountDeletionFlowModel {
     var isComplete: Bool { stage == .deleted }
 
     /// Retry is a response to a failure and nothing else. A flow that is
-    /// merely waiting on another device has nothing to retry.
+    /// merely waiting on another device has nothing to retry — that is
+    /// `canCheckAgain`.
     var canRetry: Bool {
         if case .failed = stage { return true }
         return false
     }
 
-    /// Cancel is legal exactly while the original garden is still there,
-    /// and only for the account that is being deleted — a successor is
-    /// finishing somebody else's handoff and has no deletion to abandon.
+    /// Poll the other device. The coordinator never polls on its own, so a
+    /// successor sitting at `destinationReady` while the owner copies —
+    /// and an owner waiting on the successor's verification — need a way
+    /// to ask again that is not an error-recovery affordance.
+    var canCheckAgain: Bool {
+        if case .waiting = stage { return true }
+        return false
+    }
+
+    /// Cancel is legal only for a departing SHARED OWNER, and only while
+    /// the original garden is still there.
+    ///
+    /// Deliberately not offered to a participant or solo owner: their
+    /// checkpoint is written before the irreversible CloudKit step and
+    /// stays put if that step lands but its verification does not, so
+    /// "nothing has happened yet" and "the share is already left" look
+    /// identical from here. Offering Cancel there would throw away the
+    /// only resumable record and then tell the user nothing was removed.
+    /// A successor has no deletion of their own to abandon.
     var canCancel: Bool {
         guard let checkpoint else { return false }
-        guard checkpoint.deletesOwnAccount, !checkpoint.phase.sourceIsGone else { return false }
+        guard checkpoint.role == .sharedOwner, !checkpoint.phase.sourceIsGone else { return false }
         if case .working = stage { return false }
         return true
     }
 
+    /// True when this device is part-way through receiving somebody else's
+    /// garden. Lets the app root offer a token-free way back into a
+    /// handoff whose single-use link has already been spent.
+    var hasHandoffInProgress: Bool { checkpoint?.role == .successor }
+
     /// The shareable handoff link, or `nil`.
     ///
-    /// Guarded three ways on purpose: only a shared owner, only while a
-    /// successor has yet to accept, and only when this process actually
-    /// holds the raw token. The token is a capability to take the garden,
-    /// so anything less than all three would put it on the wrong screen.
+    /// Guarded four ways on purpose: only a shared owner, only while a
+    /// successor has yet to accept, only when this process actually holds
+    /// the raw token, and only while that token is still live. The token
+    /// is a capability to take the garden, so anything less would put it
+    /// on the wrong screen — or hand out a link the server will reject.
     var handoffLink: URL? {
         guard let checkpoint,
               checkpoint.role == .sharedOwner,
               checkpoint.phase == .transferPending,
-              let handoff = coordinator.handoff,
+              let handoff = coordinator.liveHandoff,
               handoff.transferID == checkpoint.transferID else { return nil }
         return AccountDeletionHandoffLink(transferID: handoff.transferID,
                                           token: handoff.token).universalLink
@@ -188,15 +216,50 @@ final class AccountDeletionFlowModel {
         _ = try? coordinator.refreshCheckpoint()
     }
 
+    /// The You ▸ Delete account button, as behaviour rather than as view
+    /// code.
+    ///
+    /// It reads the durable record and does nothing else — no CloudKit, no
+    /// server, no checkpoint write. Tapping the button is not consent, and
+    /// a person who opens this and changes their mind must leave no trace.
+    /// The button body is one call to this method so that everything the
+    /// tap can do is reachable from a test; a SwiftUI body is not.
+    func presentFromYou() {
+        reload()
+        stage = checkpoint == nil ? .confirming : .working(checkpoint?.phase)
+    }
+
     /// The user said yes at the confirmation.
     func confirm() async {
         await drive { try await self.coordinator.start() }
     }
 
-    /// Re-attempt the step that failed. Every step is idempotent, so this
-    /// is the same call `prepare()` makes.
+    /// Re-attempt whatever failed.
+    ///
+    /// Acceptance is special: if the accept call is what failed, the
+    /// server may have bound this device as successor and lost the reply.
+    /// There is no checkpoint to resume in that case, so a generic
+    /// `resume()` would return `.idle` and quietly abandon a transfer that
+    /// is already half-committed. Re-presenting the retained token to the
+    /// idempotent accept route is the only thing that recovers it.
     func retry() async {
+        if acceptanceUnfinished, let link = pendingHandoff {
+            await performAcceptance(link)
+            return
+        }
         await drive { try await self.coordinator.resume() }
+    }
+
+    /// Ask the other device's half of the transfer for news. Same
+    /// idempotent resume as `retry`, offered for a different reason.
+    func checkAgain() async {
+        await drive { try await self.coordinator.resume() }
+    }
+
+    /// Whichever of the two is legal right now — used by surfaces that
+    /// show a single "get this moving again" affordance.
+    func retryOrRefresh() async {
+        if canRetry { await retry() } else { await checkAgain() }
     }
 
     /// Abandon the deletion. Refused by the coordinator once the original
@@ -230,10 +293,22 @@ final class AccountDeletionFlowModel {
     /// the single-use token.
     func acceptOffer() async {
         guard case .handoffOffered = stage, let link = pendingHandoff else { return }
-        pendingHandoff = nil
+        await performAcceptance(link)
+    }
+
+    /// Runs the accept and decides whether the link may finally be
+    /// forgotten. It may not be forgotten just because the call returned:
+    /// only a durable successor checkpoint, or a terminal outcome, proves
+    /// the token is no longer the one thing that can finish this.
+    private func performAcceptance(_ link: AccountDeletionHandoffLink) async {
+        acceptanceUnfinished = true
         await drive {
             try await self.coordinator.acceptHandoff(transferID: link.transferID,
                                                      token: link.token)
+        }
+        if coordinator.checkpoint?.role == .successor || stageIsTerminal {
+            pendingHandoff = nil
+            acceptanceUnfinished = false
         }
     }
 
@@ -304,5 +379,14 @@ final class AccountDeletionFlowModel {
     private var isWaiting: Bool {
         if case .waiting = stage { return true }
         return false
+    }
+
+    /// A stage nothing else follows. An acceptance that reaches one of
+    /// these has no further use for the token.
+    private var stageIsTerminal: Bool {
+        switch stage {
+        case .deleted, .handoffComplete, .cancelled, .handoffRefused: return true
+        default: return false
+        }
     }
 }

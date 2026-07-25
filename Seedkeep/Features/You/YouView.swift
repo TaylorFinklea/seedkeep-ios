@@ -71,10 +71,12 @@ struct YouView: View {
                             Text("Sign out")
                         }
                         Button(role: .destructive) {
-                            // Opens the flow. It does NOT delete: the sheet
-                            // asks first, and everything after that is the
-                            // coordinator's resumable state machine, where
-                            // it is reachable by tests. A view body is not.
+                            // Opens the flow. It does NOT delete. Everything
+                            // this tap can do lives in `presentFromYou()`,
+                            // where a test can reach it — a SwiftUI body
+                            // cannot be, which is exactly how a direct
+                            // `DELETE /api/me` hid here before.
+                            appEnv.accountDeletionFlow.presentFromYou()
                             showDeletionFlow = true
                         } label: {
                             Text("Delete account")

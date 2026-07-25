@@ -116,6 +116,15 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
         case sourceZoneDeleted = "source_zone_deleted"
         /// The server has recorded the source as deleted.
         case sourceDeleted = "source_deleted"
+        /// Successor-only: both digests matched server-side, but this
+        /// device still points at the departing owner's shared zone. The
+        /// garden is not the successor's until the app itself is cut over
+        /// — household re-homed, participant marker cleared, owner
+        /// coordinator rebuilt on the destination — and the owner is about
+        /// to delete the source. A crash in that window would otherwise
+        /// leave a successor whose app is aimed at a zone that is about to
+        /// stop existing, with no record that adoption was owed.
+        case successorAdopting = "successor_adopting"
 
         // ── Every deleting role ────────────────────────────────────────
         /// `DELETE /api/me`, then sign-out and local erase.
@@ -148,7 +157,7 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
             case .successorBound, .destinationZoneCreated: return .successorBound
             case .destinationReady, .destinationShareAccepted, .copyComplete: return .destinationReady
             case .ownerVerified: return .ownerVerified
-            case .verified: return .verified
+            case .verified, .successorAdopting: return .verified
             // The lease is held from here on: the zone may already be gone.
             case .sourceZoneDeleting, .sourceZoneDeleted: return .sourceDeleting
             case .sourceDeleted: return .sourceDeleted
@@ -173,7 +182,7 @@ struct AccountDeletionCheckpoint: Codable, Equatable, Sendable {
                 return true
             case .participantLeaving, .ownerDeletingZone, .transferPending, .successorBound,
                  .destinationZoneCreated, .destinationReady, .destinationShareAccepted,
-                 .copyComplete, .ownerVerified, .verified:
+                 .copyComplete, .ownerVerified, .verified, .successorAdopting:
                 return false
             }
         }

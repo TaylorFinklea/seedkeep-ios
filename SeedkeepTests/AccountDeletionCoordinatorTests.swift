@@ -601,6 +601,20 @@ private final class FakeDeletionServer: AccountDeletionServerOperating {
 @MainActor
 private final class SignOutRecorder { var count = 0 }
 
+/// Stands in for the successor's app-scope cutover: re-home the household,
+/// stop being a participant, rebuild the owner coordinator. It THROWS on
+/// demand because the window between server verification and local
+/// adoption is the one a crash has to survive.
+@MainActor
+private final class AdoptionRecorder {
+    private(set) var householdIDs: [String] = []
+    var error: Error?
+    func adopt(_ householdID: String) throws {
+        if let error { throw error }
+        householdIDs.append(householdID)
+    }
+}
+
 @MainActor
 private final class Harness {
     let directory: URL
@@ -608,6 +622,7 @@ private final class Harness {
     let cloudKit = FakeCloudKit()
     let server = FakeDeletionServer()
     let signOut = SignOutRecorder()
+    let adoption = AdoptionRecorder()
     let coordinator: AccountDeletionCoordinator
     let userID: String
 
@@ -629,7 +644,8 @@ private final class Harness {
             session: AccountDeletionSession(
                 identity: { AccountDeletionSession.Identity(userID: userID, householdID: householdID) },
                 localStoreOwnerID: { userID },
-                signOut: { recorder.count += 1 }
+                signOut: { recorder.count += 1 },
+                adoptTransferredGarden: { [adopter = adoption] in try adopter.adopt($0) }
             ),
             now: { nowMillis },
             newReceipt: { Harness.receiptNonce }
@@ -1677,7 +1693,8 @@ struct AccountDeletionCoordinatorTests {
             store: harness.store,
             cloudKit: harness.cloudKit,
             server: harness.server,
-            session: AccountDeletionSession(identity: { nil }, localStoreOwnerID: { nil }, signOut: {}),
+            session: AccountDeletionSession(identity: { nil }, localStoreOwnerID: { nil },
+                                            signOut: {}, adoptTransferredGarden: { _ in }),
             now: { 0 }
         )
 
@@ -1940,7 +1957,8 @@ struct AccountDeletionCoordinatorTests {
             session: AccountDeletionSession(
                 identity: { nil },
                 localStoreOwnerID: { localStoreOwner ?? harness.userID },
-                signOut: { [recorder = harness.signOut] in recorder.count += 1 }
+                signOut: { [recorder = harness.signOut] in recorder.count += 1 },
+                adoptTransferredGarden: { _ in }
             ),
             now: { 1_700_000_000_000 },
             newReceipt: { Harness.receiptNonce }
@@ -2115,7 +2133,8 @@ struct AccountDeletionCoordinatorTests {
             session: AccountDeletionSession(
                 identity: { nil },
                 localStoreOwnerID: { nil },
-                signOut: { [recorder = harness.signOut] in recorder.count += 1 }
+                signOut: { [recorder = harness.signOut] in recorder.count += 1 },
+                adoptTransferredGarden: { _ in }
             ),
             now: { 1_700_000_000_000 },
             newReceipt: { Harness.receiptNonce })

@@ -114,7 +114,7 @@ enum AccountDeletionFlowCopy {
             return [PlannedStep(id: "destination", title: "Preparing your garden"),
                     PlannedStep(id: "receive", title: "Receiving the garden"),
                     PlannedStep(id: "verify", title: "Checking the copy"),
-                    PlannedStep(id: "done", title: "Handover complete")]
+                    PlannedStep(id: "adopt", title: "Making it yours")]
         }
     }
 
@@ -162,7 +162,9 @@ enum AccountDeletionFlowCopy {
             case .successorBound, .destinationZoneCreated: return 0
             case .destinationReady: return 1
             case .ownerVerified: return 2
-            case .verified, .sourceDeleted: return 3
+            // Server-verified is not the same as this device owning it.
+            // The garden is only "yours" once the app has been cut over.
+            case .verified, .sourceDeleted, .successorAdopting: return 3
             default: return nil
             }
         }

@@ -214,11 +214,15 @@ struct AccountDeletionFlowView: View {
 
     private var actions: some View {
         VStack(spacing: 10) {
-            if model.canRetry {
+            if model.canRetry || model.canCheckAgain {
                 Button {
-                    Task { await model.retry() }
+                    Task { await model.retryOrRefresh() }
                 } label: {
-                    Text("Retry").frame(maxWidth: .infinity)
+                    // Nothing polls: while the successor builds and
+                    // verifies, this is the owner's only way to learn they
+                    // are done without relaunching.
+                    Text(model.canRetry ? "Retry" : "Check again")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HerbColor.sepia)

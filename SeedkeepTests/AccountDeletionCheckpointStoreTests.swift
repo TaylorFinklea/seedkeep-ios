@@ -711,6 +711,10 @@ struct AccountDeletionCheckpointStoreTests {
             (.copyComplete, .destinationReady),
             (.ownerVerified, .ownerVerified),
             (.verified, .verified),
+            // The successor's local cutover. Server-side the transfer is
+            // verified — the digests matched — but this device has not yet
+            // stopped pointing at the departing owner's zone.
+            (.successorAdopting, .verified),
             // Both sit inside the lease: from `.sourceZoneDeleting` the
             // server has already committed and closed cancellation, and by
             // `.sourceZoneDeleted` the zone is actually gone. Reporting

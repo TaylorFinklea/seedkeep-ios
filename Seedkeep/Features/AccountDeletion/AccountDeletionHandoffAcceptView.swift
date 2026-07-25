@@ -10,13 +10,19 @@ import SeedkeepKit
 /// only the non-consuming inspection and the local proof that this device
 /// actually participates in the named garden; the token is not presented
 /// for acceptance until the user taps Accept. A person who opens somebody
-/// else's link, or who is not signed in, therefore leaves it worth exactly
-/// as much as they found it.
+/// else's link therefore leaves it worth exactly as much as they found it.
+///
+/// The same surface, with `link == nil`, is how a successor gets back into
+/// a handoff they already accepted. Acceptance consumes the token, so after
+/// a relaunch there is nothing left to tap — only the durable checkpoint,
+/// which `prepare()` resumes.
 struct AccountDeletionHandoffAcceptView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AuthController.self) private var auth
     @Bindable var model: AccountDeletionFlowModel
-    let link: AccountDeletionHandoffLink
+    /// `nil` when this device already accepted the handoff: the token is
+    /// spent and the durable checkpoint is all that is needed to finish.
+    let link: AccountDeletionHandoffLink?
 
     var body: some View {
         NavigationStack {
@@ -44,11 +50,17 @@ struct AccountDeletionHandoffAcceptView: View {
                 }
             }
             .interactiveDismissDisabled(isWorking)
-            .task { await model.open(link) }
+            .task {
+                if let link {
+                    await model.open(link)
+                } else {
+                    await model.prepare()
+                }
+            }
             // Signing in is what the deferral was waiting for: re-run the
             // inspection the moment there is an identity to inspect with.
             .onChange(of: isSignedIn) { _, signedIn in
-                guard signedIn, model.stage == .signInRequired else { return }
+                guard signedIn, model.stage == .signInRequired, let link else { return }
                 Task { await model.open(link) }
             }
         }
@@ -56,8 +68,8 @@ struct AccountDeletionHandoffAcceptView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Rubric(text: "a garden offered")
-            Text("Take over this garden")
+            Rubric(text: link == nil ? "a garden in transit" : "a garden offered")
+            Text(link == nil ? "Receiving a garden" : "Take over this garden")
                 .font(HerbFont.display(size: 28))
                 .foregroundStyle(HerbColor.ink)
             Text(model.statusLine)
@@ -75,8 +87,8 @@ struct AccountDeletionHandoffAcceptView: View {
             notice(symbol: "person.crop.circle.badge.questionmark",
                    title: "Sign in first",
                    body: """
-                   Sign in to the Seedkeep account that already shares this garden, then open \
-                   the link again. Nothing has been used up.
+                   Close this and sign in to the Seedkeep account that already shares this \
+                   garden. The offer is held for you — nothing has been used up.
                    """)
 
         case .handoffOffered(let preview):
@@ -84,16 +96,22 @@ struct AccountDeletionHandoffAcceptView: View {
 
         case .handoffRefused(let message):
             notice(symbol: "hand.raised",
-                   title: "This link isn't for this account",
+                   title: "This link can't be used here",
                    body: message)
 
         case .handoffComplete:
             notice(symbol: "leaf",
                    title: "The garden is yours",
                    body: """
-                   Everything has been copied into a garden you own. The previous owner's \
-                   account can now be deleted; yours is untouched.
+                   Everything has been copied into a garden you own, and this device is now \
+                   pointed at it. The previous owner's account can be deleted; yours is \
+                   untouched.
                    """)
+
+        case .cancelled, .dormant:
+            notice(symbol: "xmark.circle",
+                   title: "Nothing to take over",
+                   body: "This handoff is no longer in progress on this device.")
 
         default:
             progress
@@ -162,11 +180,23 @@ struct AccountDeletionHandoffAcceptView: View {
                 ProgressView().herbProgressStyle()
             }
 
-            if model.canRetry {
+            if case .failed(_, let message) = model.stage {
+                Text(message)
+                    .font(HerbFont.body(size: 13))
+                    .foregroundStyle(HerbColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(HerbColor.vellumLo, in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            // Nothing polls. While the departing owner copies and verifies,
+            // this is the only way for the successor to learn they are done.
+            if model.canRetry || model.canCheckAgain {
                 Button {
-                    Task { await model.retry() }
+                    Task { await model.retryOrRefresh() }
                 } label: {
-                    Text("Retry").frame(maxWidth: .infinity)
+                    Text(model.canRetry ? "Retry" : "Check again").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(HerbColor.sepia)
