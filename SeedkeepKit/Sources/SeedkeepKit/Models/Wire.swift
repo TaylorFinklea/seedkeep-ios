@@ -468,6 +468,15 @@ public enum WireResponses {
         public let tag: TagDTO
     }
 
+    /// `POST/PUT/GET/DELETE /api/account-deletion/transfers…` all return
+    /// this shape. `handoff_token` is the raw single-use token and is
+    /// non-null on exactly one response: the create/reissue call that
+    /// minted it. Everywhere else the server only holds its hash.
+    public struct AccountDeletionTransferOne: Codable, Sendable, Equatable {
+        public let transfer: AccountDeletionTransferDTO
+        public let handoff_token: String?
+    }
+
     public struct SeedOne: Codable, Sendable, Equatable {
         public let seed: SeedDTO
     }

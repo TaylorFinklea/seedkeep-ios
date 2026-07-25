@@ -66,6 +66,162 @@ public actor SeedkeepClient {
         return result.deleted
     }
 
+    // MARK: - Account-deletion transfers
+
+    // The shared-owner handoff (spec § "Coordination API"; server:
+    // `src/routes/account-deletion-transfers.ts` under
+    // `/api/account-deletion`). Every route below is authenticated and
+    // idempotent: repeating a step that already landed returns the
+    // durable state, so the coordinator can retry any phase from its
+    // checkpoint. A 409 `phase_conflict` carries the durable phase in
+    // `SeedkeepError.conflictPhase`.
+
+    private static let transfersPath = "/api/account-deletion/transfers"
+
+    /// `POST /api/account-deletion/transfers` — creates the owner's one
+    /// active transfer, or resumes it. `handoff_token` is non-nil only
+    /// when this call actually minted a token (first create, or reissue
+    /// of an expired one still waiting for a successor); a plain resume
+    /// returns the transfer with a nil token because the server keeps
+    /// only its hash.
+    public func createAccountDeletionTransfer() async throws -> WireResponses.AccountDeletionTransferOne {
+        try await postJSON(path: Self.transfersPath, body: EmptyBody())
+    }
+
+    /// `POST /api/account-deletion/transfers/:id/accept` — the successor
+    /// presents the handoff token, after their device has proved it can
+    /// read the source shared zone. The token travels in the body, never
+    /// the URL: it is a single-use credential and URLs end up in logs.
+    public func acceptAccountDeletionTransfer(
+        id: String,
+        token: String
+    ) async throws -> AccountDeletionTransferDTO {
+        struct Body: Encodable { let token: String }
+        let res: WireResponses.AccountDeletionTransferOne = try await postJSON(
+            path: "\(Self.transfersPath)/\(id)/accept",
+            body: Body(token: token)
+        )
+        return res.transfer
+    }
+
+    /// `PUT /api/account-deletion/transfers/:id/destination` — the
+    /// successor records the zone and share they created and own.
+    ///
+    /// `shareURL` is optional on the wire; a nil is OMITTED rather than
+    /// encoded as null, because the server body is a strict Zod object
+    /// whose `destination_share_url` is `.optional()` (absent is legal,
+    /// null is a 400).
+    public func putAccountDeletionTransferDestination(
+        id: String,
+        zoneName: String,
+        zoneOwnerName: String,
+        shareRecordName: String,
+        shareURL: String? = nil
+    ) async throws -> AccountDeletionTransferDTO {
+        struct Body: Encodable {
+            let destination_zone_name: String
+            let destination_zone_owner_name: String
+            let destination_share_record_name: String
+            let destination_share_url: String?
+        }
+        let res: WireResponses.AccountDeletionTransferOne = try await sendJSON(
+            method: "PUT",
+            path: "\(Self.transfersPath)/\(id)/destination",
+            body: Body(
+                destination_zone_name: zoneName,
+                destination_zone_owner_name: zoneOwnerName,
+                destination_share_record_name: shareRecordName,
+                destination_share_url: shareURL
+            )
+        )
+        return res.transfer
+    }
+
+    /// `PUT /api/account-deletion/transfers/:id/owner-verification` — the
+    /// departing owner posts the canonical digest and per-type counts it
+    /// read back from the destination zone.
+    public func putAccountDeletionTransferOwnerVerification(
+        id: String,
+        digest: String,
+        recordCounts: [String: Int]
+    ) async throws -> AccountDeletionTransferDTO {
+        struct Body: Encodable {
+            let digest: String
+            let record_counts: [String: Int]
+        }
+        let res: WireResponses.AccountDeletionTransferOne = try await sendJSON(
+            method: "PUT",
+            path: "\(Self.transfersPath)/\(id)/owner-verification",
+            body: Body(digest: digest, record_counts: recordCounts)
+        )
+        return res.transfer
+    }
+
+    /// `PUT /api/account-deletion/transfers/:id/successor-verification` —
+    /// the successor posts its own digest plus the destination zone it
+    /// still owns. The zone names are the ownership proof: if they do not
+    /// match the recorded destination the two devices are describing
+    /// different zones and the matching digests prove nothing.
+    public func putAccountDeletionTransferSuccessorVerification(
+        id: String,
+        digest: String,
+        recordCounts: [String: Int],
+        destinationZoneName: String,
+        destinationZoneOwnerName: String
+    ) async throws -> AccountDeletionTransferDTO {
+        struct Body: Encodable {
+            let digest: String
+            let record_counts: [String: Int]
+            let destination_zone_name: String
+            let destination_zone_owner_name: String
+        }
+        let res: WireResponses.AccountDeletionTransferOne = try await sendJSON(
+            method: "PUT",
+            path: "\(Self.transfersPath)/\(id)/successor-verification",
+            body: Body(
+                digest: digest,
+                record_counts: recordCounts,
+                destination_zone_name: destinationZoneName,
+                destination_zone_owner_name: destinationZoneOwnerName
+            )
+        )
+        return res.transfer
+    }
+
+    /// `POST /api/account-deletion/transfers/:id/source-deleted` — the
+    /// owner reports the source zone verifiably absent. This is what
+    /// unlocks `DELETE /api/me` for a shared owner.
+    @discardableResult
+    public func markAccountDeletionTransferSourceDeleted(
+        id: String
+    ) async throws -> AccountDeletionTransferDTO {
+        let res: WireResponses.AccountDeletionTransferOne = try await postJSON(
+            path: "\(Self.transfersPath)/\(id)/source-deleted",
+            body: EmptyBody()
+        )
+        return res.transfer
+    }
+
+    /// `GET /api/account-deletion/transfers/:id` — either bound party
+    /// reloads the durable phase after a crash, a relaunch, or a conflict.
+    public func accountDeletionTransfer(id: String) async throws -> AccountDeletionTransferDTO {
+        let res: WireResponses.AccountDeletionTransferOne = try await getJSON(
+            path: "\(Self.transfersPath)/\(id)"
+        )
+        return res.transfer
+    }
+
+    /// `DELETE /api/account-deletion/transfers/:id` — the owner abandons
+    /// the handoff. Legal until the source zone is gone; it never touches
+    /// garden data and restores any membership the re-home changed.
+    @discardableResult
+    public func cancelAccountDeletionTransfer(id: String) async throws -> AccountDeletionTransferDTO {
+        let res: WireResponses.AccountDeletionTransferOne = try await deleteJSON(
+            path: "\(Self.transfersPath)/\(id)"
+        )
+        return res.transfer
+    }
+
     // MARK: - Households
 
     public func createOrFetchHousehold(name: String? = nil) async throws -> WireResponses.CreateOrFetchHousehold {

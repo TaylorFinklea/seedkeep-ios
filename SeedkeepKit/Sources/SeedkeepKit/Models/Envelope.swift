@@ -29,7 +29,8 @@ public enum Envelope<T: Decodable & Sendable>: Decodable, Sendable {
                 code: err.code,
                 message: err.message,
                 requestID: requestID,
-                retryAfterSeconds: retryAfter
+                retryAfterSeconds: retryAfter,
+                conflictPhase: err.phase
             ))
         }
     }
@@ -44,6 +45,12 @@ public struct SeedkeepError: Error, Sendable, Equatable {
     /// Populated from the envelope-level `retry_after_seconds` sibling
     /// on rate-limited (429) responses; `nil` otherwise.
     public let retryAfterSeconds: Int?
+    /// Durable server-side phase carried by an error, decoded from
+    /// `error.phase`. The account-deletion transfer routes attach it to
+    /// phase conflicts (409 `phase_conflict`) precisely so a client that
+    /// raced another device resumes from the phase the server actually
+    /// holds instead of guessing. `nil` for every other error.
+    public let conflictPhase: String?
     /// HTTP status code of the response this error was decoded from.
     /// `nil` for errors minted locally (bad URL, non-HTTP response).
     /// Lets callers classify transport-shaped failures (5xx / 429 are
@@ -56,12 +63,14 @@ public struct SeedkeepError: Error, Sendable, Equatable {
         message: String,
         requestID: String? = nil,
         retryAfterSeconds: Int? = nil,
+        conflictPhase: String? = nil,
         httpStatus: Int? = nil
     ) {
         self.code = code
         self.message = message
         self.requestID = requestID
         self.retryAfterSeconds = retryAfterSeconds
+        self.conflictPhase = conflictPhase
         self.httpStatus = httpStatus
     }
 
@@ -74,6 +83,7 @@ public struct SeedkeepError: Error, Sendable, Equatable {
             message: message,
             requestID: requestID,
             retryAfterSeconds: retryAfterSeconds,
+            conflictPhase: conflictPhase,
             httpStatus: httpStatus
         )
     }
@@ -82,6 +92,8 @@ public struct SeedkeepError: Error, Sendable, Equatable {
     struct Body: Decodable, Sendable {
         let code: String
         let message: String
+        /// Present only on transfer phase conflicts.
+        let phase: String?
     }
 }
 
