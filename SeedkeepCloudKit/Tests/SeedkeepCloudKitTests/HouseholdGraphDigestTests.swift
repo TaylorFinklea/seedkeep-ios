@@ -9,10 +9,17 @@ import CloudKit
 // The digest must be a pure function of the APPLICATION graph: identical for the same records in
 // any order, in any zone, on either device; different the moment a scalar, a reference target, or
 // a reference action moves. CloudKit's own bookkeeping (change tags, share records, parent
-// pointers, undeclared keys) must never reach the hash, or the two devices would never agree.
+// pointers) must never reach the hash, or the two devices would never agree.
+//
+// It must also FAIL CLOSED. This digest is the sole gate on an irreversible zone deletion, so
+// anything it cannot describe — an unrecognised record type, an undeclared key, a record or an
+// in-zone reference belonging to some other zone — must throw rather than be quietly skipped.
+// Silently dropping data on both sides would make the two truncated copies compare EQUAL and
+// authorise deleting the original.
 
 private let sourceZone = CKRecordZone.ID(zoneName: "seedkeep-hh1", ownerName: CKCurrentUserDefaultName)
-private let otherZone = CKRecordZone.ID(zoneName: "seedkeep-hh1", ownerName: "_successor")
+private let successorZone = CKRecordZone.ID(zoneName: "seedkeep-hh1", ownerName: "_successor")
+private let foreignZone = CKRecordZone.ID(zoneName: "seedkeep-elsewhere", ownerName: "_other")
 
 private func makeRecord(
     _ type: SeedkeepRecordType,
@@ -33,8 +40,18 @@ private func inZoneRef(_ name: String, _ action: CKRecord.ReferenceAction,
     CKRecord.Reference(recordID: CKRecord.ID(recordName: name, zoneID: zone), action: action)
 }
 
-/// A small but representative graph: two root types, a set-null child, a cascade child,
-/// a cross-DB string ref, and a Bool field.
+private func digest(of records: [CKRecord],
+                    in zone: CKRecordZone.ID = sourceZone) throws -> HouseholdGraphDigest {
+    try HouseholdGraphDigester.digest(of: records, in: zone)
+}
+
+private func canonical(of records: [CKRecord],
+                       in zone: CKRecordZone.ID = sourceZone) throws -> String {
+    try HouseholdGraphDigester.canonicalDocument(of: records, in: zone)
+}
+
+/// A representative graph: two root types, a set-null child, two cascade children, a cross-DB
+/// string ref, a Bool field, and the app's own MigrationReceipt infrastructure record.
 private func sampleGraph(in zone: CKRecordZone.ID = sourceZone) -> [CKRecord] {
     [
         makeRecord(.household, "household:hh1", in: zone,
@@ -57,6 +74,9 @@ private func sampleGraph(in zone: CKRecordZone.ID = sourceZone) -> [CKRecord] {
         makeRecord(.journalChecklistItem, "journalChecklistItem:c1", in: zone,
                    scalars: ["text": "Water" as CKRecordValue, "completed": 1 as CKRecordValue],
                    refs: ["entryID": inZoneRef("journalEntry:j1", .deleteSelf, in: zone)]),
+        makeRecord(.migrationReceipt, "migrated:hh1", in: zone,
+                   scalars: ["completedAt": 1_700_000_000_000 as CKRecordValue,
+                             "schemaVersion": 1 as CKRecordValue]),
     ]
 }
 
@@ -65,12 +85,10 @@ private func sampleGraph(in zone: CKRecordZone.ID = sourceZone) -> [CKRecord] {
 @Test("the digest is identical for any input record order")
 func digestIgnoresRecordOrder() throws {
     let graph = sampleGraph()
-    let forward = try HouseholdGraphDigester.digest(of: graph)
-    let reversed = try HouseholdGraphDigester.digest(of: graph.reversed())
-    let rotated = try HouseholdGraphDigester.digest(of: Array(graph[2...] + graph[..<2]))
+    let forward = try digest(of: graph)
 
-    #expect(forward == reversed)
-    #expect(forward == rotated)
+    #expect(try forward == digest(of: graph.reversed()))
+    #expect(try forward == digest(of: Array(graph[2...] + graph[..<2])))
     #expect(forward.sha256.count == 64, "SHA-256 must render as 64 lowercase hex characters")
     #expect(forward.sha256 == forward.sha256.lowercased())
 }
@@ -87,45 +105,92 @@ func digestIgnoresFieldOrder() throws {
     b["name"] = "North" as CKRecordValue
     b["sortOrder"] = 2 as CKRecordValue
 
-    #expect(try HouseholdGraphDigester.digest(of: [a]) == HouseholdGraphDigester.digest(of: [b]))
+    #expect(try digest(of: [a]) == digest(of: [b]))
 }
 
 // MARK: - Zone independence (the owner/successor agreement)
 
 @Test("the digest ignores zone identity on both record IDs and in-zone references")
 func digestIgnoresZoneID() throws {
-    let here = try HouseholdGraphDigester.digest(of: sampleGraph(in: sourceZone))
-    let there = try HouseholdGraphDigester.digest(of: sampleGraph(in: otherZone))
+    let here = try digest(of: sampleGraph(in: sourceZone), in: sourceZone)
+    let there = try digest(of: sampleGraph(in: successorZone), in: successorZone)
     #expect(here == there, "owner and successor hash the same graph in differently-owned zones")
 }
 
-// MARK: - System / share exclusion
+@Test("a record belonging to another zone is rejected, not hashed as if it were local")
+func digestRejectsForeignRecord() throws {
+    var graph = sampleGraph()
+    graph.append(makeRecord(.bed, "bed:b1", in: foreignZone, scalars: ["name": "Stray" as CKRecordValue]))
 
-@Test("CKShare, unknown record types, and undeclared keys never reach the digest")
-func digestExcludesShareAndSystemRecords() throws {
-    let baseline = try HouseholdGraphDigester.digest(of: sampleGraph())
+    #expect(throws: HouseholdGraphDigestError.recordOutsideZone(
+        recordName: "bed:b1", zoneName: "seedkeep-elsewhere")) {
+        try digest(of: graph)
+    }
+}
 
+@Test("a half-retargeted copy is rejected: an in-zone reference must point at the hashed zone")
+func digestRejectsForeignReference() throws {
+    // The exact post-copy hazard: the destination Seed exists with the right name and fields, but
+    // its locationID still points back into the OWNER's zone. Erasing zone identity from the
+    // canonical bytes would make this hash identical to a correctly retargeted copy and authorise
+    // deleting the source.
+    let strays = sampleGraph(in: successorZone)
+    strays[2]["locationID"] = inZoneRef("location:l1", .none, in: sourceZone)
+
+    #expect(throws: HouseholdGraphDigestError.referenceOutsideZone(
+        recordName: "seed:s1", field: "locationID", zoneName: "seedkeep-hh1")) {
+        try digest(of: strays, in: successorZone)
+    }
+}
+
+// MARK: - System exclusion vs. fail-closed app data
+
+@Test("CKShare is a recognised CloudKit system record and is excluded")
+func digestExcludesShare() throws {
     var polluted = sampleGraph()
     polluted.append(CKShare(recordZoneID: sourceZone))
-    polluted.append(CKRecord(recordType: "NotASeedkeepType",
-                             recordID: CKRecord.ID(recordName: "junk:1", zoneID: sourceZone)))
-    // An undeclared key on a manifest record is CloudKit debris, not application state.
-    polluted[0]["someUndeclaredKey"] = "noise" as CKRecordValue
 
-    let dirty = try HouseholdGraphDigester.digest(of: polluted)
-    #expect(dirty == baseline)
+    let dirty = try digest(of: polluted)
+    #expect(try dirty == digest(of: sampleGraph()))
     #expect(dirty.counts["cloudkit.share"] == nil)
-    #expect(dirty.counts["NotASeedkeepType"] == nil)
+}
+
+@Test("an unrecognised record type FAILS the digest instead of being silently dropped")
+func digestRejectsUnknownRecordType() throws {
+    // Version skew: a newer build wrote a record type this build has never heard of. Skipping it
+    // here and in the copier would make a truncated destination compare EQUAL to a truncated
+    // source and authorise deleting the only complete copy.
+    var graph = sampleGraph()
+    graph.append(CKRecord(recordType: "SoilReading",
+                          recordID: CKRecord.ID(recordName: "soilReading:1", zoneID: sourceZone)))
+
+    #expect(throws: HouseholdGraphDigestError.unknownRecordType(
+        recordType: "SoilReading", recordName: "soilReading:1")) {
+        try digest(of: graph)
+    }
+}
+
+@Test("an undeclared key on a known record FAILS the digest instead of being silently dropped")
+func digestRejectsUndeclaredField() throws {
+    // Same skew hazard one level down: a newer build added Seed.germinationRate.
+    let graph = sampleGraph()
+    graph[2]["germinationRate"] = 0.9 as CKRecordValue
+
+    #expect(throws: HouseholdGraphDigestError.undeclaredField(
+        recordType: "Seed", recordName: "seed:s1", field: "germinationRate")) {
+        try digest(of: graph)
+    }
 }
 
 @Test("a record's system parent pointer is framework metadata and is excluded")
 func digestExcludesParentPointer() throws {
-    let plain = sampleGraph()
     let parented = sampleGraph()
     parented[3].parent = CKRecord.Reference(
         recordID: CKRecord.ID(recordName: "seed:s1", zoneID: sourceZone), action: .none)
 
-    #expect(try HouseholdGraphDigester.digest(of: plain) == HouseholdGraphDigester.digest(of: parented))
+    // `parent` is a system property and never appears in allKeys(), so the undeclared-key guard
+    // above must not trip on it.
+    #expect(try digest(of: sampleGraph()) == digest(of: parented))
 }
 
 // MARK: - Per-type counts
@@ -136,20 +201,34 @@ func digestCountsAreExact() throws {
     graph.append(makeRecord(.seed, "seed:s2", scalars: ["customName": "Cherokee" as CKRecordValue]))
     graph.append(CKShare(recordZoneID: sourceZone))
 
-    let digest = try HouseholdGraphDigester.digest(of: graph)
-    #expect(digest.counts == [
+    let result = try digest(of: graph)
+    #expect(result.counts == [
         "Household": 1, "Location": 1, "Seed": 2, "SeedPhoto": 1,
-        "JournalEntry": 1, "JournalChecklistItem": 1,
+        "JournalEntry": 1, "JournalChecklistItem": 1, "MigrationReceipt": 1,
     ])
-    #expect(digest.recordCount == 7)
+    #expect(result.recordCount == 8)
+}
+
+@Test("the MigrationReceipt is app infrastructure and is digested like any other record")
+func digestIncludesMigrationReceipt() throws {
+    var withoutReceipt = sampleGraph()
+    withoutReceipt.removeAll { $0.recordID.recordName == "migrated:hh1" }
+
+    #expect(try digest(of: sampleGraph()) != digest(of: withoutReceipt),
+            "dropping the receipt would let the successor rerun the legacy import")
+    #expect(try digest(of: sampleGraph()).counts["MigrationReceipt"] == 1)
+
+    let bumped = sampleGraph()
+    bumped[6]["schemaVersion"] = 2 as CKRecordValue
+    #expect(try digest(of: sampleGraph()) != digest(of: bumped))
 }
 
 @Test("an empty graph digests deterministically to zero records")
 func digestOfEmptyGraph() throws {
-    let empty = try HouseholdGraphDigester.digest(of: [])
+    let empty = try digest(of: [])
     #expect(empty.counts.isEmpty)
     #expect(empty.recordCount == 0)
-    #expect(try empty == HouseholdGraphDigester.digest(of: [CKShare(recordZoneID: sourceZone)]))
+    #expect(try empty == digest(of: [CKShare(recordZoneID: sourceZone)]))
     #expect(empty.sha256.count == 64)
 }
 
@@ -157,45 +236,43 @@ func digestOfEmptyGraph() throws {
 
 @Test("changing any scalar changes the digest")
 func digestDetectsScalarChange() throws {
-    let baseline = try HouseholdGraphDigester.digest(of: sampleGraph())
+    let baseline = try digest(of: sampleGraph())
 
     let changed = sampleGraph()
     changed[2]["packetCount"] = 4 as CKRecordValue
-    #expect(try HouseholdGraphDigester.digest(of: changed) != baseline)
+    #expect(try digest(of: changed) != baseline)
 
     let renamed = sampleGraph()
     renamed[0]["name"] = "Finklea Garden " as CKRecordValue
-    #expect(try HouseholdGraphDigester.digest(of: renamed) != baseline)
+    #expect(try digest(of: renamed) != baseline)
 }
 
 @Test("dropping a record or renaming one changes the digest")
 func digestDetectsRosterChange() throws {
-    let baseline = try HouseholdGraphDigester.digest(of: sampleGraph())
+    let baseline = try digest(of: sampleGraph())
 
     var dropped = sampleGraph()
     dropped.removeLast()
-    #expect(try HouseholdGraphDigester.digest(of: dropped) != baseline)
+    #expect(try digest(of: dropped) != baseline)
 
     var renamed = sampleGraph()
     renamed[4] = makeRecord(.journalEntry, "journalEntry:j2",
                             scalars: ["occurredOn": "2026-04-15" as CKRecordValue])
-    #expect(try HouseholdGraphDigester.digest(of: renamed) != baseline)
+    #expect(try digest(of: renamed) != baseline)
 }
 
 @Test("changing a reference target changes the digest")
 func digestDetectsReferenceTargetChange() throws {
-    let baseline = try HouseholdGraphDigester.digest(of: sampleGraph())
     let repointed = sampleGraph()
     repointed[2]["locationID"] = inZoneRef("location:l2", .none)
-    #expect(try HouseholdGraphDigester.digest(of: repointed) != baseline)
+    #expect(try digest(of: repointed) != digest(of: sampleGraph()))
 }
 
 @Test("changing a reference ACTION changes the digest even when the target is identical")
 func digestDetectsReferenceActionChange() throws {
-    let baseline = try HouseholdGraphDigester.digest(of: sampleGraph())
     let hardened = sampleGraph()
     hardened[2]["locationID"] = inZoneRef("location:l1", .deleteSelf)
-    #expect(try HouseholdGraphDigester.digest(of: hardened) != baseline,
+    #expect(try digest(of: hardened) != digest(of: sampleGraph()),
             "a .none → .deleteSelf drift would silently change cascade behaviour after transfer")
 }
 
@@ -204,18 +281,18 @@ func digestDistinguishesAbsentField() throws {
     let absent = makeRecord(.location, "location:l1", scalars: ["name": "Shelf" as CKRecordValue])
     let present = makeRecord(.location, "location:l1",
                              scalars: ["name": "Shelf" as CKRecordValue, "deletedAt": 0 as CKRecordValue])
-    #expect(try HouseholdGraphDigester.digest(of: [absent]) != HouseholdGraphDigester.digest(of: [present]))
+    #expect(try digest(of: [absent]) != digest(of: [present]))
 }
 
 @Test("changing a cross-DB string reference changes the digest and it is never zone-qualified")
 func digestDetectsCrossDBChange() throws {
     let a = makeRecord(.seed, "seed:s1", scalars: ["catalogID": "cat-1" as CKRecordValue])
     let b = makeRecord(.seed, "seed:s1", scalars: ["catalogID": "cat-2" as CKRecordValue])
-    let aElsewhere = makeRecord(.seed, "seed:s1", in: otherZone,
+    let aElsewhere = makeRecord(.seed, "seed:s1", in: successorZone,
                                 scalars: ["catalogID": "cat-1" as CKRecordValue])
 
-    #expect(try HouseholdGraphDigester.digest(of: [a]) != HouseholdGraphDigester.digest(of: [b]))
-    #expect(try HouseholdGraphDigester.digest(of: [a]) == HouseholdGraphDigester.digest(of: [aElsewhere]))
+    #expect(try digest(of: [a]) != digest(of: [b]))
+    #expect(try digest(of: [a]) == digest(of: [aElsewhere], in: successorZone))
 }
 
 @Test("bool fields canonicalize to true/false rather than their INT64 storage value")
@@ -224,8 +301,8 @@ func digestCanonicalizesBool() throws {
         makeRecord(.journalChecklistItem, "journalChecklistItem:c1",
                    scalars: ["text": "Water" as CKRecordValue, "completed": completed as CKRecordValue])
     }
-    #expect(try HouseholdGraphDigester.digest(of: [item(1)]) == HouseholdGraphDigester.digest(of: [item(2)]))
-    #expect(try HouseholdGraphDigester.digest(of: [item(1)]) != HouseholdGraphDigester.digest(of: [item(0)]))
+    #expect(try digest(of: [item(1)]) == digest(of: [item(2)]))
+    #expect(try digest(of: [item(1)]) != digest(of: [item(0)]))
 }
 
 // MARK: - Canonical encoding is unambiguous
@@ -237,14 +314,14 @@ func digestEscapesSeparators() throws {
                               scalars: ["name": "Shelf\nF\tsortOrder\ti:5" as CKRecordValue])
     let honest = makeRecord(.location, "location:l1",
                             scalars: ["name": "Shelf" as CKRecordValue, "sortOrder": 5 as CKRecordValue])
-    #expect(try HouseholdGraphDigester.digest(of: [smuggled]) != HouseholdGraphDigester.digest(of: [honest]))
+    #expect(try digest(of: [smuggled]) != digest(of: [honest]))
 }
 
 @Test("the canonical document is versioned, sorted by type then record name, and field-sorted")
 func digestCanonicalDocumentShape() throws {
     // seed:s1 mixes scalars and references so the field sort is proven to be by NAME, not by
     // manifest order (which would emit every scalar before every reference).
-    let document = try HouseholdGraphDigester.canonicalDocument(of: [
+    let document = try canonical(of: [
         makeRecord(.seed, "seed:s2", scalars: ["packetCount": 2 as CKRecordValue,
                                                "customName": "B" as CKRecordValue]),
         makeRecord(.seed, "seed:s1", scalars: ["customName": "A" as CKRecordValue,
@@ -271,7 +348,7 @@ func digestCanonicalDocumentShape() throws {
 func digestSortsByTypeBeforeName() throws {
     // Seedkeep's real record names are slug-prefixed by type, so type-order and name-order agree
     // on production data. These synthetic names separate the two so the documented key is pinned.
-    let document = try HouseholdGraphDigester.canonicalDocument(of: [
+    let document = try canonical(of: [
         makeRecord(.seed, "aaa:1", scalars: ["customName": "A" as CKRecordValue]),
         makeRecord(.bed, "zzz:1", scalars: ["name": "Z" as CKRecordValue]),
     ])
@@ -294,7 +371,7 @@ func digestRejectsDuplicateRecordNames() throws {
         makeRecord(.seed, "seed:s1", scalars: ["customName": "B" as CKRecordValue]),
     ]
     #expect(throws: HouseholdGraphDigestError.duplicateRecordName("seed:s1")) {
-        try HouseholdGraphDigester.digest(of: graph)
+        try digest(of: graph)
     }
 }
 
@@ -303,7 +380,7 @@ func digestRejectsUnsupportedScalar() throws {
     let record = makeRecord(.seed, "seed:s1", scalars: ["packetCount": "three" as CKRecordValue])
     #expect(throws: HouseholdGraphDigestError.unsupportedValue(
         recordType: "Seed", recordName: "seed:s1", field: "packetCount")) {
-        try HouseholdGraphDigester.digest(of: [record])
+        try digest(of: [record])
     }
 }
 
@@ -312,7 +389,7 @@ func digestRejectsUnsupportedReference() throws {
     let record = makeRecord(.seed, "seed:s1", scalars: ["locationID": "location:l1" as CKRecordValue])
     #expect(throws: HouseholdGraphDigestError.unsupportedValue(
         recordType: "Seed", recordName: "seed:s1", field: "locationID")) {
-        try HouseholdGraphDigester.digest(of: [record])
+        try digest(of: [record])
     }
 }
 
@@ -321,7 +398,7 @@ func digestRejectsCrossDBReferenceValue() throws {
     let record = makeRecord(.seed, "seed:s1", refs: ["catalogID": inZoneRef("cat-1", .none)])
     #expect(throws: HouseholdGraphDigestError.unsupportedValue(
         recordType: "Seed", recordName: "seed:s1", field: "catalogID")) {
-        try HouseholdGraphDigester.digest(of: [record])
+        try digest(of: [record])
     }
 }
 
@@ -338,11 +415,19 @@ func canonicalScalarEncoding() {
             "the double encoding is exact, not value-normalised")
     #expect(CanonicalRecordEncoder.encodeScalar(1 as NSNumber, as: .bool) == "b:1")
     #expect(CanonicalRecordEncoder.encodeScalar(0 as NSNumber, as: .bool) == "b:0")
-    // Dates canonicalize to unix milliseconds so two devices agree despite sub-ms round-trip drift.
-    #expect(CanonicalRecordEncoder.encodeScalar(Date(timeIntervalSince1970: 1.5) as NSDate, as: .date)
-            == "t:1500")
-    #expect(CanonicalRecordEncoder.encodeScalar(Date(timeIntervalSince1970: 1.0004) as NSDate, as: .date)
-            == "t:1000")
+    #expect(CanonicalRecordEncoder.encodeScalar(Date(timeIntervalSinceReferenceDate: 0.5) as NSDate,
+                                                as: .date) == "t:3fe0000000000000")
     #expect(CanonicalRecordEncoder.encodeScalar("x" as NSString, as: .int) == nil)
     #expect(CanonicalRecordEncoder.encodeScalar(3 as NSNumber, as: .string) == nil)
+}
+
+@Test("dates encode exactly: two sub-millisecond-distinct instants never share a token")
+func canonicalDateIsInjective() {
+    // Rounding to whole milliseconds would collapse these into one token, letting a destination
+    // that lost the fractional value pass digest equality.
+    let a = CanonicalRecordEncoder.encodeScalar(Date(timeIntervalSince1970: 1.0001) as NSDate, as: .date)
+    let b = CanonicalRecordEncoder.encodeScalar(Date(timeIntervalSince1970: 1.0004) as NSDate, as: .date)
+    #expect(a != nil)
+    #expect(a != b)
+    #expect(CanonicalRecordEncoder.encodeScalar(Date(timeIntervalSince1970: 1.0001) as NSDate, as: .date) == a)
 }

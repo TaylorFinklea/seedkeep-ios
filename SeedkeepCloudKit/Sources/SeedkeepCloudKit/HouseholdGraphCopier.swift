@@ -7,18 +7,29 @@ import Foundation
 //
 // The deleting owner fetches every record in the source zone and hands them here with the
 // successor-owned destination zone ID. The planner returns save batches that reproduce the garden
-// exactly: same record type, same record NAME (the deterministic `type:id` key — that is what makes
-// a retry overwrite instead of duplicate), same application fields, with every in-zone reference
-// retargeted into the destination zone and its action preserved. Cross-DB ids (G4) are plain
-// strings pointing outside the household and stay untouched.
+// exactly: same record type, same record NAME (the deterministic `type:id` key), same application
+// fields, with every in-zone reference retargeted into the destination zone and its action
+// preserved. Cross-DB ids (G4) point outside the household and stay untouched.
 //
-// Ordering: CloudKit rejects a `.deleteSelf` reference to a record that does not exist yet, so
+// Three contracts this file owns:
+//
+// ORDERING. CloudKit rejects a `.deleteSelf` reference to a record that does not exist yet, so
 // records are batched by cascade generation — batch `i` must be fully saved before batch `i+1`.
 // Within a batch the order is (record type, record name), so two runs produce the same wire order.
 //
-// Purity is the whole point. Nothing here touches CloudKit and nothing here mutates a source
-// CKRecord: every destination record is freshly constructed. A crash mid-copy is recovered by
-// re-planning and re-saving, which lands byte-identical content on the same destination record IDs.
+// UPSERT. Destination records are freshly constructed and therefore carry NO destination change
+// tag. Under CloudKit's default save policy that is a `serverRecordChanged` conflict against any
+// record ID that already exists — and one always does: the successor must create and share the
+// destination Household root before the copy starts, and a resumed copy re-saves everything the
+// interrupted attempt already landed. So the plan carries `.allKeys` and `execute` applies it;
+// deterministic record names only give idempotency in combination with that policy.
+//
+// FAIL CLOSED. An unrecognised record type or an undeclared key throws instead of being skipped.
+// Skipping would drop the same data from the copy AND from both digests, so a truncated
+// destination would verify as equal to a truncated source and authorise deleting the original.
+// Only CloudKit's reserved record types (CKShare and friends) are excluded.
+//
+// Planning is pure: nothing here touches CloudKit and nothing mutates a source CKRecord.
 
 // MARK: - Plan
 
@@ -30,12 +41,26 @@ public struct HouseholdGraphCopyPlan {
     public let records: [CKRecord]
     /// CloudKit record type name → planned record count, matching `HouseholdGraphDigest.counts`.
     public let counts: [String: Int]
+    /// REQUIRED, not advisory: the copy is only idempotent when every batch is saved with this
+    /// policy. See the UPSERT note above.
+    public let savePolicy: CKModifyRecordsOperation.RecordSavePolicy = .allKeys
 }
+
+/// Saves one batch of destination records with the plan's required save policy. The live
+/// implementation wraps `CKModifyRecordsOperation`; tests substitute an in-memory zone.
+public typealias HouseholdGraphBatchSaver =
+    (_ records: [CKRecord], _ savePolicy: CKModifyRecordsOperation.RecordSavePolicy) async throws -> Void
 
 public enum HouseholdGraphCopyError: Error, Equatable, CustomStringConvertible {
     /// The destination is the source zone — a "copy" would overwrite the original in place and the
     /// subsequent source deletion would take the only copy with it.
     case destinationIsSource(zoneName: String)
+    /// A non-system record type this build's manifest does not declare. Copying around it would
+    /// silently drop app data that both digests would then also omit.
+    case unknownRecordType(recordType: String, recordName: String)
+    /// A key on a manifest record that the manifest does not declare — the same hazard, one level
+    /// down (a newer build added a field this build would drop).
+    case undeclaredField(recordType: String, recordName: String, field: String)
     /// A record in the snapshot does not belong to the source zone. Copying it would import a
     /// foreign record into the successor's garden.
     case recordOutsideSourceZone(recordName: String, zoneName: String)
@@ -57,6 +82,10 @@ public enum HouseholdGraphCopyError: Error, Equatable, CustomStringConvertible {
         switch self {
         case .destinationIsSource(let zone):
             return "destination zone \(zone) is the source zone"
+        case .unknownRecordType(let type, let name):
+            return "record \(name) has unknown record type \(type); this build cannot copy it"
+        case .undeclaredField(let type, let name, let field):
+            return "\(type) \(name) carries undeclared field \(field); this build cannot copy it"
         case .recordOutsideSourceZone(let name, let zone):
             return "record \(name) lives in zone \(zone), not the source zone"
         case .referenceOutsideSourceZone(let name, let field, let zone):
@@ -91,16 +120,23 @@ public enum HouseholdGraphCopier {
         var cascadeEdges: [CascadeEdge] = []
 
         for record in records {
-            // CKShare and non-manifest types are per-owner CloudKit state, not garden data.
-            guard let type = SeedkeepRecordType.type(forRecordTypeName: record.recordType) else { continue }
+            // CloudKit's own reserved records are per-owner state, not garden data.
+            guard !CloudKitSystemRecords.isSystemType(record.recordType) else { continue }
             let recordName = record.recordID.recordName
+            guard let type = SeedkeepRecordType.type(forRecordTypeName: record.recordType) else {
+                throw HouseholdGraphCopyError.unknownRecordType(
+                    recordType: record.recordType, recordName: recordName)
+            }
             guard record.recordID.zoneID == sourceZoneID else {
                 throw HouseholdGraphCopyError.recordOutsideSourceZone(
                     recordName: recordName, zoneName: record.recordID.zoneID.zoneName)
             }
+            if let undeclared = CanonicalRecordEncoder.undeclaredKeys(of: record, as: type).first {
+                throw HouseholdGraphCopyError.undeclaredField(
+                    recordType: type.recordTypeName, recordName: recordName, field: undeclared)
+            }
 
-            let built = try copy(record, as: type,
-                                 from: sourceZoneID, to: destinationZoneID)
+            let built = try copy(record, as: type, from: sourceZoneID, to: destinationZoneID)
 
             if let existing = planned[recordName] {
                 // A retry can legitimately hand the same record twice; conflicting content cannot.
@@ -129,6 +165,15 @@ public enum HouseholdGraphCopier {
                                       batches: batches,
                                       records: flattened,
                                       counts: counts)
+    }
+
+    /// Save every batch in dependency order under the plan's required save policy. Re-running after
+    /// a failure is safe and expected: the same record IDs are overwritten with the same content.
+    public static func execute(_ plan: HouseholdGraphCopyPlan,
+                               saving save: HouseholdGraphBatchSaver) async throws {
+        for batch in plan.batches {
+            try await save(batch, plan.savePolicy)
+        }
     }
 
     // MARK: Record copy
