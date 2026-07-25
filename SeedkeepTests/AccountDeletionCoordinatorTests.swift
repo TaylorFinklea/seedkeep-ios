@@ -645,7 +645,7 @@ private final class Harness {
                 identity: { AccountDeletionSession.Identity(userID: userID, householdID: householdID) },
                 localStoreOwnerID: { userID },
                 signOut: { recorder.count += 1 },
-                adoptTransferredGarden: { [adopter = adoption] in try adopter.adopt($0) }
+                adoptTransferredGarden: { [adopter = adoption] householdID, _ in try adopter.adopt(householdID) }
             ),
             now: { nowMillis },
             newReceipt: { Harness.receiptNonce }
@@ -1694,7 +1694,7 @@ struct AccountDeletionCoordinatorTests {
             cloudKit: harness.cloudKit,
             server: harness.server,
             session: AccountDeletionSession(identity: { nil }, localStoreOwnerID: { nil },
-                                            signOut: {}, adoptTransferredGarden: { _ in }),
+                                            signOut: {}, adoptTransferredGarden: { _, _ in }),
             now: { 0 }
         )
 
@@ -1958,7 +1958,7 @@ struct AccountDeletionCoordinatorTests {
                 identity: { nil },
                 localStoreOwnerID: { localStoreOwner ?? harness.userID },
                 signOut: { [recorder = harness.signOut] in recorder.count += 1 },
-                adoptTransferredGarden: { _ in }
+                adoptTransferredGarden: { _, _ in }
             ),
             now: { 1_700_000_000_000 },
             newReceipt: { Harness.receiptNonce }
@@ -2134,7 +2134,7 @@ struct AccountDeletionCoordinatorTests {
                 identity: { nil },
                 localStoreOwnerID: { nil },
                 signOut: { [recorder = harness.signOut] in recorder.count += 1 },
-                adoptTransferredGarden: { _ in }
+                adoptTransferredGarden: { _, _ in }
             ),
             now: { 1_700_000_000_000 },
             newReceipt: { Harness.receiptNonce })

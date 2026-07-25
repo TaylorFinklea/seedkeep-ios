@@ -382,7 +382,7 @@ private final class Harness {
                 },
                 localStoreOwnerID: { userID },
                 signOut: { recorder.count += 1 },
-                adoptTransferredGarden: { try adopter.adopt($0) }
+                adoptTransferredGarden: { householdID, _ in try adopter.adopt(householdID) }
             ),
             now: { clockRef.millis },
             newReceipt: { "receipt-nonce-fixed" })
@@ -1546,6 +1546,7 @@ struct TransferredGardenCutoverTests {
     func refusalsAreReadable() {
         let failures: [TransferredGardenCutover.Failure] = [
             .notYetTransferred,
+            .transferWithdrawn,
             .sessionUnavailable,
             .destinationSyncIncomplete(message: nil),
             .destinationSyncIncomplete(message: "iCloud is unavailable."),
@@ -1554,6 +1555,53 @@ struct TransferredGardenCutoverTests {
             let message = failure.errorDescription ?? ""
             #expect(!message.isEmpty)
             #expect(!message.localizedCaseInsensitiveContains("token"))
+        }
+    }
+
+    // MARK: Ownership — a member is not an owner
+
+    @Test("owner role is accepted")
+    func ownerRoleIsAccepted() throws {
+        try TransferredGardenCutover.verifyOwnership(role: "owner")
+    }
+
+    @Test("member role is refused — verification never promoted this device")
+    func memberRoleIsRefused() {
+        #expect(throws: TransferredGardenCutover.Failure.notYetTransferred) {
+            try TransferredGardenCutover.verifyOwnership(role: "member")
+        }
+    }
+
+    @Test("an unrecognised role is refused, not assumed safe")
+    func unrecognisedRoleIsRefused() {
+        #expect(throws: TransferredGardenCutover.Failure.notYetTransferred) {
+            try TransferredGardenCutover.verifyOwnership(role: "")
+        }
+    }
+
+    // MARK: Transfer authorization — re-checked at the last moment
+
+    @Test("verified, source-deleting, and source-deleted all authorize completion")
+    func lateTransferPhasesAuthorizeCompletion() throws {
+        for phase: AccountDeletionTransferPhase in [.verified, .sourceDeleting, .sourceDeleted] {
+            try TransferredGardenCutover.verifyTransferAuthorizes(phase)
+        }
+    }
+
+    @Test("a cancelled transfer is refused as withdrawn, never completed")
+    func cancelledTransferIsRefusedAsWithdrawn() {
+        #expect(throws: TransferredGardenCutover.Failure.transferWithdrawn) {
+            try TransferredGardenCutover.verifyTransferAuthorizes(.cancelled)
+        }
+    }
+
+    @Test("an earlier transfer phase is refused as not-yet-transferred, not as an error")
+    func earlyTransferPhasesAreRefusedAsNotYetTransferred() {
+        for phase: AccountDeletionTransferPhase in [.pendingSuccessor, .successorBound,
+                                                     .destinationReady, .ownerVerified] {
+            #expect(throws: TransferredGardenCutover.Failure.notYetTransferred) {
+                try TransferredGardenCutover.verifyTransferAuthorizes(phase)
+            }
         }
     }
 }

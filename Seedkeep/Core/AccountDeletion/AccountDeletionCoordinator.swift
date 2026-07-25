@@ -602,7 +602,7 @@ final class AccountDeletionCoordinator {
             return .again
 
         case (.successor, .successorAdopting):
-            try await session.adoptTransferredGarden(try sourceHouseholdID(current))
+            try await session.adoptTransferredGarden(try sourceHouseholdID(current), try transferID(current))
             try clear(userID: current.userID)
             return .settled(.handoffComplete)
 
@@ -1220,15 +1220,20 @@ struct AccountDeletionSession {
     /// `.successorAdopting` until it lands, which is what makes the crash
     /// window between server verification and local adoption recoverable.
     ///
-    /// The parameter is the household id the garden now lives under —
-    /// unchanged by the transfer, but re-homed to this user server-side.
-    var adoptTransferredGarden: @MainActor (String) async throws -> Void
+    /// `householdID` is the garden's id — unchanged by the transfer, but
+    /// re-homed to this user server-side. `transferID` lets the
+    /// implementation re-check, at the LAST possible moment, that the
+    /// transfer still authorizes the claim: the departing owner may
+    /// legally cancel a `verified` transfer right up until the
+    /// source-deletion lease is taken, and a cancel that late reverts the
+    /// very membership row this call is about to trust.
+    var adoptTransferredGarden: @MainActor (_ householdID: String, _ transferID: String) async throws -> Void
 
     init(
         identity: @escaping @MainActor () -> Identity?,
         localStoreOwnerID: @escaping @MainActor () -> String?,
         signOut: @escaping @MainActor () async -> Void,
-        adoptTransferredGarden: @escaping @MainActor (String) async throws -> Void
+        adoptTransferredGarden: @escaping @MainActor (_ householdID: String, _ transferID: String) async throws -> Void
     ) {
         self.identity = identity
         self.localStoreOwnerID = localStoreOwnerID

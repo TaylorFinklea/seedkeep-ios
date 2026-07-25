@@ -102,7 +102,7 @@ struct AccountDeletionFlowTests {
                 identity: { .init(userID: userID, householdID: householdID) },
                 localStoreOwnerID: { userID },
                 signOut: { [weak auth] in await auth?.signOut() },
-                adoptTransferredGarden: { _ in }
+                adoptTransferredGarden: { _, _ in }
             ),
             now: { 1_700_000_000_000 },
             newReceipt: { receiptNonce }

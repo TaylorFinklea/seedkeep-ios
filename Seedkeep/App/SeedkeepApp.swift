@@ -181,13 +181,23 @@ struct RootView: View {
                 presentedHandoffID = nil
             }
         )) { presentation in
+            // The fingerprint is captured HERE, from the item SwiftUI is
+            // actually instantiating this content for — never from the
+            // parent's `handoffRoute` recomputing. A changed `Identifiable`
+            // id on `.sheet(item:)` tears the old content down and
+            // presents fresh content for the new id, so `onAppear` fires
+            // in the same relative order dismissal does: if a rotated
+            // link B replaces A while A is still on screen, A's teardown
+            // (and its `set(nil)`, still comparing against A's
+            // fingerprint) happens before B's `onAppear` overwrites it —
+            // exactly the ordering `AccountDeletionRootRoute
+            // .dismissalClearsPendingLink` depends on. Tracking the
+            // DESIRED route via `onChange` instead would update the
+            // fingerprint the instant the route recomputes, which can run
+            // ahead of what is actually still rendered.
             AccountDeletionHandoffAcceptView(model: appEnv.accountDeletionFlow,
                                              link: presentation.link)
-        }
-        .onChange(of: handoffRoute.presentation) { _, newValue in
-            // Recorded at presentation time, independently of dismissal —
-            // the one moment we reliably know what is actually on screen.
-            if let newValue { presentedHandoffID = newValue.id }
+                .onAppear { presentedHandoffID = presentation.id }
         }
         .onChange(of: isSignedIn) { _, signedIn in
             // Sign-in is what a held link and a relaunched successor

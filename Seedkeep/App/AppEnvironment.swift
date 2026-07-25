@@ -359,8 +359,8 @@ public final class AppEnvironment {
                 // the launch sweep runs in.
                 localStoreOwnerID: { [weak self] in self?.auth.loadCachedIdentity()?.user.id },
                 signOut: { [weak self] in await self?.auth.signOut() },
-                adoptTransferredGarden: { [weak self] householdID in
-                    try await self?.adoptTransferredGarden(householdID: householdID)
+                adoptTransferredGarden: { [weak self] householdID, transferID in
+                    try await self?.adoptTransferredGarden(householdID: householdID, transferID: transferID)
                 }
             )
         )
@@ -568,17 +568,29 @@ public final class AppEnvironment {
     ///      second `memberships` row for this user, so asking "what is my
     ///      current household" is genuinely ambiguous the moment this
     ///      runs — the transfer itself already knows the answer.
-    ///   2. Adopt it into `AuthController` — state AND the cache together,
+    ///   2. Confirm that membership is `owner`, not merely `member` — the
+    ///      only role verification actually promotes the successor to.
+    ///   3. Re-read the TRANSFER itself and confirm it still authorizes
+    ///      the claim. The departing owner may legally cancel a `verified`
+    ///      transfer right up until the source-deletion lease is taken,
+    ///      and a cancel that late reverts the very membership row step 1
+    ///      just confirmed — so a membership check alone, made a moment
+    ///      earlier, is not enough.
+    ///   4. Adopt it into `AuthController` — state AND the cache together,
     ///      so a later ordinary restore does not mistake the correct
     ///      household for an identity switch and wipe it.
-    ///   3. Stop being a participant. The destination zone lives in THIS
+    ///   5. Stop being a participant. The destination zone lives in THIS
     ///      device's private database; keeping the marker would keep
     ///      pointing every read at the doomed shared zone.
-    ///   4. Reset the owner state token, so the rebuilt owner coordinator
+    ///   6. Reset the owner state token, so the rebuilt owner coordinator
     ///      does a FULL fetch of the destination zone instead of resuming
     ///      a cursor that belongs to the source zone's change history.
-    ///   5. Drop the cached coordinator and sync, which rebuilds it as the
+    ///   7. Drop the cached coordinator and sync, which rebuilds it as the
     ///      owner of the destination.
+    ///
+    /// A MEMBER (not owner) never reaches step 4 — reporting completion
+    /// over a role the server has not actually promoted would let this
+    /// device claim a garden it does not own.
     ///
     /// Local SwiftData is deliberately NOT wiped: its rows are scoped to
     /// this same household id and are exactly the contents that were
@@ -588,7 +600,7 @@ public final class AppEnvironment {
     /// THROWS, and the coordinator holds `.successorAdopting` until it
     /// returns, so a failure here is retried rather than papered over with
     /// a completion screen.
-    func adoptTransferredGarden(householdID: String) async throws {
+    func adoptTransferredGarden(householdID: String, transferID: String) async throws {
         let membership: WireResponses.CreateOrFetchHousehold
         do {
             membership = try await client.household(id: householdID)
@@ -599,6 +611,14 @@ public final class AppEnvironment {
             // propagates unchanged.
             throw TransferredGardenCutover.classify(error) ?? error
         }
+        try TransferredGardenCutover.verifyOwnership(role: membership.role)
+
+        // Re-read at the LAST possible moment, not trusted from memory:
+        // between the household lookup above and here, a second owner
+        // device could still legally withdraw a `verified` transfer.
+        let transfer = try await client.accountDeletionTransfer(id: transferID)
+        try TransferredGardenCutover.verifyTransferAuthorizes(transfer.phase)
+
         auth.adoptHousehold(membership.household)
         guard case .signedIn(_, let household) = auth.state else {
             throw TransferredGardenCutover.Failure.sessionUnavailable

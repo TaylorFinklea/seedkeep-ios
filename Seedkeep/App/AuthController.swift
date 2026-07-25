@@ -131,18 +131,47 @@ public final class AuthController {
         state = .signedOut
     }
 
+    /// Resolves which household this identity should enter `.signedIn`
+    /// with — preferring an EXACT, re-validated answer over the
+    /// ambiguous "current household" heuristic.
+    ///
+    /// A device that has already cached a household (from a normal
+    /// sign-in, or from `adoptHousehold` after a successor cutover) asks
+    /// the server whether it is STILL a member of exactly that one
+    /// (`GET /api/households/:id`) before ever touching
+    /// `POST /api/households`'s most-recently-joined resolution. That
+    /// heuristic is a best-effort answer over a table this user can hold
+    /// more than one row in — the exact-membership route is not a
+    /// heuristic, it is the fact itself. Only when the cached household
+    /// no longer holds (`not_a_member` — left, reassigned) does
+    /// resolution fall through to it, exactly as a fresh sign-in already
+    /// does with no cache at all.
+    ///
+    /// Any error OTHER than `not_a_member` propagates to `loadIdentity`'s
+    /// existing catch blocks unchanged — a transport failure here must
+    /// fall back to the cache the same way a transport failure from the
+    /// generic route always has, not be silently reinterpreted.
+    private func resolveHousehold(for userID: String) async throws -> HouseholdDTO {
+        if let cached = loadCachedIdentity(), cached.user.id == userID {
+            do {
+                return try await client.household(id: cached.household.id).household
+            } catch let err as SeedkeepError where err.code == "not_a_member" {
+                // This device's own last-known household is gone. Fall
+                // through to resolving a current one below.
+            }
+        }
+        do {
+            return try await client.createOrFetchHousehold().household
+        } catch let err as SeedkeepError where err.code == "no_household" {
+            return try await client.createOrFetchHousehold(name: "My household").household
+        }
+    }
+
     private func loadIdentity(allowCachedFallback: Bool) async {
         state = .authenticating
         do {
             let me = try await client.me()
-            let house: HouseholdDTO
-            do {
-                let res = try await client.createOrFetchHousehold()
-                house = res.household
-            } catch let err as SeedkeepError where err.code == "no_household" {
-                let res = try await client.createOrFetchHousehold(name: "My household")
-                house = res.household
-            }
+            let house = try await resolveHousehold(for: me.user.id)
             // Identity switch: the store belongs to a different user or
             // household than the one the server just confirmed. Wipe it
             // before the first sync.

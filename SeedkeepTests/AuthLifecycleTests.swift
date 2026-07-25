@@ -56,6 +56,19 @@ struct AuthLifecycleTests {
         AuthMockURLProtocol.setRoute("POST /api/households", Data("""
         {"ok":true,"data":{"household":{"id":"\(householdID)","name":"My household","created_at":1,"updated_at":1},"role":"owner"}}
         """.utf8))
+        // Consistent with the generic route above by default — tests that
+        // exercise `resolveHousehold`'s exact-vs-generic branching stub
+        // this route separately (or with a deliberately different
+        // household/role) after calling `stubIdentity`.
+        AuthMockURLProtocol.setRoute("GET /api/households/\(householdID)", Data("""
+        {"ok":true,"data":{"household":{"id":"\(householdID)","name":"My household","created_at":1,"updated_at":1},"role":"owner"}}
+        """.utf8))
+    }
+
+    private static func stubNotAMember(householdID: String) {
+        AuthMockURLProtocol.setRoute("GET /api/households/\(householdID)", Data("""
+        {"ok":false,"error":{"code":"not_a_member","message":"Not a member of this household."}}
+        """.utf8))
     }
 
     private static func cacheIdentity(
@@ -346,6 +359,92 @@ struct AuthLifecycleTests {
         #expect(auth.state == .signedOut)
         #expect(auth.loadCachedIdentity() == nil)
     }
+
+    // MARK: - Exact-household-first restore resolution
+
+    @Test("restore prefers the cached exact household over the ambiguous generic route")
+    func restorePrefersCachedExactHousehold() async throws {
+        let defaults = Self.makeDefaults("preferExact")
+        let tokenStore = Self.makeTokenStore("preferExact")
+        tokenStore.save("tok_succ")
+        try Self.cacheIdentity(defaults, userID: "u_succ", householdID: "hh_transferred")
+        let client = Self.makeClient()
+        // The GENERIC route disagrees — it would resolve the OLD household
+        // (the ambiguous joined_at heuristic, as if a stale second
+        // membership sorted first). The EXACT route, stubbed separately
+        // for the cached household, is what must win.
+        AuthMockURLProtocol.setRoute("GET /api/me", Data("""
+        {"ok":true,"data":{"user":{"id":"u_succ","name":"Gardener","email":"g@example.com"}}}
+        """.utf8))
+        AuthMockURLProtocol.setRoute("POST /api/households", Data("""
+        {"ok":true,"data":{"household":{"id":"hh_own","name":"Own household","created_at":1,"updated_at":1},"role":"owner"}}
+        """.utf8))
+        AuthMockURLProtocol.setRoute("GET /api/households/hh_transferred", Data("""
+        {"ok":true,"data":{"household":{"id":"hh_transferred","name":"Transferred garden","created_at":1,"updated_at":1},"role":"owner"}}
+        """.utf8))
+        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+
+        await auth.restoreSession()
+
+        guard case .signedIn(_, let household) = auth.state else {
+            Issue.record("expected signedIn, got \(auth.state)")
+            return
+        }
+        #expect(household.id == "hh_transferred",
+                "the cached exact household must win over the ambiguous generic resolution")
+        #expect(!AuthMockURLProtocol.requestedPaths().contains("/api/households"),
+                "the generic route must not even be called once the exact one succeeds")
+    }
+
+    @Test("a cached household this device left falls through to the generic route")
+    func notAMemberFallsThroughToGenericResolution() async throws {
+        let defaults = Self.makeDefaults("fallThrough")
+        let tokenStore = Self.makeTokenStore("fallThrough")
+        tokenStore.save("tok_succ")
+        try Self.cacheIdentity(defaults, userID: "u_succ", householdID: "hh_left")
+        let client = Self.makeClient()
+        Self.stubIdentity(userID: "u_succ", householdID: "hh_current")
+        Self.stubNotAMember(householdID: "hh_left")
+        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+
+        await auth.restoreSession()
+
+        guard case .signedIn(_, let household) = auth.state else {
+            Issue.record("expected signedIn, got \(auth.state)")
+            return
+        }
+        #expect(household.id == "hh_current",
+                "a household this device is no longer a member of must fall through, not fail")
+    }
+
+    @Test("an unreachable exact-household check falls back to cache like any other transport failure")
+    func exactHouseholdTransportFailureFallsBackToCache() async throws {
+        let defaults = Self.makeDefaults("exactTransportFailure")
+        let tokenStore = Self.makeTokenStore("exactTransportFailure")
+        tokenStore.save("tok_succ")
+        try Self.cacheIdentity(defaults, userID: "u_succ", householdID: "hh_own")
+        let client = Self.makeClient()
+        AuthMockURLProtocol.setRoute("GET /api/me", Data("""
+        {"ok":true,"data":{"user":{"id":"u_succ","name":"Gardener","email":"g@example.com"}}}
+        """.utf8))
+        // The exact route 500s — a real outage, not a definitive "you are
+        // not a member". Must NOT be reinterpreted as that; must fall back
+        // to cache exactly like any other mid-restore transport failure.
+        AuthMockURLProtocol.setRoute("GET /api/households/hh_own", Data("""
+        {"ok":false,"error":{"code":"internal_error","message":"deploying"}}
+        """.utf8))
+        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+
+        await auth.restoreSession()
+
+        guard case .signedIn(let user, let household) = auth.state else {
+            Issue.record("expected signedIn from cache, got \(auth.state)")
+            return
+        }
+        #expect(user.id == "u_succ")
+        #expect(household.id == "hh_own")
+        #expect(tokenStore.load() == "tok_succ", "a mid-restore 5xx must not clear the token")
+    }
 }
 
 // MARK: - Auth router mock
@@ -361,6 +460,7 @@ final class AuthMockURLProtocol: URLProtocol, @unchecked Sendable {
 
     nonisolated(unsafe) static var routes: [String: Data] = [:]
     nonisolated(unsafe) static var mode: Mode = .routed
+    nonisolated(unsafe) static var requestLog: [String] = []
     static let lock = NSLock()
 
     static func makeSession() -> URLSession {
@@ -368,9 +468,16 @@ final class AuthMockURLProtocol: URLProtocol, @unchecked Sendable {
         defer { lock.unlock() }
         routes = [:]
         mode = .routed
+        requestLog = []
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [AuthMockURLProtocol.self]
         return URLSession(configuration: config)
+    }
+
+    static func requestedPaths() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestLog
     }
 
     static func setRoute(_ key: String, _ data: Data) {
@@ -400,6 +507,7 @@ final class AuthMockURLProtocol: URLProtocol, @unchecked Sendable {
         let mode = Self.mode
         let key = "\(request.httpMethod ?? "GET") \(request.url?.path ?? "")"
         let routedBody = Self.routes[key]
+        Self.requestLog.append(request.url?.path ?? "")
         Self.lock.unlock()
         let url = request.url ?? URL(string: "https://test.local")!
 
