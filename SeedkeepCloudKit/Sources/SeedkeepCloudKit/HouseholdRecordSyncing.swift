@@ -24,9 +24,12 @@ public protocol HouseholdRecordSyncing: AnyObject, Sendable {
     /// Field-merge resolver consulted at the fetch + serverRecordChanged seams.
     var merger: RecordMerger? { get set }
 
-    /// Fired for each reconciled batch before its CKSyncEngine state may be durably checkpointed.
-    /// The engine awaits this callback; throwing keeps the prior durable state so relaunch re-fetches
-    /// the batch instead of advancing past an unapplied SwiftData projection.
+    /// Fired for each reconciled batch — FETCHED or SENT — before its CKSyncEngine state may be
+    /// durably checkpointed. The engine awaits this callback; throwing keeps the prior durable state
+    /// (so a relaunch re-fetches instead of advancing past an unapplied SwiftData projection) AND
+    /// makes the driving `fetchChanges()` / `sendUntilDrained(maxPasses:)` call throw
+    /// `SyncEngineError.projectionFailed`, so the caller records no synced state for that batch.
+    /// A SENT batch is never re-delivered by CloudKit, so the caller must also retain its payload.
     var onFetchedChanges: (@Sendable ([CKRecord], [CKRecord.ID]) async throws -> Void)? { get set }
 
     /// Fired on an iCloud account transition so the coordinator can wipe SwiftData (AC5).
@@ -45,7 +48,8 @@ public protocol HouseholdRecordSyncing: AnyObject, Sendable {
     func delete(_ recordID: CKRecord.ID)
     /// Pull remote changes (fires `onFetchedChanges` as batches arrive).
     func fetchChanges() async throws
-    /// Push staged changes, re-draining merged re-saves (G11).
+    /// Push staged changes, re-draining merged re-saves (G11). Throws if the drain is incomplete, if a
+    /// record failed permanently, or if a sent batch's projection was refused (see `onFetchedChanges`).
     func sendUntilDrained(maxPasses: Int) async throws
 }
 #endif

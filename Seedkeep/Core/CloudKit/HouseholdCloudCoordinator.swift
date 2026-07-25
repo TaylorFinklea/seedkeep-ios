@@ -83,6 +83,11 @@ final class HouseholdCloudCoordinator {
     private var epoch = 0
     private var pushDebounceTask: Task<Void, Never>?
     var pushDebounceIntervalNanoseconds: UInt64 = 1_500_000_000
+    /// Test seam: raised inside `drainPendingApplies` at exactly the point a `ModelContext.save()`
+    /// failure surfaces, so the projection-failure policy (durable state must not advance past an
+    /// unapplied batch) is exercisable without corrupting a real store. Always nil in production.
+    @ObservationIgnored
+    var projectionFaultForTesting: (() throws -> Void)?
 
     init(
         engine: HouseholdRecordSyncing,
@@ -345,6 +350,20 @@ final class HouseholdCloudCoordinator {
         guard isCurrent(passEpoch) else { return }
         let (mods, dels) = buffer.drain(for: passEpoch)
         guard !mods.isEmpty || !dels.isEmpty else { return }
+        do {
+            try applyDrained(mods: mods, dels: dels)
+        } catch {
+            // The projection failed, so the batch has NOT landed in SwiftData. Put it back: the engine
+            // rewinds its durable cursor for a FETCHED batch, but a SENT batch (a merged
+            // serverRecordChanged result) is never re-delivered by CloudKit at all — this buffer is its
+            // only remaining copy. Re-applying a re-delivered batch is harmless: the apply is an
+            // LWW-gated upsert keyed by record name.
+            buffer.restore(mods, dels, epoch: passEpoch)
+            throw error
+        }
+    }
+
+    private func applyDrained(mods: [CKRecord], dels: [CKRecord.ID]) throws {
         let context = ModelContext(container)
         let activeScopeID = scopeID
         let pendingDeletionNames = Set(try context.fetch(
@@ -372,6 +391,7 @@ final class HouseholdCloudCoordinator {
             appliedSinceLastPush.insert(id.recordName)
             removals.insert(id.recordName)   // S7 — clear the entry; nothing local left to compare against
         }
+        try projectionFaultForTesting?()
         try context.save()
         commitSyncedState(updates, removing: removals)
     }
@@ -847,6 +867,15 @@ final class PendingApplyBuffer: @unchecked Sendable {
         let matching = batches.filter { $0.epoch == epoch }
         batches.removeAll()
         return (matching.flatMap(\.mods), matching.flatMap(\.dels))
+    }
+
+    /// Put a drained batch back at the FRONT of the queue after its SwiftData projection failed, so
+    /// the next drain re-projects it in arrival order. An account change that invalidated the epoch
+    /// meanwhile discards it, exactly as `append` would.
+    func restore(_ mods: [CKRecord], _ dels: [CKRecord.ID], epoch: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard !invalidatedEpochs.contains(epoch) else { return }
+        batches.insert(Batch(epoch: epoch, mods: mods, dels: dels), at: 0)
     }
 
     func discardAll() {

@@ -18,6 +18,11 @@ struct HouseholdCloudCoordinatorTests {
 
     /// Records saves/deletes; `pendingFetch` is delivered once via `fetchChanges()` (simulating a
     /// remote batch) — both into the store and through `onFetchedChanges`, exactly as the real engine.
+    ///
+    /// The checkpoint ORDER is not hand-written here: the fake supplies only what CloudKit supplies (a
+    /// batch, and the pass boundaries), and delegates "may durable state advance / must this pass
+    /// throw / must the batch be re-delivered" to the same `ProjectionCheckpointGate` instance
+    /// `HouseholdSyncEngine` uses. A regression in that policy fails these tests.
     final class FakeEngine: HouseholdRecordSyncing, @unchecked Sendable {
         let store = HouseholdLocalStore()
         var merger: RecordMerger?
@@ -37,6 +42,21 @@ struct HouseholdCloudCoordinatorTests {
         /// transient hiccup that clears on retry). Decrements per throw.
         var fetchFailuresRemaining = 0
         var fetchError: Error = URLError(.timedOut)
+
+        /// The real fetch/send checkpoint policy (production type, not a stand-in).
+        private let checkpoint = ProjectionCheckpointGate()
+        /// Durable change-cursor stand-in for the engine's `.stateUpdate` seam: written ONLY while the
+        /// gate still allows a checkpoint, so a test can assert the cursor never advanced past a batch
+        /// SwiftData refused.
+        var cursorURL: URL?
+        private(set) var cursor = 0
+        /// Saved records CloudKit confirms for a SENT batch — i.e. the merged `serverRecordChanged`
+        /// result the device must project itself, because it never re-fetches records it authored.
+        /// Delivered once; a rolled-back send does NOT restore it (CloudKit would not either).
+        var pendingSentProjection: [CKRecord] = []
+        /// How many times a fetched / sent batch was actually handed to the coordinator.
+        private(set) var fetchDeliveryCount = 0
+        private(set) var sentDeliveryCount = 0
 
         var beforeDurableCheckpoint: (@Sendable () async -> Void)?
         func save(_ record: CKRecord) {
@@ -62,10 +82,16 @@ struct HouseholdCloudCoordinatorTests {
             let (mods, dels) = pendingFetch
             pendingFetch = ([], [])
             guard !mods.isEmpty || !dels.isEmpty else { return }
+            checkpoint.beginPass()
             for m in mods { store.applyRemoteModification(m) }
             for d in dels { store.removeRecord(d) }
-            try await onFetchedChanges?(mods, dels)
+            fetchDeliveryCount += 1
+            await checkpoint.project(mods, dels, via: onFetchedChanges)
             await beforeDurableCheckpoint?()
+            advanceCursorIfAllowed()
+            // Rollback restores the undelivered batch: the real engine rewinds to the last on-disk
+            // serialization, so CloudKit re-sends exactly this batch on the next fetch.
+            try checkpoint.finishPass { self.pendingFetch = (mods, dels) }
         }
         func sendUntilDrained(maxPasses: Int) async throws {
             sendUntilDrainedCallCount += 1
@@ -75,10 +101,30 @@ struct HouseholdCloudCoordinatorTests {
             }
             if let drainGate { await drainGate.waitForDrain() }
             hasPendingRecordChanges = false
+            let sent = pendingSentProjection
+            guard !sent.isEmpty else { return }
+            pendingSentProjection = []
+            checkpoint.beginPass()
+            for r in sent { store.setRecord(r) }
+            sentDeliveryCount += 1
+            await checkpoint.project(sent, [], via: onFetchedChanges)
+            advanceCursorIfAllowed()
+            // No restore on rollback: a SENT batch is never re-delivered by CloudKit. Its only other
+            // home is the coordinator's pending-apply buffer.
+            try checkpoint.finishPass {}
+        }
+
+        private func advanceCursorIfAllowed() {
+            guard checkpoint.allowsDurableCheckpoint else { return }
+            cursor += 1
+            if let cursorURL { try? Data("\(cursor)".utf8).write(to: cursorURL, options: .atomic) }
         }
 
         var savedTypes: [String] { savedRecords.map(\.recordType) }
     }
+
+    /// Stands in for the `ModelContext.save()` failure class the projection guard exists to catch.
+    enum ProjectionFault: Error, Sendable { case modelContextSaveFailed }
 
     actor FetchGate {
         private var started = false
@@ -278,6 +324,140 @@ struct HouseholdCloudCoordinatorTests {
         let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
 
         await coordinator.sync()
+    }
+
+    @Test("a failed SENT-batch projection is surfaced and its merged payload survives to the retry")
+    func sendProjectionFailurePreservesMergedPayload() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+
+        let setup = ModelContext(container)
+        let local = LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 5,
+                              source: .store, createdAt: 1, updatedAt: 500)
+        local.customName = "Local"
+        setup.insert(local)
+        try setup.save()
+
+        // CloudKit confirms the push as the MERGED serverRecordChanged result — the only copy of that
+        // merge this device will ever see, because it never re-fetches a record it authored.
+        engine.pendingSentProjection = [remoteSeed(id: "s1", householdID: hid, name: "Merged", updatedAt: 900)]
+        coordinator.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
+
+        await coordinator.sync()
+
+        #expect(coordinator.lastHumanizedError != nil, "a failed send projection must not report success")
+        #expect(fetchSeed(ModelContext(container), "s1")?.customName == "Local",
+                "the refused projection must not be half-applied")
+
+        coordinator.projectionFaultForTesting = nil
+        await coordinator.sync()
+
+        let rows = try ModelContext(container).fetch(
+            FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == "s1" }))
+        #expect(rows.count == 1, "the retry must apply the batch exactly once")
+        #expect(rows.first?.customName == "Merged",
+                "a merged sent batch CloudKit will never resend must survive the failed pass")
+        #expect(coordinator.lastHumanizedError == nil, "the recovered pass must clear the banner")
+    }
+
+    @Test("a failed SENT-batch projection does not record synced state — a relaunch re-pushes it")
+    func sendProjectionFailureDoesNotCommitSyncedState() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine1 = FakeEngine()
+        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 5,
+                               source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+
+        engine1.pendingSentProjection = [remoteSeed(id: "s1", householdID: hid, name: "Merged", updatedAt: 900)]
+        coordinator1.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
+        await coordinator1.sync()
+        #expect(engine1.savedRecords.contains { $0.recordID.recordName == "seed:s1" })
+
+        // Relaunch: the durable synced-state map is the only thing carried over. A record whose
+        // projection was refused must still look unconfirmed, or its merge is lost forever.
+        let engine2 = FakeEngine()
+        let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
+        await coordinator2.sync()
+        #expect(engine2.savedRecords.contains { $0.recordID.recordName == "seed:s1" },
+                "a record whose projection failed must not be durably marked synced")
+    }
+
+    @Test("a failed FETCHED-batch projection leaves the durable cursor untouched and re-delivers once")
+    func fetchProjectionFailureKeepsDurableCursor() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ck-cursor-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cursorURL = directory.appendingPathComponent("cursor")
+        engine.cursorURL = cursorURL
+        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "Brandywine", updatedAt: 500)], [])
+
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        coordinator.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
+        await coordinator.sync()
+
+        #expect(FileManager.default.fileExists(atPath: cursorURL.path) == false,
+                "the durable cursor must not advance past an unapplied batch")
+        #expect(fetchSeed(ModelContext(container), "s1") == nil)
+        #expect(coordinator.lastHumanizedError != nil)
+        let deliveredWhileFailing = engine.fetchDeliveryCount
+        #expect(deliveredWhileFailing > 0)
+
+        coordinator.projectionFaultForTesting = nil
+        await coordinator.sync()
+
+        #expect(engine.fetchDeliveryCount == deliveredWhileFailing + 1,
+                "the rolled-back batch must be re-delivered exactly once")
+        let rows = try ModelContext(container).fetch(
+            FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == "s1" }))
+        #expect(rows.count == 1)
+        #expect(rows.first?.customName == "Brandywine")
+        #expect((try? String(contentsOf: cursorURL, encoding: .utf8)) == "1",
+                "the cursor advances exactly once, after the batch is applied")
+    }
+
+    @Test("participant: a failed FETCHED-batch projection leaves the durable cursor untouched")
+    func participantFetchProjectionFailureKeepsDurableCursor() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let ownerZone = CKRecordZone.ID(
+            zoneName: SeedkeepZoneProvisioner.zoneName(householdID: hid), ownerName: "owner-record-name")
+        let engine = FakeEngine()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ck-cursor-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cursorURL = directory.appendingPathComponent("cursor")
+        engine.cursorURL = cursorURL
+        engine.pendingFetch = ([remoteSeed(id: "shared1", householdID: hid, name: "Owner Seed", updatedAt: 500)], [])
+
+        let coordinator = HouseholdCloudCoordinator(
+            engine: engine, zoneID: ownerZone, householdID: hid, householdName: "",
+            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+            provisioner: nil, stateURL: nil, isParticipant: true)
+        coordinator.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
+        await coordinator.sync()
+
+        #expect(FileManager.default.fileExists(atPath: cursorURL.path) == false,
+                "a participant's shared-zone cursor must not advance past an unapplied batch")
+        #expect(fetchSeed(ModelContext(container), "shared1") == nil)
+
+        coordinator.projectionFaultForTesting = nil
+        await coordinator.sync()
+
+        let rows = try ModelContext(container).fetch(
+            FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == "shared1" }))
+        #expect(rows.count == 1, "the owner's batch must re-deliver and apply exactly once")
+        #expect(rows.first?.customName == "Owner Seed")
     }
 
     @Test("updatedAt-LWW gate: an OLDER remote does not clobber a newer local edit")

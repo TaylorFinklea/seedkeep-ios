@@ -14,8 +14,10 @@ import OSLog
 /// Two stacks racing the change token would fork the household — this driver owns the
 /// single stack for a given zone.
 ///
-/// `automaticSync` is configurable: tests drive `sync()` manually for determinism;
-/// the app turns automatic sync on.
+/// `automaticSync` is configurable, and BOTH production factories pass `false`
+/// (`HouseholdCloudCoordinator.live` / `.participant`): the coordinator drives `fetchChanges()` and
+/// `sendUntilDrained(maxPasses:)` explicitly, so no delegate event can fire before it has wired the
+/// merger and callbacks. Pass `true` only for a driver that wants CloudKit's own scheduling.
 public enum SyncEngineError: Error {
     /// `sendUntilDrained` ran its full budget with record changes still pending (a conflict storm or
     /// a persistent failure). Thrown so the caller treats the pass as incomplete, not a false success.
@@ -59,10 +61,12 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// Optional field-merger. When set, records whose type it `handles` are field-merged
     /// at the fetch + serverRecordChanged seams instead of blanket LWW.
     ///
-    /// `merger` + the two callbacks below are lock-guarded. `syncEngine`, `zoneEnsured`, and
-    /// lifecycle transitions are serialized by `lifecycleGate`; failure and trace state have
-    /// dedicated locks; `store` enforces its own lock invariant. Those boundaries justify the
-    /// explicit `@unchecked Sendable` required by CKSyncEngineDelegate's concurrent callbacks.
+    /// `merger` + the two callbacks below are lock-guarded. Every read AND write of the `syncEngine`
+    /// / `zoneEnsured` pair happens inside `lifecycleGate`; delegate-driven code never re-reads
+    /// `self.syncEngine` — it operates on the instance `handleEvent` already validated and passes
+    /// down. Failure counters, the projection checkpoint, and the trace each carry their own lock;
+    /// `store` enforces its own. Those boundaries justify the explicit `@unchecked Sendable` required
+    /// by CKSyncEngineDelegate's concurrent callbacks.
     private let callbackLock = NSLock()
     private var _merger: RecordMerger?
     private var _onFetchedChanges: (@Sendable ([CKRecord], [CKRecord.ID]) async throws -> Void)?
@@ -168,27 +172,26 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         delete(recordID)
     }
 
-    /// Fetch remote changes then push local ones. Manual drive for deterministic tests.
-    public func sync() async throws {
-        let engine = try currentActiveEngine()
-        try await engine.fetchChanges()
-        try ensureCurrent(engine)
-        try await engine.sendChanges()
-        try ensureCurrent(engine)
-    }
-
+    /// Pull remote changes. Throws `.projectionFailed` (after rewinding this engine to its last
+    /// durable serialization) if SwiftData refused the fetched batch, so the caller never treats an
+    /// unapplied batch as delivered.
     public func fetchChanges() async throws {
         let engine = try currentActiveEngine()
-        clearProjectionFailure()
+        checkpoint.beginPass()
         try await engine.fetchChanges()
         try ensureCurrent(engine)
-        try throwIfProjectionFailed(reset: engine)
+        try finishCheckpointPass(on: engine)
     }
 
+    /// Push staged changes once. Symmetric with `fetchChanges()`: a SENT batch's projection (the
+    /// merged `serverRecordChanged` result) is the last chance to land that merge locally, so a
+    /// refused projection throws here too rather than reporting a clean push.
     public func sendChanges() async throws {
         let engine = try currentActiveEngine()
+        checkpoint.beginPass()
         try await engine.sendChanges()
         try ensureCurrent(engine)
+        try finishCheckpointPass(on: engine)
     }
 
     public var hasPendingRecordChanges: Bool {
@@ -246,34 +249,40 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     public func sendUntilDrained(maxPasses: Int = 6) async throws {
         let engine = try currentActiveEngine()
         failLock.withLock { surfacedFailure = nil }
+        checkpoint.beginPass()
         var lastError: Error?
         for pass in 0..<maxPasses {
+            var passError: Error?
             do {
                 try await engine.sendChanges()
-                try ensureCurrent(engine)
-                // A permanent per-record failure is reported via the .sentRecordZoneChanges event
-                // (processed during sendChanges, NOT thrown) — surface it instead of a false success.
-                if let surfaced = takeSurfacedFailure() { throw surfaced }
-                let pending = lifecycleGate.withActive {
-                    engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
-                } ?? false
-                if !pending { return }
             } catch {
+                passError = error
                 lastError = error
-                try ensureCurrent(engine)
-                if let surfaced = takeSurfacedFailure() { throw surfaced }
-                let pending = lifecycleGate.withActive {
-                    engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
-                } ?? false
-                if !pending { throw error }
+            }
+            try ensureCurrent(engine)
+            // A SENT batch's SwiftData projection is the LAST place a merged serverRecordChanged
+            // result can land — this device never re-fetches records it authored — so a refused
+            // projection aborts the drain instead of letting the caller mark those records synced.
+            try finishCheckpointPass(on: engine)
+            // A permanent per-record failure is reported via the .sentRecordZoneChanges event
+            // (processed during sendChanges, NOT thrown) — surface it instead of a false success.
+            if let surfaced = takeSurfacedFailure() { throw surfaced }
+            let pending = lifecycleGate.withActive {
+                engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
+            } ?? false
+            if let passError {
+                if !pending { throw passError }
                 if pass < maxPasses - 1 {
-                    let hint = (error as? CKError)?.retryAfterSeconds ?? 0.5
+                    let hint = (passError as? CKError)?.retryAfterSeconds ?? 0.5
                     let delay = min(max(0, hint), 2)   // cap so a foreground sync can't hang for long
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 }
+                continue
             }
+            if !pending { return }
         }
         try ensureCurrent(engine)
+        try finishCheckpointPass(on: engine)
         if let surfaced = takeSurfacedFailure() { throw surfaced }
         let pending = lifecycleGate.withActive {
             engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
@@ -315,11 +324,11 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private func handleCurrentEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
         switch event {
         case .stateUpdate(let update):
-            guard !hasProjectionFailure else { return }
+            guard checkpoint.allowsDurableCheckpoint else { return }
             Self.saveState(update.stateSerialization, to: stateURL)
 
         case .fetchedRecordZoneChanges(let changes):
-            let pendingSaves = pendingSaveIDs()
+            let pendingSaves = pendingSaveIDs(on: syncEngine)
             // Collect the records ACTUALLY applied this batch (post-merge; local-pending skips
             // excluded) + the deletion IDs, then hand them to the coordinator for SwiftData
             // projection. A skipped (local-pending) mod must NOT reach SwiftData either — local wins.
@@ -354,13 +363,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                 deletedIDs.append(deletion.recordID)
                 note("fetched del \(deletion.recordID.recordName)")
             }
-            if !applied.isEmpty || !deletedIDs.isEmpty {
-                do {
-                    try await onFetchedChanges?(applied, deletedIDs)
-                } catch {
-                    markProjectionFailure()
-                }
-            }
+            await checkpoint.project(applied, deletedIDs, via: onFetchedChanges)
 
         case .sentRecordZoneChanges(let sent):
             var saved: [CKRecord] = []
@@ -372,7 +375,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             }
             for failure in sent.failedRecordSaves {
                 note("FAILED \(failure.record.recordID.recordName) code=\(failure.error.code.rawValue)")
-                handleFailedSave(failure)
+                handleFailedSave(failure, on: syncEngine)
             }
             for recordID in sent.deletedRecordIDs {
                 store.removeRecord(recordID)
@@ -381,19 +384,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             }
             for (recordID, error) in sent.failedRecordDeletes {
                 note("FAILED DELETE \(recordID.recordName) code=\(error.code.rawValue)")
-                handleFailedDelete(recordID, error: error)
+                handleFailedDelete(recordID, error: error, on: syncEngine)
             }
             // Project the SAVED records back to SwiftData. For a serverRecordChanged conflict, the
             // re-saved record IS the merged result (packetCount-min / tagIDs-union / sticky-deletedAt)
             // produced in handleFailedSave — without this, the editing device's SwiftData keeps its
             // pre-merge values forever (it authored the last write, so it never re-fetches them).
-            if !saved.isEmpty {
-                do {
-                    try await onFetchedChanges?(saved, [])
-                } catch {
-                    markProjectionFailure()
-                }
-            }
+            await checkpoint.project(saved, [], via: onFetchedChanges)
 
         case .accountChange:
             break
@@ -409,33 +406,29 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         }
     }
 
-    private let projectionLock = NSLock()
-    private var projectionFailed = false
+    /// Shared fetch/send durable-checkpoint policy — see `ProjectionCheckpointGate`.
+    private let checkpoint = ProjectionCheckpointGate()
 
-    private var hasProjectionFailure: Bool {
-        projectionLock.withLock { projectionFailed }
-    }
-
-    private func clearProjectionFailure() {
-        projectionLock.withLock { projectionFailed = false }
-    }
-
-    private func markProjectionFailure() {
-        projectionLock.withLock { projectionFailed = true }
-    }
-
-    private func throwIfProjectionFailed(reset engine: CKSyncEngine) throws {
-        guard hasProjectionFailure else { return }
-        _ = lifecycleGate.withActive {
-            guard engine === syncEngine else { return }
-            syncEngine = makeSyncEngine(stateSerialization: Self.loadState(from: stateURL))
+    /// Close a driven pass. When a batch's SwiftData projection failed, rewind this engine to the
+    /// last serialization on disk (so CloudKit re-delivers a fetched batch) and throw, so the caller
+    /// records no false success. Mirrors `retirePendingChanges`' rebuild — including clearing
+    /// `zoneEnsured`, because the rebuilt engine carries no staged `.saveZone`.
+    private func finishCheckpointPass(on engine: CKSyncEngine) throws {
+        try checkpoint.finishPass {
+            _ = lifecycleGate.withActive {
+                guard engine === syncEngine else { return }
+                syncEngine = makeSyncEngine(stateSerialization: Self.loadState(from: stateURL))
+                zoneEnsured = false
+            }
         }
-        throw SyncEngineError.projectionFailed
     }
 
-    private func pendingSaveIDs() -> Set<CKRecord.ID> {
+    /// `engine` is the instance `handleEvent` validated against `syncEngine` under `lifecycleGate`;
+    /// re-reading `self.syncEngine` here would be an unsynchronized read of a property a concurrent
+    /// account retirement writes.
+    private func pendingSaveIDs(on engine: CKSyncEngine) -> Set<CKRecord.ID> {
         var ids = Set<CKRecord.ID>()
-        for change in syncEngine.state.pendingRecordZoneChanges {
+        for change in engine.state.pendingRecordZoneChanges {
             if case .saveRecord(let id) = change { ids.insert(id) }
         }
         return ids
@@ -457,26 +450,26 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     }
     /// Re-enqueue a save, but give up + surface (as permanent) after `maxReEnqueues` attempts, so a
     /// record that keeps failing for the same reason can't loop the drain across every sync forever.
-    private func reEnqueue(_ recordID: CKRecord.ID, after error: CKError) {
+    private func reEnqueue(_ recordID: CKRecord.ID, after error: CKError, on engine: CKSyncEngine) {
         failLock.lock()
         let n = (attemptCounts[recordID.recordName] ?? 0) + 1
         attemptCounts[recordID.recordName] = n
         failLock.unlock()
         if n <= Self.maxReEnqueues {
-            syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+            engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         } else {
             log.error("giving up on \(recordID.recordName, privacy: .public) after \(n, privacy: .public) re-enqueues: \(error, privacy: .public)")
             surface(error)
             clearAttempts(recordID)
         }
     }
-    private func reEnqueueDelete(_ recordID: CKRecord.ID, after error: CKError) {
+    private func reEnqueueDelete(_ recordID: CKRecord.ID, after error: CKError, on engine: CKSyncEngine) {
         failLock.lock()
         let n = (attemptCounts[recordID.recordName] ?? 0) + 1
         attemptCounts[recordID.recordName] = n
         failLock.unlock()
         if n <= Self.maxReEnqueues {
-            syncEngine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+            engine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
         } else {
             log.error("giving up deleting \(recordID.recordName, privacy: .public) after \(n, privacy: .public) re-enqueues: \(error, privacy: .public)")
             surface(error)
@@ -493,7 +486,10 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         return surfacedFailure
     }
 
-    private func handleFailedSave(_ failure: CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave) {
+    private func handleFailedSave(
+        _ failure: CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave,
+        on engine: CKSyncEngine
+    ) {
         let recordID = failure.record.recordID
         switch failure.error.code {
         case .serverRecordChanged:
@@ -520,15 +516,15 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                     store.setRecord(serverRecord)
                     shouldResave = false
                 }
-                if shouldResave { reEnqueue(recordID, after: failure.error) }
+                if shouldResave { reEnqueue(recordID, after: failure.error, on: engine) }
             } else {
                 // serverRecordChanged with no attached serverRecord (uncommon). Re-enqueue (capped) so a
                 // later pass re-attempts; the cap stops a persistent nil-serverRecord from poisoning sync.
-                reEnqueue(recordID, after: failure.error)
+                reEnqueue(recordID, after: failure.error, on: engine)
             }
         case .zoneNotFound, .userDeletedZone:
-            syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-            reEnqueue(recordID, after: failure.error)
+            engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
+            reEnqueue(recordID, after: failure.error, on: engine)
         case .unknownItem:
             store.removeRecord(recordID)
             clearAttempts(recordID)
@@ -538,7 +534,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         // a backed-off retry (sendUntilDrained); the cap stops a stuck one from looping forever.
         case .batchRequestFailed, .zoneBusy, .serviceUnavailable,
              .requestRateLimited, .networkFailure, .networkUnavailable, .serverResponseLost:
-            reEnqueue(recordID, after: failure.error)
+            reEnqueue(recordID, after: failure.error, on: engine)
         default:
             // Genuinely permanent (serverRejectedRequest / invalidArguments / permissionFailure /
             // quotaExceeded / …) — re-enqueueing would loop. Drop + SURFACE so the drain reports it as a
@@ -549,13 +545,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         }
     }
 
-    private func handleFailedDelete(_ recordID: CKRecord.ID, error: CKError) {
+    private func handleFailedDelete(_ recordID: CKRecord.ID, error: CKError, on engine: CKSyncEngine) {
         switch Self.deleteFailureDisposition(for: error.code) {
         case .confirmedAbsent:
             store.removeRecord(recordID)
             clearAttempts(recordID)
         case .retry:
-            reEnqueueDelete(recordID, after: error)
+            reEnqueueDelete(recordID, after: error, on: engine)
         case .surface:
             log.error("delete permanently failed for \(recordID.recordName, privacy: .public): \(error, privacy: .public)")
             surface(error)
