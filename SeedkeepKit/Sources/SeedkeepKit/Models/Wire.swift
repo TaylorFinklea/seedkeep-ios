@@ -475,6 +475,15 @@ public enum WireResponses {
     public struct AccountDeletionTransferOne: Codable, Sendable, Equatable {
         public let transfer: AccountDeletionTransferDTO
         public let handoff_token: String?
+
+        /// Public because the deletion coordinator's tests stand in for the
+        /// server; the synthesized memberwise init is internal to this
+        /// module. Matches `AccountDeletionTransferDTO`, which is likewise
+        /// constructible from outside.
+        public init(transfer: AccountDeletionTransferDTO, handoff_token: String?) {
+            self.transfer = transfer
+            self.handoff_token = handoff_token
+        }
     }
 
     public struct SeedOne: Codable, Sendable, Equatable {

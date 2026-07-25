@@ -1,0 +1,951 @@
+import CloudKit
+import Foundation
+import Observation
+import SeedkeepCloudKit
+import SeedkeepKit
+
+/// Runs account deletion: the role-specific CloudKit work first, then
+/// `DELETE /api/me`, then sign-out — resumably, one checkpointed step at a
+/// time.
+///
+/// The problem this type exists to solve is that deleting a Seedkeep
+/// account is not one operation and the pieces are not equally reversible.
+/// A CloudKit zone, once deleted, is gone. A server account, once deleted,
+/// takes the credentials needed to finish anything else with it. Between
+/// those two there is a window in which a crash leaves a user signed in to
+/// an account whose garden no longer exists — or, worse, signed out of an
+/// account that still does. So the flow is written as a state machine over
+/// a durable checkpoint
+/// (`.docs/ai/phases/2026-07-23-cloudkit-account-deletion-spec.md`
+/// § "Role flows"), with four rules it never breaks:
+///
+///   1. **`DELETE /api/me` is last.** Nothing clears a token, erases local
+///      data, or signs out until the server has confirmed the account is
+///      gone. Every failure anywhere earlier leaves a fully working,
+///      signed-in app pointed at an intact garden.
+///   2. **A checkpoint is written after its step lands, never before.** The
+///      phase on disk names the step to run NEXT, and it only moves once
+///      the previous step's external effect has actually happened. Resuming
+///      therefore re-attempts exactly the operation that did not finish.
+///      Every such operation is idempotent, which is what makes re-running
+///      it safe. (The single exception is the first checkpoint of a flow:
+///      it precedes all external work precisely so a crash during the first
+///      irreversible step is still recoverable.)
+///   3. **The source garden outlives every doubt.** The owner's zone is
+///      deleted only when the server holds two independently computed
+///      digests — the owner's and the successor's — that agree on both the
+///      hash and the per-type census, over a destination zone the owner has
+///      separately confirmed the successor owns.
+///   4. **Ambiguity stops the flow.** A zone that is still readable after
+///      being deleted, a verified transfer with a digest missing, a server
+///      phase behind the local one: none of these are guessed at. The
+///      coordinator reloads durable state or fails, and the account and the
+///      garden both survive.
+///
+/// The flow is driven, not scheduled: `start`, `resume` and `acceptHandoff`
+/// each advance as far as they can and then return — either `deleted`,
+/// `handoffComplete`, or `waiting(phase)` when the next move belongs to the
+/// other device. Nothing here polls; the surface that owns the UI decides
+/// when to call again.
+@MainActor
+@Observable
+final class AccountDeletionCoordinator {
+
+    /// Where a drive stopped.
+    enum Outcome: Equatable, Sendable {
+        /// No deletion is in progress. Also the answer when a transfer was
+        /// cancelled out from under this device before anything
+        /// irreversible happened.
+        case idle
+        /// Everything this device can do is done; `phase` names what the
+        /// other device (or the person opening the handoff link) owes.
+        case waiting(AccountDeletionCheckpoint.Phase)
+        /// A successor finished building and verifying the destination
+        /// garden. Their own account is untouched.
+        case handoffComplete
+        /// The account is gone and the session has been signed out.
+        case deleted
+    }
+
+    /// The single-use handoff credential for a shared-owner transfer, held
+    /// in memory only.
+    ///
+    /// It is deliberately absent from `AccountDeletionCheckpoint`: writing a
+    /// live capability into an unencrypted JSON file in Application Support
+    /// for the days-long lifetime of a transfer is a worse failure mode than
+    /// having to re-issue a link. The server re-issues on demand for a
+    /// transfer still waiting for a successor, which is the documented
+    /// recovery path.
+    struct Handoff: Equatable, Sendable {
+        let transferID: String
+        let token: String
+        /// Epoch milliseconds.
+        let expiresAt: Int64
+    }
+
+    private let store: AccountDeletionCheckpointStore
+    private let cloudKit: any AccountDeletionCloudKitOperating
+    private let server: any AccountDeletionServerOperating
+    private let session: AccountDeletionSession
+    private let now: @MainActor () -> Int64
+
+    /// The durable state as this coordinator last saw it. Observable so a
+    /// progress surface can render the current phase and last failure.
+    private(set) var checkpoint: AccountDeletionCheckpoint?
+    /// Non-nil only between minting a handoff and the successor accepting.
+    private(set) var handoff: Handoff?
+
+    /// The right to replace the checkpoint file exactly once. Dropped on any
+    /// rejected write so the next attempt has to reload rather than fight
+    /// another writer for the file.
+    @ObservationIgnored private var lease: AccountDeletionCheckpointStore.Lease?
+    /// The destination this process created, kept so the happy path does not
+    /// ask CloudKit for it twice. A cold resume re-derives it instead.
+    @ObservationIgnored private var pendingDestination: AccountDeletionDestination?
+
+    init(
+        store: AccountDeletionCheckpointStore,
+        cloudKit: any AccountDeletionCloudKitOperating,
+        server: any AccountDeletionServerOperating,
+        session: AccountDeletionSession,
+        now: @escaping @MainActor () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
+    ) {
+        self.store = store
+        self.cloudKit = cloudKit
+        self.server = server
+        self.session = session
+        self.now = now
+    }
+
+    // MARK: - Entry points
+
+    /// Begin deleting this account, or pick up a deletion already under way.
+    ///
+    /// The role is decided once, here, and only when there is no checkpoint:
+    /// a flow that has already deleted a zone must not re-inspect CloudKit
+    /// and conclude it is a different kind of user now.
+    @discardableResult
+    func start() async throws -> Outcome {
+        try Task.checkCancellation()
+        let identity = try requireIdentity()
+        if try reload(userID: identity.userID) != nil { return try await drive() }
+
+        let initial: AccountDeletionCheckpoint
+        switch try await cloudKit.currentRole() {
+        case .noGarden:
+            initial = makeCheckpoint(identity, role: .noCloudKitGarden, phase: .deletingAccount, source: nil)
+        case .participant(let zoneID):
+            initial = makeCheckpoint(identity, role: .participant, phase: .participantLeaving, source: zoneID)
+        case .soloOwner(let zoneID):
+            initial = makeCheckpoint(identity, role: .soloOwner, phase: .ownerDeletingZone, source: zoneID)
+        case .sharedOwner(let zoneID):
+            initial = makeCheckpoint(identity, role: .sharedOwner, phase: .transferPending, source: zoneID)
+        }
+        // The one write that precedes its external step. Without it a crash
+        // during the first CloudKit operation would leave no evidence that a
+        // deletion was ever started.
+        try persist(initial)
+        return try await drive()
+    }
+
+    /// Continue whatever this user's checkpoint says is unfinished. Safe to
+    /// call at launch, on foreground, and after a failure.
+    @discardableResult
+    func resume() async throws -> Outcome {
+        try Task.checkCancellation()
+        let identity = try requireIdentity()
+        guard try reload(userID: identity.userID) != nil else { return .idle }
+        return try await drive()
+    }
+
+    /// Take over a departing owner's garden. Called with the id and token
+    /// carried by a handoff link.
+    ///
+    /// The participant proof happens BEFORE the token is spent: the token is
+    /// single-use, so a device that cannot read the source garden must be
+    /// turned away while the link is still worth something to somebody who
+    /// can.
+    @discardableResult
+    func acceptHandoff(transferID: String, token: String) async throws -> Outcome {
+        try Task.checkCancellation()
+        let identity = try requireIdentity()
+
+        if let existing = try reload(userID: identity.userID) {
+            // Never spend a second token on top of work already in flight —
+            // and never let a handoff link hijack an account deletion.
+            guard existing.role == .successor, existing.transferID == transferID else {
+                throw AccountDeletionCoordinatorError.deletionAlreadyInProgress(phase: existing.phase)
+            }
+            return try await drive()
+        }
+
+        guard case .participant(let sharedZoneID) = try await cloudKit.currentRole() else {
+            throw AccountDeletionCoordinatorError.notASourceParticipant
+        }
+        let transfer = try await server.acceptTransfer(id: transferID, token: token)
+        let visibleHouseholdID = SeedkeepRecordNames.householdID(fromZoneName: sharedZoneID.zoneName)
+        guard transfer.source_household_id == visibleHouseholdID else {
+            // Bound to a garden this device cannot see. Building a
+            // destination from here would copy nothing, and two digests over
+            // nothing agree perfectly — which would authorise deleting the
+            // real garden.
+            throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
+                expected: transfer.source_household_id, found: visibleHouseholdID)
+        }
+
+        try persist(AccountDeletionCheckpoint(
+            userID: identity.userID,
+            role: .successor,
+            phase: AccountDeletionCheckpoint.Phase(transferPhase: transfer.phase) ?? .successorBound,
+            transferID: transfer.id,
+            sourceZoneName: sharedZoneID.zoneName,
+            sourceZoneOwnerName: sharedZoneID.ownerName,
+            updatedAt: now()))
+        return try await drive()
+    }
+
+    /// Abandon a transfer and forget the local deletion.
+    ///
+    /// Legal only while the original garden is still there. Once the source
+    /// zone is gone the user is committed: cancelling would leave them with
+    /// no garden, an account the server refuses to delete, and no way back.
+    func cancel() async throws {
+        let identity = try requireIdentity()
+        guard let current = try reload(userID: identity.userID) else { return }
+        guard !Self.sourceIsGone(current.phase) else {
+            throw AccountDeletionCoordinatorError.cancelAfterSourceDeletion
+        }
+        if let transferID = current.transferID {
+            _ = try await server.cancelTransfer(id: transferID)
+        }
+        try clear(userID: identity.userID)
+    }
+
+    // MARK: - The machine
+
+    private enum StepResult {
+        /// The phase moved; run the next step now.
+        case again
+        /// Nothing more this device can do right now.
+        case settled(Outcome)
+    }
+
+    /// Upper bound on steps in one drive. Every step either advances the
+    /// phase, settles, or throws, so this can only trip on a seam that keeps
+    /// reporting a phase it never leaves — in which case spinning forever
+    /// against CloudKit and the server is the worse outcome.
+    private static let maximumSteps = 24
+
+    private func drive() async throws -> Outcome {
+        var steps = 0
+        while true {
+            try Task.checkCancellation()
+            guard let current = checkpoint else { return .idle }
+            steps += 1
+            guard steps <= Self.maximumSteps else {
+                throw AccountDeletionCoordinatorError.stalled(phase: current.phase)
+            }
+
+            do {
+                switch try await step(current) {
+                case .again: continue
+                case .settled(let outcome): return outcome
+                }
+            } catch {
+                var surfaced = error
+                if let durable = Self.durablePhase(in: error) {
+                    do {
+                        switch try adopt(durable, at: current) {
+                        case .retry: continue
+                        case .settled(let outcome): return outcome
+                        case .unhandled: break
+                        }
+                    } catch let adoptionError {
+                        surfaced = adoptionError
+                    }
+                }
+                noteFailure(surfaced, at: current.phase)
+                throw surfaced
+            }
+        }
+    }
+
+    private func step(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        switch (current.role, current.phase) {
+
+        // ── Participant ────────────────────────────────────────────────
+        case (.participant, .participantLeaving):
+            let zoneID = try sourceZoneID(current)
+            try await cloudKit.leaveSharedGarden(zoneID: zoneID)
+            guard try await cloudKit.sharedZoneIsAbsent(zoneID: zoneID) else {
+                // The share is still readable. Asking the server to delete
+                // the account now would strand the user inside somebody
+                // else's garden with no account to leave it from.
+                throw AccountDeletionCoordinatorError.zoneStillPresent(zoneName: zoneID.zoneName)
+            }
+            try advance(current, to: .deletingAccount)
+            return .again
+
+        // ── Solo owner ─────────────────────────────────────────────────
+        case (.soloOwner, .ownerDeletingZone):
+            let zoneID = try sourceZoneID(current)
+            try await cloudKit.deleteOwnedZone(zoneID: zoneID)
+            guard try await cloudKit.ownedZoneIsAbsent(zoneID: zoneID) else {
+                throw AccountDeletionCoordinatorError.zoneStillPresent(zoneName: zoneID.zoneName)
+            }
+            try advance(current, to: .deletingAccount)
+            return .again
+
+        // ── Shared owner ───────────────────────────────────────────────
+        case (.sharedOwner, .transferPending):
+            return try await openOrResumeTransfer(current)
+
+        case (.sharedOwner, .successorBound), (.sharedOwner, .ownerVerified):
+            // Nothing to do but read the durable phase; the successor moves
+            // it next.
+            let transferID = try transferID(current)
+            return try follow(current, try await server.transfer(id: transferID))
+
+        case (.sharedOwner, .destinationReady):
+            return try await acceptDestinationShare(current)
+
+        case (.sharedOwner, .destinationShareAccepted):
+            return try await copyGraphToDestination(current)
+
+        case (.sharedOwner, .copyComplete):
+            return try await postOwnerVerification(current)
+
+        case (.sharedOwner, .verified):
+            return try await deleteSourceZone(current)
+
+        case (.sharedOwner, .sourceZoneDeleted):
+            let transferID = try transferID(current)
+            _ = try await server.markSourceDeleted(id: transferID)
+            try advance(current, to: .deletingAccount)
+            return .again
+
+        case (.sharedOwner, .sourceDeleted):
+            // The durable row already records the source as gone — reached
+            // by reloading after a crash between the two. The only work left
+            // is the account itself.
+            try advance(current, to: .deletingAccount)
+            return .again
+
+        // ── Successor ──────────────────────────────────────────────────
+        case (.successor, .successorBound):
+            return try await createDestination(current)
+
+        case (.successor, .destinationZoneCreated):
+            return try await publishDestination(current)
+
+        case (.successor, .destinationReady):
+            let transferID = try transferID(current)
+            return try follow(current, try await server.transfer(id: transferID))
+
+        case (.successor, .ownerVerified):
+            return try await postSuccessorVerification(current)
+
+        case (.successor, .verified), (.successor, .sourceDeleted):
+            // Both digests matched; the rest is the departing owner's.
+            try clear(userID: current.userID)
+            return .settled(.handoffComplete)
+
+        // ── Every deleting role ────────────────────────────────────────
+        case (_, .deletingAccount):
+            return try await deleteAccount(current)
+
+        default:
+            throw AccountDeletionCoordinatorError.unexpectedPhase(current.phase, role: current.role)
+        }
+    }
+
+    // MARK: - Shared-owner steps
+
+    private func openOrResumeTransfer(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let transfer: AccountDeletionTransferDTO
+        if let existingID = current.transferID {
+            var durable = try await server.transfer(id: existingID)
+            if durable.phase == .pendingSuccessor, durable.handoff_expires_at <= now() {
+                // The spec caps the TOKEN's life, not the request's, so a
+                // dead link on a transfer nobody has taken up is re-issued
+                // rather than abandoned. Re-issuing invalidates the stale
+                // link.
+                let reissued = try await server.createTransfer()
+                remember(reissued)
+                durable = reissued.transfer
+            }
+            transfer = durable
+        } else {
+            let created = try await server.createTransfer()
+            remember(created)
+            transfer = created.transfer
+        }
+        return try follow(current, transfer)
+    }
+
+    private func acceptDestinationShare(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let transferID = try transferID(current)
+        let transfer = try await server.transfer(id: transferID)
+        guard transfer.phase == .destinationReady else { return try follow(current, transfer) }
+        guard let zoneName = transfer.destination_zone_name,
+              let ownerName = transfer.destination_zone_owner_name,
+              let shareURLString = transfer.destination_share_url,
+              let shareURL = URL(string: shareURLString) else {
+            throw AccountDeletionCoordinatorError.destinationUnavailable
+        }
+
+        let accepted = try await cloudKit.acceptShare(at: shareURL)
+        // The zone the link resolved to must be the zone the successor told
+        // the server they own. If it is not, the copy would land somewhere
+        // the successor does not control — and the digests would still
+        // match, because a digest deliberately says nothing about the zone
+        // it came from.
+        guard accepted.zoneName == zoneName, accepted.ownerName == ownerName else {
+            throw AccountDeletionCoordinatorError.destinationOwnershipMismatch(
+                expected: Self.zoneDescription(zoneName: zoneName, ownerName: ownerName),
+                found: Self.zoneDescription(zoneName: accepted.zoneName, ownerName: accepted.ownerName))
+        }
+        try advance(current, to: .destinationShareAccepted) {
+            $0.destinationZoneName = zoneName
+            $0.destinationZoneOwnerName = ownerName
+        }
+        return .again
+    }
+
+    private func copyGraphToDestination(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let source = try sourceZoneID(current)
+        let destination = try destinationZoneID(current)
+        // An absent source here is a failure, never a completed deletion.
+        // Only the source-deletion phase is allowed to read absence as
+        // success (spec § "Failure invariants").
+        let records = try await cloudKit.fetchRecords(in: source)
+        let plan = try HouseholdGraphCopier.plan(records, from: source, to: destination)
+        for batch in plan.batches {
+            // Batch order is a dependency order: a `.deleteSelf` child
+            // cannot be saved before its parent exists. And the policy is
+            // required, not advisory — destination records are built fresh,
+            // so they carry no change tag and would lose to the successor's
+            // pre-existing root (and to anything a previous attempt already
+            // landed) under any other policy.
+            try await cloudKit.saveRecords(batch, policy: plan.savePolicy, in: destination)
+        }
+        try advance(current, to: .copyComplete)
+        return .again
+    }
+
+    private func postOwnerVerification(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let transferID = try transferID(current)
+        let destination = try destinationZoneID(current)
+        // Read back rather than hash the plan: the claim being made is about
+        // what is IN the destination zone, not about what was sent to it.
+        let copied = try await cloudKit.fetchRecords(in: destination)
+        let digest = try HouseholdGraphDigester.digest(of: copied, in: destination)
+        return try follow(current, try await server.putOwnerVerification(id: transferID, digest: digest))
+    }
+
+    private func deleteSourceZone(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let transferID = try transferID(current)
+        // Always re-read before the irreversible step. A local `.verified`
+        // is a memory of an answer; this is the answer.
+        let transfer = try await server.transfer(id: transferID)
+        guard transfer.phase == .verified else { return try follow(current, transfer) }
+        try assertAuthorizesSourceDeletion(transfer, current)
+
+        let source = try sourceZoneID(current)
+        try await cloudKit.deleteOwnedZone(zoneID: source)
+        guard try await cloudKit.ownedZoneIsAbsent(zoneID: source) else {
+            throw AccountDeletionCoordinatorError.zoneStillPresent(zoneName: source.zoneName)
+        }
+        try advance(current, to: .sourceZoneDeleted)
+        return .again
+    }
+
+    /// The last gate in front of an irreversible deletion. The server has
+    /// already enforced all of this to reach `verified`; re-checking here
+    /// means a client bug, a spoofed response, or a transfer that moved
+    /// under us cannot turn into a lost garden.
+    private func assertAuthorizesSourceDeletion(
+        _ transfer: AccountDeletionTransferDTO,
+        _ current: AccountDeletionCheckpoint
+    ) throws {
+        guard let ownerDigest = transfer.owner_digest, let successorDigest = transfer.successor_digest else {
+            throw AccountDeletionCoordinatorError.verificationIncomplete(transferID: transfer.id)
+        }
+        guard ownerDigest.digest == successorDigest.digest else {
+            throw AccountDeletionCoordinatorError.digestMismatch(
+                owner: ownerDigest.digest, successor: successorDigest.digest)
+        }
+        // The census is checked separately: an implementation that ever
+        // produced the same hash for two different graphs would still be
+        // caught by a differing record count.
+        guard ownerDigest.record_counts == successorDigest.record_counts else {
+            throw AccountDeletionCoordinatorError.recordCountMismatch(
+                owner: ownerDigest.record_counts, successor: successorDigest.record_counts)
+        }
+        let recorded = Self.zoneDescription(zoneName: transfer.destination_zone_name,
+                                            ownerName: transfer.destination_zone_owner_name)
+        let accepted = Self.zoneDescription(zoneName: current.destinationZoneName,
+                                            ownerName: current.destinationZoneOwnerName)
+        guard transfer.destination_zone_name != nil,
+              transfer.destination_zone_owner_name != nil,
+              recorded == accepted else {
+            throw AccountDeletionCoordinatorError.destinationOwnershipMismatch(
+                expected: recorded, found: accepted)
+        }
+    }
+
+    // MARK: - Successor steps
+
+    private func createDestination(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let householdID = try sourceHouseholdID(current)
+        let destination = try await cloudKit.createDestination(
+            householdID: householdID, title: Self.destinationTitle)
+        pendingDestination = destination
+        try advance(current, to: .destinationZoneCreated) {
+            $0.destinationZoneName = destination.zoneID.zoneName
+            $0.destinationZoneOwnerName = destination.ownerRecordName
+        }
+        return .again
+    }
+
+    private func publishDestination(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let transferID = try transferID(current)
+        let householdID = try sourceHouseholdID(current)
+        let destination: AccountDeletionDestination
+        if let cached = pendingDestination, cached.zoneID.zoneName == current.destinationZoneName {
+            destination = cached
+        } else {
+            // Cold resume: the share URL is a capability and is never
+            // persisted, so it is re-derived. Creating the destination is
+            // fetch-or-create on both the zone and its share, so this adopts
+            // what the interrupted attempt built rather than forking a
+            // second garden.
+            let rebuilt = try await cloudKit.createDestination(
+                householdID: householdID, title: Self.destinationTitle)
+            guard current.destinationZoneName == nil || current.destinationZoneName == rebuilt.zoneID.zoneName else {
+                throw AccountDeletionCoordinatorError.destinationOwnershipMismatch(
+                    expected: Self.zoneDescription(zoneName: current.destinationZoneName,
+                                                   ownerName: current.destinationZoneOwnerName),
+                    found: Self.zoneDescription(zoneName: rebuilt.zoneID.zoneName,
+                                                ownerName: rebuilt.ownerRecordName))
+            }
+            pendingDestination = rebuilt
+            destination = rebuilt
+        }
+
+        let transfer = try await server.putDestination(
+            id: transferID,
+            zoneName: destination.zoneID.zoneName,
+            zoneOwnerName: destination.ownerRecordName,
+            shareRecordName: destination.shareRecordName,
+            shareURL: destination.shareURL.absoluteString)
+        return try follow(current, transfer)
+    }
+
+    private func postSuccessorVerification(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        let transferID = try transferID(current)
+        guard let zoneName = current.destinationZoneName,
+              let ownerRecordName = current.destinationZoneOwnerName else {
+            throw AccountDeletionCoordinatorError.destinationUnavailable
+        }
+        let destination = try destinationZoneID(current)
+        let records = try await cloudKit.fetchRecords(in: destination)
+        let digest = try HouseholdGraphDigester.digest(of: records, in: destination)
+        let transfer = try await server.putSuccessorVerification(
+            id: transferID, digest: digest,
+            destinationZoneName: zoneName,
+            destinationZoneOwnerName: ownerRecordName)
+        guard transfer.phase == .verified else { return try follow(current, transfer) }
+        try clear(userID: current.userID)
+        return .settled(.handoffComplete)
+    }
+
+    // MARK: - The last step
+
+    private func deleteAccount(_ current: AccountDeletionCheckpoint) async throws -> StepResult {
+        guard let disposition = current.disposition else {
+            // The disposition is an assertion that the CloudKit work is
+            // done. If the checkpoint cannot produce one — a shared owner
+            // that lost its transfer id, a successor that should never be
+            // here — the honest move is to stop, not to claim a weaker
+            // disposition the server would happily accept.
+            throw AccountDeletionCoordinatorError.dispositionUnavailable(
+                phase: current.phase, role: current.role)
+        }
+        guard try await server.deleteAccount(disposition: disposition) else {
+            throw AccountDeletionCoordinatorError.accountDeletionNotConfirmed
+        }
+        // The account no longer exists. A checkpoint file that refuses to go
+        // away must not keep the user in a signed-in session holding a dead
+        // token, so removal is best effort and sign-out is not.
+        try? clear(userID: current.userID)
+        handoff = nil
+        pendingDestination = nil
+        await session.signOut()
+        return .settled(.deleted)
+    }
+
+    // MARK: - Durable-phase reconciliation
+
+    private enum Adoption {
+        case retry
+        case settled(Outcome)
+        case unhandled
+    }
+
+    /// Move the checkpoint onto the phase the SERVER holds. Used after a 409
+    /// `phase_conflict`, which is the server telling us another device moved
+    /// the transfer while we were working from a stale view.
+    private func adopt(
+        _ durable: AccountDeletionTransferPhase,
+        at current: AccountDeletionCheckpoint
+    ) throws -> Adoption {
+        guard let local = AccountDeletionCheckpoint.Phase(transferPhase: durable) else {
+            return .settled(try handleCancellation(at: current, transferID: current.transferID))
+        }
+        // Adopting the phase we are already on would spin. Whatever went
+        // wrong was not a stale view.
+        guard local != current.phase else { return .unhandled }
+        var next = current
+        next.phase = local
+        next.lastFailure = nil
+        next.updatedAt = now()
+        try persist(next)
+        return .retry
+    }
+
+    /// Follow a transfer we just read or just changed.
+    private func follow(
+        _ current: AccountDeletionCheckpoint,
+        _ transfer: AccountDeletionTransferDTO
+    ) throws -> StepResult {
+        guard let local = AccountDeletionCheckpoint.Phase(transferPhase: transfer.phase) else {
+            return .settled(try handleCancellation(at: current, transferID: transfer.id))
+        }
+        let unchanged = local == current.phase
+            && current.transferID == transfer.id
+            && current.lastFailure == nil
+        if !unchanged {
+            var next = current
+            next.transferID = transfer.id
+            next.phase = local
+            next.lastFailure = nil
+            next.updatedAt = now()
+            try persist(next)
+        }
+        if local == current.phase || Self.waitsForTheOtherDevice(local, role: current.role) {
+            return .settled(.waiting(local))
+        }
+        return .again
+    }
+
+    /// What to do when the durable phase is `cancelled` — the only transfer
+    /// phase with no step to resume. Either the flow simply ends, or, if the
+    /// source garden is already gone, it cannot.
+    private func handleCancellation(
+        at current: AccountDeletionCheckpoint,
+        transferID: String?
+    ) throws -> Outcome {
+        guard !Self.sourceIsGone(current.phase) else {
+            // The garden is already gone and the transfer that authorises
+            // deleting the account has been withdrawn. There is no safe
+            // automatic move left: keep the credentials, keep the
+            // checkpoint, and surface it.
+            throw AccountDeletionCoordinatorError.transferCancelledAfterSourceDeletion(
+                transferID: transferID ?? current.transferID ?? "")
+        }
+        // Cancelled before anything irreversible: the original garden is
+        // untouched, so there is nothing to resume.
+        try clear(userID: current.userID)
+        return .idle
+    }
+
+    /// Phases whose next move belongs to the other device. Settling here
+    /// instead of looping saves a redundant read and, more importantly, lets
+    /// a caller render an honest "waiting for…".
+    private static func waitsForTheOtherDevice(
+        _ phase: AccountDeletionCheckpoint.Phase,
+        role: AccountDeletionCheckpoint.Role
+    ) -> Bool {
+        switch (role, phase) {
+        case (.sharedOwner, .transferPending),      // nobody has opened the link
+             (.sharedOwner, .successorBound),       // no destination published yet
+             (.sharedOwner, .ownerVerified),        // successor has not verified
+             (.successor, .destinationReady):       // owner has not copied yet
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// True once the source garden is gone, which is the point of no return
+    /// for cancellation.
+    private static func sourceIsGone(_ phase: AccountDeletionCheckpoint.Phase) -> Bool {
+        switch phase {
+        case .sourceZoneDeleted, .sourceDeleted, .deletingAccount: return true
+        default: return false
+        }
+    }
+
+    /// The durable phase a 409 carries, or `nil` for anything else —
+    /// including a phase string this build cannot name, which must fail
+    /// rather than approximate.
+    private static func durablePhase(in error: Error) -> AccountDeletionTransferPhase? {
+        guard let serverError = error as? SeedkeepError,
+              serverError.code == "phase_conflict",
+              let raw = serverError.conflictPhase else { return nil }
+        return AccountDeletionTransferPhase(rawValue: raw)
+    }
+
+    // MARK: - Checkpoint plumbing
+
+    private func reload(userID: String) throws -> AccountDeletionCheckpoint? {
+        guard let loaded = try store.load(userID: userID) else {
+            checkpoint = nil
+            lease = nil
+            return nil
+        }
+        checkpoint = loaded.checkpoint
+        lease = loaded.lease
+        return loaded.checkpoint
+    }
+
+    private func persist(_ next: AccountDeletionCheckpoint) throws {
+        do {
+            lease = try store.save(next, lease: lease)
+            checkpoint = next
+        } catch {
+            // Rejected: somebody else moved the record on. Drop the lease so
+            // nothing here can write over whatever they decided.
+            lease = nil
+            throw error
+        }
+    }
+
+    private func clear(userID: String) throws {
+        try store.clear(userID: userID)
+        checkpoint = nil
+        lease = nil
+    }
+
+    private func advance(
+        _ current: AccountDeletionCheckpoint,
+        to phase: AccountDeletionCheckpoint.Phase,
+        _ mutate: (inout AccountDeletionCheckpoint) -> Void = { _ in }
+    ) throws {
+        var next = current
+        mutate(&next)
+        next.phase = phase
+        next.lastFailure = nil
+        next.updatedAt = now()
+        try persist(next)
+    }
+
+    /// Record which step failed so a relaunch can name it instead of showing
+    /// a bare spinner. Best effort: the caller's error is the one that
+    /// matters, and a note that cannot be written must not replace it.
+    private func noteFailure(_ error: Error, at phase: AccountDeletionCheckpoint.Phase) {
+        guard var next = checkpoint else { return }
+        next.lastFailure = .init(phase: phase, message: humanizeError(error), occurredAt: now())
+        next.updatedAt = now()
+        try? persist(next)
+    }
+
+    private func remember(_ created: WireResponses.AccountDeletionTransferOne) {
+        guard let token = created.handoff_token else { return }
+        handoff = Handoff(transferID: created.transfer.id,
+                          token: token,
+                          expiresAt: created.transfer.handoff_expires_at)
+    }
+
+    // MARK: - Small readers
+
+    private static let destinationTitle = "Seedkeep garden"
+
+    private func requireIdentity() throws -> AccountDeletionSession.Identity {
+        guard let identity = session.identity() else {
+            throw AccountDeletionCoordinatorError.notSignedIn
+        }
+        return identity
+    }
+
+    private func makeCheckpoint(
+        _ identity: AccountDeletionSession.Identity,
+        role: AccountDeletionCheckpoint.Role,
+        phase: AccountDeletionCheckpoint.Phase,
+        source: CKRecordZone.ID?
+    ) -> AccountDeletionCheckpoint {
+        AccountDeletionCheckpoint(
+            userID: identity.userID,
+            role: role,
+            phase: phase,
+            sourceZoneName: source?.zoneName,
+            sourceZoneOwnerName: source?.ownerName,
+            updatedAt: now())
+    }
+
+    private func transferID(_ current: AccountDeletionCheckpoint) throws -> String {
+        guard let transferID = current.transferID else {
+            throw AccountDeletionCoordinatorError.transferUnknown(phase: current.phase)
+        }
+        return transferID
+    }
+
+    private func sourceZoneID(_ current: AccountDeletionCheckpoint) throws -> CKRecordZone.ID {
+        guard let zoneName = current.sourceZoneName, let ownerName = current.sourceZoneOwnerName else {
+            throw AccountDeletionCoordinatorError.sourceZoneUnknown(phase: current.phase)
+        }
+        return CKRecordZone.ID(zoneName: zoneName, ownerName: ownerName)
+    }
+
+    private func sourceHouseholdID(_ current: AccountDeletionCheckpoint) throws -> String {
+        guard let zoneName = current.sourceZoneName else {
+            throw AccountDeletionCoordinatorError.sourceZoneUnknown(phase: current.phase)
+        }
+        return SeedkeepRecordNames.householdID(fromZoneName: zoneName)
+    }
+
+    /// The destination as THIS device addresses it.
+    ///
+    /// The stored `destinationZoneOwnerName` is always the successor's
+    /// CloudKit user record name — the ownership claim both parties compare
+    /// — which is also the `ownerName` of the departing owner's shared copy.
+    /// On the successor's own device the same zone lives in their private
+    /// database, so it is addressed by the current-user placeholder instead.
+    private func destinationZoneID(_ current: AccountDeletionCheckpoint) throws -> CKRecordZone.ID {
+        guard let zoneName = current.destinationZoneName else {
+            throw AccountDeletionCoordinatorError.destinationUnavailable
+        }
+        switch current.role {
+        case .successor:
+            return CKRecordZone.ID(zoneName: zoneName, ownerName: CKCurrentUserDefaultName)
+        case .noCloudKitGarden, .participant, .soloOwner, .sharedOwner:
+            guard let ownerName = current.destinationZoneOwnerName else {
+                throw AccountDeletionCoordinatorError.destinationUnavailable
+            }
+            return CKRecordZone.ID(zoneName: zoneName, ownerName: ownerName)
+        }
+    }
+
+    private static func zoneDescription(zoneName: String?, ownerName: String?) -> String {
+        "\(zoneName ?? "—")|\(ownerName ?? "—")"
+    }
+}
+
+// MARK: - Session seam
+
+/// Who is signed in, and how to end their session.
+///
+/// Two closures rather than a reference to `AppEnvironment`: the coordinator
+/// must not be able to touch anything else about the app, and a test has to
+/// be able to prove that sign-out did not happen.
+struct AccountDeletionSession {
+    struct Identity: Equatable, Sendable {
+        let userID: String
+        let householdID: String
+    }
+
+    /// `nil` when nobody is signed in.
+    var identity: @MainActor () -> Identity?
+    /// Clears the token, erases local data, and returns the app to signed
+    /// out. Called exactly once, after the server confirms the account is
+    /// gone.
+    var signOut: @MainActor () async -> Void
+
+    init(
+        identity: @escaping @MainActor () -> Identity?,
+        signOut: @escaping @MainActor () async -> Void
+    ) {
+        self.identity = identity
+        self.signOut = signOut
+    }
+}
+
+// MARK: - Errors
+
+/// Every way the coordinator refuses to continue. All of them leave the
+/// account, its credentials, and the garden exactly as they were.
+enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible, LocalizedError {
+    /// Nobody is signed in, so there is no account to delete.
+    case notSignedIn
+    /// A zone was deleted and is still readable. Never treated as success.
+    case zoneStillPresent(zoneName: String)
+    /// The transfer is verified but a digest document is missing.
+    case verificationIncomplete(transferID: String)
+    /// The owner's and successor's canonical hashes disagree.
+    case digestMismatch(owner: String, successor: String)
+    /// The hashes agree but the per-type censuses do not.
+    case recordCountMismatch(owner: [String: Int], successor: [String: Int])
+    /// The destination the server recorded is not the zone this device is
+    /// working with.
+    case destinationOwnershipMismatch(expected: String, found: String)
+    /// The successor has not published a usable destination zone/share.
+    case destinationUnavailable
+    /// This device has not accepted the source garden's share, so it cannot
+    /// prove it may receive the handoff.
+    case notASourceParticipant
+    /// The handoff names a garden this device cannot see.
+    case sourceHouseholdMismatch(expected: String, found: String)
+    /// A handoff link arrived while this account had its own deletion (or a
+    /// different handoff) under way.
+    case deletionAlreadyInProgress(phase: AccountDeletionCheckpoint.Phase)
+    /// Cancelling is refused once the original garden is gone.
+    case cancelAfterSourceDeletion
+    /// The transfer was withdrawn after the source zone was deleted — the
+    /// one state the client cannot resolve on its own.
+    case transferCancelledAfterSourceDeletion(transferID: String)
+    /// The server did not confirm the deletion.
+    case accountDeletionNotConfirmed
+    /// A shared-owner flow with no transfer id, or a successor that reached
+    /// the account-deletion step. Fails rather than downgrading the claim.
+    case dispositionUnavailable(phase: AccountDeletionCheckpoint.Phase, role: AccountDeletionCheckpoint.Role)
+    case transferUnknown(phase: AccountDeletionCheckpoint.Phase)
+    case sourceZoneUnknown(phase: AccountDeletionCheckpoint.Phase)
+    case unexpectedPhase(AccountDeletionCheckpoint.Phase, role: AccountDeletionCheckpoint.Role)
+    /// The flow stopped making progress. Defensive; a seam that never leaves
+    /// a phase would otherwise loop against CloudKit and the server forever.
+    case stalled(phase: AccountDeletionCheckpoint.Phase)
+
+    var description: String {
+        switch self {
+        case .notSignedIn:
+            return "There is no signed-in account to delete."
+        case .zoneStillPresent(let zoneName):
+            return "The iCloud garden \(zoneName) is still there. Nothing else was changed."
+        case .verificationIncomplete(let transferID):
+            return "Transfer \(transferID) has not been verified by both devices yet."
+        case .digestMismatch:
+            return "The copied garden does not match the original, so the original was kept."
+        case .recordCountMismatch:
+            return "The copied garden has a different number of records, so the original was kept."
+        case .destinationOwnershipMismatch(let expected, let found):
+            return "The successor's garden moved (expected \(expected), found \(found)); the original was kept."
+        case .destinationUnavailable:
+            return "The successor has not finished preparing their garden yet."
+        case .notASourceParticipant:
+            return "Join the shared garden before accepting the handoff."
+        case .sourceHouseholdMismatch:
+            return "This handoff is for a garden this device cannot see."
+        case .deletionAlreadyInProgress(let phase):
+            return "Something else is already in progress on this account (\(phase.rawValue))."
+        case .cancelAfterSourceDeletion:
+            return "The original garden has already been handed over; deletion has to finish."
+        case .transferCancelledAfterSourceDeletion(let transferID):
+            return "Transfer \(transferID) was cancelled after the original garden was deleted."
+        case .accountDeletionNotConfirmed:
+            return "The server did not confirm the account deletion, so you are still signed in."
+        case .dispositionUnavailable(let phase, let role):
+            return "Cannot state what happened to the iCloud garden from \(role.rawValue)/\(phase.rawValue)."
+        case .transferUnknown(let phase):
+            return "No transfer is recorded for \(phase.rawValue)."
+        case .sourceZoneUnknown(let phase):
+            return "No source garden is recorded for \(phase.rawValue)."
+        case .unexpectedPhase(let phase, let role):
+            return "\(role.rawValue) cannot be at \(phase.rawValue)."
+        case .stalled(let phase):
+            return "Account deletion stopped making progress at \(phase.rawValue)."
+        }
+    }
+
+    var errorDescription: String? { description }
+}

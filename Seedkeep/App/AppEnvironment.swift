@@ -311,6 +311,47 @@ public final class AppEnvironment {
     /// (nil until the first sync after the flag is toggled on). Its @Observable state drives the UI.
     var cloudKit: HouseholdCloudCoordinator? { cloudCoordinator }
 
+    // MARK: - Resumable account deletion
+
+    /// The role-aware, resumable account-deletion flow.
+    ///
+    /// Built lazily and kept for the lifetime of the environment: it holds
+    /// the checkpoint lease and the in-memory handoff token, both of which
+    /// must survive between calls within a session. Its seams read the
+    /// live signed-in identity and participant marker on every call rather
+    /// than capturing them, so a coordinator built before sign-in still
+    /// sees the right account.
+    @ObservationIgnored private var accountDeletionCoordinator: AccountDeletionCoordinator?
+
+    var accountDeletion: AccountDeletionCoordinator {
+        if let existing = accountDeletionCoordinator { return existing }
+        let coordinator = AccountDeletionCoordinator(
+            store: AccountDeletionCheckpointStore(),
+            cloudKit: LiveAccountDeletionCloudKit(
+                isEnabled: { FeatureFlags.cloudKitHouseholdSyncEnabled },
+                participantZoneID: { [weak self] in self?.loadParticipantMarker()?.zoneID },
+                ownedHouseholdID: { [weak self] in
+                    guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
+                    return household.id
+                },
+                // Leaving the share is only half of a participant's exit;
+                // the marker has to go and the user's own garden has to come
+                // back, which is exactly `leaveSharedHousehold`.
+                rebuildOwnGardenScope: { [weak self] in await self?.leaveSharedHousehold() }
+            ),
+            server: LiveAccountDeletionServer(client: client),
+            session: AccountDeletionSession(
+                identity: { [weak self] in
+                    guard let self, case .signedIn(let user, let household) = self.auth.state else { return nil }
+                    return .init(userID: user.id, householdID: household.id)
+                },
+                signOut: { [weak self] in await self?.auth.signOut() }
+            )
+        )
+        accountDeletionCoordinator = coordinator
+        return coordinator
+    }
+
     /// Household ID that scopes locally stored garden data. In a CloudKit shared
     /// garden, the owner's zone is authoritative; server-only/rollback mode
     /// deliberately remains on the signed-in household.
