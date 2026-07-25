@@ -163,11 +163,16 @@ private final class StubServer: AccountDeletionServerOperating {
     var expiresAt: Int64 = 9_000_000_000_000
     var deleteAccountError: Error?
     var inspectError: Error?
+    var acceptError: Error?
     var accountDeleted = true
     /// Number of `acceptTransfer` calls that BIND the successor and then
     /// lose the response, exactly as a dropped reply looks from the device.
     var acceptResponsesToLose = 0
     var rotateError: Error?
+    /// Mirrors `/accept`'s own clock check: expiry refuses only a
+    /// transfer nobody has ever accepted. A bound successor's idempotent
+    /// replay is untouched by it, exactly like the real route.
+    var now: () -> Int64 = { 0 }
 
     func seedRow(id: String = "tr_1",
                  phase: AccountDeletionTransferPhase,
@@ -219,6 +224,11 @@ private final class StubServer: AccountDeletionServerOperating {
 
     func acceptTransfer(id: String, token: String) async throws -> AccountDeletionTransferDTO {
         calls.append(.acceptTransfer(id: id, token: token))
+        if let acceptError { throw acceptError }
+        if row?.phase == .pendingSuccessor, row!.handoff_expires_at <= now() {
+            throw SeedkeepError(code: "token_expired",
+                                message: "This handoff link expired.", httpStatus: 409)
+        }
         // Idempotent replay, like the real route: a bound successor
         // re-presenting their token reads the same state back.
         let bound = row?.phase == .pendingSuccessor ? moved(to: .successorBound) : row!
@@ -346,7 +356,6 @@ private final class Harness {
     let model: AccountDeletionFlowModel
     let userID: String
     private var signedIn: Bool
-
     init(userID: String = "u_owner", signedIn: Bool = true) {
         self.userID = userID
         self.signedIn = signedIn
@@ -358,6 +367,7 @@ private final class Harness {
         let recorder = signOut
         let adopter = adoption
         let clockRef = clock
+        server.now = { clockRef.millis }
         let isSignedIn = { signedIn }
         coordinator = AccountDeletionCoordinator(
             store: store,
@@ -1050,8 +1060,14 @@ struct AccountDeletionFlowModelTests {
         #expect(!harness.server.acceptedTransfer)
     }
 
-    @Test("an expired offer is refused as expired")
+    @Test("an expired offer is refused as expired, safely, after a real replay attempt")
     func expiredOfferIsRefused() async throws {
+        // The local expiry read is not the last word — an expired-looking
+        // link might still belong to a bound successor recovering a lost
+        // response, and only the server can tell. So this now DOES call
+        // `/accept`; the assertion that matters is that the server's own
+        // refusal (nobody was ever bound) still reads as "expired" and
+        // writes nothing durable — not that the call never happened.
         let harness = Harness(userID: "u_succ")
         harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
         harness.server.expiresAt = harness.clock.millis - 1
@@ -1065,7 +1081,8 @@ struct AccountDeletionFlowModelTests {
             return
         }
         #expect(message.localizedCaseInsensitiveContains("expired"))
-        #expect(!harness.server.acceptedTransfer)
+        #expect(harness.server.acceptedTransfer, "the replay must actually be attempted")
+        #expect(harness.stored == nil, "a refused replay must write nothing durable")
     }
 
     // MARK: Successor resume without a link
@@ -1215,6 +1232,85 @@ struct AccountDeletionFlowModelTests {
         #expect(harness.model.stage != .confirming)
         #expect(harness.server.calls.isEmpty, "presenting still sends nothing")
     }
+    // MARK: A lost accept whose token then expired
+
+    @Test("an expired link still recovers an accept that already bound this device")
+    func expiredTokenStillRecoversALostAccept() async throws {
+        // The token was spent, the reply was lost, and 72 hours passed.
+        // Inspection is dead — the server refuses an expired token there —
+        // but `/accept` deliberately keeps honouring a bound successor's
+        // replay. That replay is the only route back for the one person
+        // this half-finished transfer belongs to.
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .successorBound, destination: false)
+        harness.server.inspectError = SeedkeepError(
+            code: "handoff_expired", message: "This handoff link has expired.", httpStatus: 403)
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+
+        #expect(harness.server.acceptedTransfer,
+                "an expired inspection must not strand a successor the server has already bound")
+        #expect(harness.stored?.role == .successor)
+        #expect(harness.model.stage != .handoffRefused("unused"))
+        if case .handoffRefused = harness.model.stage {
+            Issue.record("a bound successor must not be turned away")
+        }
+    }
+
+    @Test("an expired link nobody was bound to is still refused as expired")
+    func expiredLinkFromAStrangerIsStillRefused() async throws {
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: sharedSourceZone)
+        harness.server.seedRow(phase: .pendingSuccessor)
+        harness.server.inspectError = SeedkeepError(
+            code: "handoff_expired", message: "This handoff link has expired.", httpStatus: 403)
+        // The server refuses the replay too: nobody was ever bound, so
+        // `/accept` still gates expiry on the un-accepted phase (a
+        // different code than inspect's — `token_expired`, not
+        // `handoff_expired`; see account-deletion-transfers.ts).
+        harness.server.acceptError = SeedkeepError(
+            code: "token_expired", message: "This handoff link expired.", httpStatus: 409)
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+
+        guard case .handoffRefused(let message) = harness.model.stage else {
+            Issue.record("expected an expiry refusal, got \(harness.model.stage)")
+            return
+        }
+        #expect(message.localizedCaseInsensitiveContains("expired"))
+        #expect(harness.stored == nil)
+    }
+
+    @Test("a device pointed at the wrong garden is refused even after an expired-preview replay")
+    func expiredLinkStillRequiresLocalProof() async throws {
+        // Inspection is unavailable, so there is no advance answer to
+        // compare against — the only proof this device has is its own
+        // CloudKit read. The server's response IS that proof: the
+        // household it names for this transfer either matches what this
+        // zone resolves to, or it does not. It does not here, so the
+        // replay must be refused and nothing durable may be written, even
+        // though the network call itself was harmless (the real server
+        // never binds a stranger — see `account-deletion-transfers.ts`
+        // `/accept`, which only replays for the user already bound).
+        let harness = Harness(userID: "u_succ")
+        harness.cloudKit.role = .participant(sharedZoneID: foreignSharedZone)
+        harness.server.seedRow(phase: .successorBound, destination: false)
+        harness.server.inspectError = SeedkeepError(
+            code: "handoff_expired", message: "This handoff link has expired.", httpStatus: 403)
+        let link = AccountDeletionHandoffLink(transferID: "tr_1", token: "handoff-token-abc")
+
+        await harness.model.open(link)
+
+        guard case .handoffRefused = harness.model.stage else {
+            Issue.record("expected a refusal, got \(harness.model.stage)")
+            return
+        }
+        #expect(harness.stored == nil, "a household mismatch must never be persisted as a handoff")
+    }
+
 }
 
 // MARK: - Universal-link routing
@@ -1276,6 +1372,40 @@ struct AccountDeletionHandoffLinkTests {
         #expect(InviteURLRouter.invitationCode(from: handoff) == nil)
     }
 
+    @Test("a rotated token is a different link, even for the same transfer")
+    func rotationChangesTheLinkIdentity() {
+        // The owner can reissue a link without the transfer changing. If
+        // identity were the transfer id, SwiftUI would treat the reissued
+        // link as the sheet already on screen, never re-run the inspection,
+        // and leave the successor holding the dead token.
+        let original = AccountDeletionHandoffLink(transferID: "tr_42", token: "first-token")
+        let rotated = AccountDeletionHandoffLink(transferID: "tr_42", token: "second-token")
+        #expect(original.id != rotated.id)
+        #expect(original != rotated)
+        #expect(AccountDeletionRootRoute.acceptHandoff(original).presentation?.id
+                != AccountDeletionRootRoute.acceptHandoff(rotated).presentation?.id)
+    }
+
+    @Test("link identity is stable and never leaks the token")
+    func linkIdentityIsOpaqueAndStable() {
+        let link = AccountDeletionHandoffLink(transferID: "tr_42", token: "secret-token")
+        #expect(link.id == AccountDeletionHandoffLink(transferID: "tr_42",
+                                                      token: "secret-token").id)
+        #expect(!link.id.contains("secret-token"))
+    }
+
+    @Test("dismissing a superseded sheet cannot throw away the link that replaced it")
+    func staleDismissalKeepsTheNewerLink() {
+        let original = AccountDeletionHandoffLink(transferID: "tr_42", token: "first-token")
+        let rotated = AccountDeletionHandoffLink(transferID: "tr_42", token: "second-token")
+        #expect(AccountDeletionRootRoute.dismissalClearsPendingLink(
+            dismissedID: original.id, pendingLink: original))
+        #expect(!AccountDeletionRootRoute.dismissalClearsPendingLink(
+            dismissedID: original.id, pendingLink: rotated))
+        #expect(!AccountDeletionRootRoute.dismissalClearsPendingLink(
+            dismissedID: nil, pendingLink: rotated))
+    }
+
     @Test("the incoming-link router tells the two apart and ignores everything else")
     func incomingLinkRouting() throws {
         let handoff = IncomingLink(url: URL(string:
@@ -1288,6 +1418,7 @@ struct AccountDeletionHandoffLinkTests {
         #expect(IncomingLink(url: URL(string: "https://seedkeep.app/")!) == nil)
         #expect(IncomingLink(url: URL(string: "https://www.icloud.com/share/0abc")!) == nil)
     }
+
 }
 
 // MARK: - Root presentation routing
@@ -1338,5 +1469,56 @@ struct AccountDeletionRootRouteTests {
         #expect(AccountDeletionRootRoute.decide(pendingLink: nil,
                                                 isSignedIn: true,
                                                 hasHandoffInProgress: false) == .none)
+    }
+}
+
+// MARK: - Cutover guard
+
+/// The successor's app-scope cutover, as the decision it turns on.
+///
+/// The transfer id is the authority for WHICH garden was handed over. A
+/// refreshed session is not: `/api/me` answers with a membership, and a
+/// user who belongs to more than one household can be handed back the
+/// wrong one — or a cached one from before the re-home. Adopting on that
+/// answer would point the app at a garden the transfer never mentioned.
+@Suite("Transferred-garden cutover guard")
+struct TransferredGardenCutoverTests {
+
+    @Test("a session that names the transferred household is accepted")
+    func matchingHouseholdIsAccepted() throws {
+        try TransferredGardenCutover.verifyHousehold(transferHouseholdID: "hh_owner",
+                                                     signedInHouseholdID: "hh_owner")
+    }
+
+    @Test("a session that names a different household is refused, never adopted")
+    func mismatchedHouseholdIsRefused() {
+        #expect(throws: TransferredGardenCutover.Failure
+            .householdNotTransferred(expected: "hh_owner", found: "hh_other")) {
+            try TransferredGardenCutover.verifyHousehold(transferHouseholdID: "hh_owner",
+                                                         signedInHouseholdID: "hh_other")
+        }
+    }
+
+    @Test("no session at all is refused rather than guessed at")
+    func missingSessionIsRefused() {
+        #expect(throws: TransferredGardenCutover.Failure.sessionUnavailable) {
+            try TransferredGardenCutover.verifyHousehold(transferHouseholdID: "hh_owner",
+                                                         signedInHouseholdID: nil)
+        }
+    }
+
+    @Test("every refusal explains itself without naming a credential")
+    func refusalsAreReadable() {
+        let failures: [TransferredGardenCutover.Failure] = [
+            .sessionUnavailable,
+            .householdNotTransferred(expected: "hh_owner", found: "hh_other"),
+            .destinationSyncIncomplete(message: nil),
+            .destinationSyncIncomplete(message: "iCloud is unavailable."),
+        ]
+        for failure in failures {
+            let message = failure.errorDescription ?? ""
+            #expect(!message.isEmpty)
+            #expect(!message.localizedCaseInsensitiveContains("token"))
+        }
     }
 }

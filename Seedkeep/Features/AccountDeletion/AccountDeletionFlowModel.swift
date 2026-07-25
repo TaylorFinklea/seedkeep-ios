@@ -343,6 +343,18 @@ final class AccountDeletionFlowModel {
             // Held, not spent: the link stays pending so signing in
             // finishes what tapping it started.
             stage = .signInRequired
+        } catch AccountDeletionCoordinatorError.handoffExpired {
+            // An expired PREVIEW is ambiguous on purpose: inspection
+            // cannot tell "nobody ever used this" from "somebody used it,
+            // days ago, and the reply never arrived" — only `/accept`'s
+            // idempotent replay can, because the server keeps honouring a
+            // BOUND successor past the token's expiry. Refusing here on
+            // inspection's answer would strand exactly the person this
+            // exists for, so an expired preview is a reason to try the
+            // real thing, not a reason to stop. If the replay ALSO fails —
+            // this device was never the bound party — that failure is a
+            // refusal (the offer is dead), not a retryable working step.
+            await recoverFromExpiredPreview(link)
         } catch {
             pendingHandoff = nil
             stage = .handoffRefused(humanizeDeletionError(error))
@@ -351,28 +363,56 @@ final class AccountDeletionFlowModel {
 
     // MARK: - Driving
 
+    /// Runs the accept replay that an expired preview's ambiguity calls
+    /// for, entirely separately from `performAcceptance`. The distinction
+    /// matters for what a subsequent failure means: `performAcceptance`
+    /// (via `retry()`) is recovering a step that is known to be in
+    /// progress, so its failure stays `.failed` and retryable. Here there
+    /// is no such guarantee — the preview never confirmed there is
+    /// anything to recover — so a failed replay is a dead offer, reported
+    /// as `.handoffRefused` rather than offered another retry.
+    private func recoverFromExpiredPreview(_ link: AccountDeletionHandoffLink) async {
+        acceptanceUnfinished = true
+        stage = .working(nil)
+        do {
+            let outcome = try await coordinator.acceptHandoff(transferID: link.transferID,
+                                                              token: link.token)
+            pendingHandoff = nil
+            acceptanceUnfinished = false
+            apply(outcome)
+        } catch {
+            pendingHandoff = nil
+            acceptanceUnfinished = false
+            stage = .handoffRefused(humanizeDeletionError(error))
+        }
+    }
+
     private func drive(
         _ operation: @MainActor () async throws -> AccountDeletionCoordinator.Outcome
     ) async {
         stage = .working(coordinator.checkpoint?.phase)
         do {
-            switch try await operation() {
-            case .idle:
-                // The transfer was withdrawn from elsewhere before anything
-                // irreversible happened, so there is nothing left to show.
-                stage = coordinator.checkpoint == nil ? .cancelled : .confirming
-            case .waiting(let phase):
-                stage = .waiting(phase)
-            case .handoffComplete:
-                stage = .handoffComplete
-            case .deleted:
-                stage = .deleted
-            }
+            apply(try await operation())
         } catch {
             // The checkpoint records which step failed; prefer it over the
             // phase we happened to start from.
             let failed = coordinator.checkpoint?.lastFailure?.phase ?? coordinator.checkpoint?.phase
             stage = .failed(phase: failed, message: humanizeDeletionError(error))
+        }
+    }
+
+    private func apply(_ outcome: AccountDeletionCoordinator.Outcome) {
+        switch outcome {
+        case .idle:
+            // The transfer was withdrawn from elsewhere before anything
+            // irreversible happened, so there is nothing left to show.
+            stage = coordinator.checkpoint == nil ? .cancelled : .confirming
+        case .waiting(let phase):
+            stage = .waiting(phase)
+        case .handoffComplete:
+            stage = .handoffComplete
+        case .deleted:
+            stage = .deleted
         }
     }
 

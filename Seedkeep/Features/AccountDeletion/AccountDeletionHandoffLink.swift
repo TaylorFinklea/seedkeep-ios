@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The universal link a departing owner sends to the person taking over
@@ -19,9 +20,23 @@ struct AccountDeletionHandoffLink: Equatable, Hashable, Identifiable, Sendable {
     let transferID: String
     let token: String
 
-    /// The transfer is the identity: two links for the same transfer are
-    /// the same offer even when a rotation changed the token.
-    var id: String { transferID }
+    /// An opaque fingerprint of the WHOLE link, transfer and token both.
+    ///
+    /// SwiftUI presents by identity: `.sheet(item:)` keeps the sheet it
+    /// already has when the id is unchanged, and `.task(id:)` does not
+    /// re-run. An owner may reissue a link without the transfer changing —
+    /// rotation mints a new token against the same id — so identity keyed
+    /// on the transfer alone would silently keep showing the dead token
+    /// and never re-inspect. Hashing both makes a reissued link a
+    /// different thing to present, which is what it is.
+    ///
+    /// It is a SHA-256, not the token, because an id ends up in view
+    /// hierarchies, diagnostics and crash reports, and the token is a
+    /// capability to take somebody's garden.
+    var id: String {
+        let digest = SHA256.hash(data: Data("\(transferID)\n\(token)".utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
 
     /// Distinct from `invite` so an old invite link and a handoff link can
     /// never be mistaken for one another by either router.
@@ -135,7 +150,9 @@ enum AccountDeletionRootRoute: Equatable {
         /// `nil` means resume a handoff already accepted on this device;
         /// its single-use token is long gone and is not needed.
         let link: AccountDeletionHandoffLink?
-        var id: String { link?.transferID ?? "resume" }
+        /// Keyed on the link's fingerprint, so a reissued token presents
+        /// as the new thing it is rather than reusing the live sheet.
+        var id: String { link?.id ?? "resume" }
     }
 
     var presentation: Presentation? {
@@ -154,5 +171,22 @@ enum AccountDeletionRootRoute: Equatable {
         guard isSignedIn else { return .none }
         if let pendingLink { return .acceptHandoff(pendingLink) }
         return hasHandoffInProgress ? .resumeHandoff : .none
+    }
+}
+
+/// Whether dismissing the sheet identified by `dismissedID` should discard
+/// `pendingLink`.
+///
+/// It should not when a newer link has already replaced the one being
+/// dismissed: a rotated token can arrive while the old sheet is on screen,
+/// and clearing on a stale dismissal would throw away the capability the
+/// user just tapped.
+extension AccountDeletionRootRoute {
+    static func dismissalClearsPendingLink(
+        dismissedID: String?,
+        pendingLink: AccountDeletionHandoffLink?
+    ) -> Bool {
+        guard let dismissedID, let pendingLink else { return false }
+        return dismissedID == pendingLink.id
     }
 }

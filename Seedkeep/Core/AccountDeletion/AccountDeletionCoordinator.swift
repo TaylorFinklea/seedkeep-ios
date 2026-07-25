@@ -231,14 +231,23 @@ final class AccountDeletionCoordinator {
     /// response was lost is legitimately looking at a `successor_bound`
     /// row and must still be able to replay their own idempotent accept.
     func previewHandoff(transferID: String, token: String) async throws -> HandoffPreview {
-        let preview = try await inspectHandoff(transferID: transferID, token: token).preview
-        guard preview.expiresAt > now() else {
+        do {
+            let preview = try await inspectHandoff(transferID: transferID, token: token).preview
+            guard preview.expiresAt > now() else {
+                throw AccountDeletionCoordinatorError.handoffExpired
+            }
+            switch preview.phase {
+            case .pendingSuccessor: return preview
+            case .cancelled: throw AccountDeletionCoordinatorError.handoffWithdrawn
+            default: throw AccountDeletionCoordinatorError.handoffAlreadyUsed
+            }
+        } catch let error as SeedkeepError where error.code == "handoff_expired" {
+            // The server's own answer, not this build's expiry read —
+            // still means the same thing. Canonicalized here so every
+            // caller of `previewHandoff` has exactly one expiry shape to
+            // recognise, whether this device's clock or the server's
+            // caught it first.
             throw AccountDeletionCoordinatorError.handoffExpired
-        }
-        switch preview.phase {
-        case .pendingSuccessor: return preview
-        case .cancelled: throw AccountDeletionCoordinatorError.handoffWithdrawn
-        default: throw AccountDeletionCoordinatorError.handoffAlreadyUsed
         }
     }
 
@@ -248,31 +257,54 @@ final class AccountDeletionCoordinator {
     private func inspectHandoff(
         transferID: String, token: String
     ) async throws -> (preview: HandoffPreview, sourceZoneID: CKRecordZone.ID) {
-        try Task.checkCancellation()
-        _ = try requireIdentity()
-
-        guard case .participant(let sharedZoneID) = try await cloudKit.currentRole() else {
-            throw AccountDeletionCoordinatorError.notASourceParticipant
-        }
-        let visibleHouseholdID = SeedkeepRecordNames.householdID(fromZoneName: sharedZoneID.zoneName)
-
+        let proof = try await proveParticipation()
         let inspection = try await server.inspectHandoff(id: transferID, token: token)
-        guard inspection.source_household_id == visibleHouseholdID else {
+        guard inspection.source_household_id == proof.householdID else {
             throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
-                expected: inspection.source_household_id, found: visibleHouseholdID)
+                expected: inspection.source_household_id, found: proof.householdID)
         }
         return (HandoffPreview(transferID: inspection.transfer_id,
                                sourceHouseholdID: inspection.source_household_id,
                                phase: inspection.phase,
                                expiresAt: inspection.handoff_expires_at),
-                sharedZoneID)
+                proof.zoneID)
+    }
+
+    /// The one local fact that stands in for participant identity: this
+    /// device can currently read the share it claims to. Split out so
+    /// `acceptHandoff` can still make it BEFORE spending a token whose
+    /// inspection has expired — inspection and acceptance ask the server
+    /// two different questions, and only inspection's answer goes stale.
+    private func proveParticipation() async throws
+        -> (zoneID: CKRecordZone.ID, householdID: String) {
+        try Task.checkCancellation()
+        _ = try requireIdentity()
+        guard case .participant(let sharedZoneID) = try await cloudKit.currentRole() else {
+            throw AccountDeletionCoordinatorError.notASourceParticipant
+        }
+        return (sharedZoneID, SeedkeepRecordNames.householdID(fromZoneName: sharedZoneID.zoneName))
     }
 
     /// Take over a departing owner's garden. Called with the id and token
     /// carried by a handoff link.
     ///
     /// The participant proof happens BEFORE the token is spent — see
-    /// `previewHandoff`, which this runs first for exactly that reason.
+    /// `inspectHandoff`, which this runs first for exactly that reason.
+    ///
+    /// One deliberate exception. Inspection's `handoff_expired` answer
+    /// covers "nobody has used this yet" and "somebody used it days ago
+    /// and the reply never arrived" identically, because inspection and
+    /// acceptance ask the server two different questions with two
+    /// different clocks — `/accept` gates expiry only on the un-accepted
+    /// phase and keeps honouring a BOUND successor's replay past it
+    /// (`account-deletion-transfers.ts`, "single use" note). Refusing the
+    /// replay here on inspection's answer would strand exactly the person
+    /// this recovery path exists for: someone whose accept landed on the
+    /// server, whose reply was lost, and who came back after 72 hours to
+    /// find their own progress unreachable. So an EXPIRED inspection does
+    /// not end the flow — it skips straight to presenting the same local
+    /// participation proof to `/accept`, which is the only party that can
+    /// still tell "nobody" from "already me" apart.
     @discardableResult
     func acceptHandoff(transferID: String, token: String) async throws -> Outcome {
         try Task.checkCancellation()
@@ -287,13 +319,23 @@ final class AccountDeletionCoordinator {
             return try await drive()
         }
 
-        let (preview, sharedZoneID) = try await inspectHandoff(transferID: transferID, token: token)
+        let sharedZoneID: CKRecordZone.ID
+        let expectedHouseholdID: String
+        do {
+            let (preview, zoneID) = try await inspectHandoff(transferID: transferID, token: token)
+            sharedZoneID = zoneID
+            expectedHouseholdID = preview.sourceHouseholdID
+        } catch let error as SeedkeepError where error.code == "handoff_expired" {
+            let proof = try await proveParticipation()
+            sharedZoneID = proof.zoneID
+            expectedHouseholdID = proof.householdID
+        }
 
         let transfer = try await server.acceptTransfer(id: transferID, token: token)
         // The row could in principle have moved between the two calls.
-        guard transfer.source_household_id == preview.sourceHouseholdID else {
+        guard transfer.source_household_id == expectedHouseholdID else {
             throw AccountDeletionCoordinatorError.sourceHouseholdMismatch(
-                expected: transfer.source_household_id, found: preview.sourceHouseholdID)
+                expected: transfer.source_household_id, found: expectedHouseholdID)
         }
 
         try persist(AccountDeletionCheckpoint(
@@ -1333,6 +1375,17 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
 func humanizeDeletionError(_ error: Error) -> String {
     if let deletionError = error as? AccountDeletionCoordinatorError {
         return deletionError.description
+    }
+    // Reached only past the expired-inspection recovery in
+    // `acceptHandoff`: a transfer nobody ever accepted has expired on the
+    // SERVER side, in a shape `previewHandoff` never produces because it
+    // stopped this device before spending the token. `token_expired` is
+    // `/accept`'s own name for that; `handoff_expired` is included so an
+    // inspection failure that reaches here for any other reason still
+    // reads as an expiry rather than the generic fallback.
+    if let seedkeepError = error as? SeedkeepError,
+       seedkeepError.code == "token_expired" || seedkeepError.code == "handoff_expired" {
+        return "This handoff link has expired. Ask for a new one."
     }
     return humanizeError(error)
 }

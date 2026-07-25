@@ -583,13 +583,50 @@ public final class AppEnvironment {
     /// returns, so a failure here is retried rather than papered over with
     /// a completion screen.
     func adoptTransferredGarden(householdID: String) async throws {
+        // The TRANSFER names the garden; the session is only asked to
+        // agree. `/api/me` answers with a membership, and a user in more
+        // than one household — or one whose session restored from cache
+        // before the server's re-home landed — can be handed a different
+        // one. Adopting on that answer is how a successor ends up pointed
+        // at a garden nobody transferred, so a disagreement is refused and
+        // retried rather than resolved by picking.
         await auth.restoreSession()
+        let signedInHouseholdID: String?
+        if case .signedIn(_, let household) = auth.state { signedInHouseholdID = household.id }
+        else { signedInHouseholdID = nil }
+        try TransferredGardenCutover.verifyHousehold(transferHouseholdID: householdID,
+                                                     signedInHouseholdID: signedInHouseholdID)
+        guard case .signedIn(_, let household) = auth.state else {
+            throw TransferredGardenCutover.Failure.sessionUnavailable
+        }
+
+        // Only now: the destination zone is in THIS device's private
+        // database, so the participant marker — which points every read at
+        // the departing owner's doomed shared zone — has to go.
         clearParticipantMarker()
+        // Full fetch of the destination rather than resuming a cursor that
+        // belongs to the source zone's change history.
         try HouseholdCloudCoordinator.resetStateToken(
             at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: householdID))
         cloudCoordinator = nil
         cloudCoordinatorKey = nil
-        await syncIfPossible()
+
+        // And prove the owner scope actually came up. `syncIfPossible`
+        // swallows its failures into a banner, which is right for a
+        // background pass and wrong here: "the garden is yours" must not be
+        // said over a scope that never loaded.
+        guard FeatureFlags.cloudKitHouseholdSyncEnabled else {
+            await syncIfPossible()
+            return
+        }
+        let coordinator = ensureCloudCoordinator(household: household)
+        guard await coordinator.sync() else {
+            throw TransferredGardenCutover.Failure.destinationSyncIncomplete(
+                message: coordinator.lastHumanizedError)
+        }
+        if let failure = coordinator.lastHumanizedError {
+            throw TransferredGardenCutover.Failure.destinationSyncIncomplete(message: failure)
+        }
     }
 
     /// Leave the shared household: clear the marker + wipe the shared local data + drop the participant
