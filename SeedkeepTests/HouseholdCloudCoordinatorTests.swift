@@ -16,13 +16,14 @@ struct HouseholdCloudCoordinatorTests {
 
     // MARK: Fake engine
 
-    /// Records saves/deletes; `pendingFetch` is delivered once via `fetchChanges()` (simulating a
-    /// remote batch) — both into the store and through `onFetchedChanges`, exactly as the real engine.
+    /// Records saves/deletes; a remote batch is delivered through `fetchChanges()` — into the store
+    /// and through `onFetchedChanges` — exactly as the real engine does.
     ///
-    /// The checkpoint ORDER is not hand-written here: the fake supplies only what CloudKit supplies (a
-    /// batch, and the pass boundaries), and delegates "may durable state advance / must this pass
-    /// throw / must the batch be re-delivered" to the same `ProjectionCheckpointGate` instance
-    /// `HouseholdSyncEngine` uses. A regression in that policy fails these tests.
+    /// The pass SEQUENCE is not hand-written here. Both paths call the same production driver
+    /// `ProjectionCheckpointGate.runPass(operation:validate:rollback:)` and the same
+    /// `persistCheckpoint` guard `HouseholdSyncEngine` calls, so "may durable state advance / does
+    /// this pass throw / does a refused batch come back" is decided by production code. The fake
+    /// supplies only what CloudKit supplies: a batch, and a durable cursor kept on disk.
     final class FakeEngine: HouseholdRecordSyncing, @unchecked Sendable {
         let store = HouseholdLocalStore()
         var merger: RecordMerger?
@@ -43,13 +44,14 @@ struct HouseholdCloudCoordinatorTests {
         var fetchFailuresRemaining = 0
         var fetchError: Error = URLError(.timedOut)
 
-        /// The real fetch/send checkpoint policy (production type, not a stand-in).
+        /// The real fetch/send checkpoint policy + pass driver (production types, not stand-ins).
         private let checkpoint = ProjectionCheckpointGate()
-        /// Durable change-cursor stand-in for the engine's `.stateUpdate` seam: written ONLY while the
-        /// gate still allows a checkpoint, so a test can assert the cursor never advanced past a batch
-        /// SwiftData refused.
+        /// Server-side change feed. When set, WHICH batch is delivered next depends only on the
+        /// cursor this engine generation durably persisted — so a replacement engine built after a
+        /// "relaunch" re-delivers anything the previous generation failed to check point past.
+        var remoteZone: FakeRemoteZone?
+        /// Durable cursor file (the `.stateUpdate` serialization stand-in). Survives a relaunch.
         var cursorURL: URL?
-        private(set) var cursor = 0
         /// Saved records CloudKit confirms for a SENT batch — i.e. the merged `serverRecordChanged`
         /// result the device must project itself, because it never re-fetches records it authored.
         /// Delivered once; a rolled-back send does NOT restore it (CloudKit would not either).
@@ -75,24 +77,40 @@ struct HouseholdCloudCoordinatorTests {
             hasPendingRecordChanges = false
         }
         func activateForCurrentAccount() { acceptsChanges = true }
+
+        /// Durable cursor as last persisted — read fresh, so a replacement engine picks up exactly
+        /// what its predecessor was allowed to check point.
+        var persistedCursor: Int {
+            guard let cursorURL,
+                  let text = try? String(contentsOf: cursorURL, encoding: .utf8),
+                  let value = Int(text) else { return 0 }
+            return value
+        }
+
         func fetchChanges() async throws {
             fetchChangesCallCount += 1
             if fetchFailuresRemaining > 0 { fetchFailuresRemaining -= 1; throw fetchError }
             if let fetchGate { await fetchGate.waitForFetch() }
-            let (mods, dels) = pendingFetch
-            pendingFetch = ([], [])
-            guard !mods.isEmpty || !dels.isEmpty else { return }
-            checkpoint.beginPass()
-            for m in mods { store.applyRemoteModification(m) }
-            for d in dels { store.removeRecord(d) }
-            fetchDeliveryCount += 1
-            await checkpoint.project(mods, dels, via: onFetchedChanges)
-            await beforeDurableCheckpoint?()
-            advanceCursorIfAllowed()
-            // Rollback restores the undelivered batch: the real engine rewinds to the last on-disk
-            // serialization, so CloudKit re-sends exactly this batch on the next fetch.
-            try checkpoint.finishPass { self.pendingFetch = (mods, dels) }
+            guard let batch = nextFetchBatch() else { return }
+            let operationError = try await checkpoint.runPass(
+                operation: {
+                    for m in batch.mods { self.store.applyRemoteModification(m) }
+                    for d in batch.dels { self.store.removeRecord(d) }
+                    self.fetchDeliveryCount += 1
+                    await self.checkpoint.project(batch.mods, batch.dels, via: self.onFetchedChanges)
+                    await self.beforeDurableCheckpoint?()
+                    // CloudKit offers the advanced cursor only after the delegate returns; whether it
+                    // may be persisted is the production gate's call.
+                    self.checkpoint.persistCheckpoint { self.writeCursor(batch.nextCursor) }
+                },
+                rollback: {
+                    // The engine rewinds to its last durable serialization; with a scripted feed the
+                    // unadvanced cursor already re-delivers, so only the ad-hoc mode needs a restore.
+                    if self.remoteZone == nil { self.pendingFetch = (batch.mods, batch.dels) }
+                })
+            if let operationError { throw operationError }
         }
+
         func sendUntilDrained(maxPasses: Int) async throws {
             sendUntilDrainedCallCount += 1
             if drainFailuresRemaining > 0 {
@@ -104,23 +122,51 @@ struct HouseholdCloudCoordinatorTests {
             let sent = pendingSentProjection
             guard !sent.isEmpty else { return }
             pendingSentProjection = []
-            checkpoint.beginPass()
-            for r in sent { store.setRecord(r) }
-            sentDeliveryCount += 1
-            await checkpoint.project(sent, [], via: onFetchedChanges)
-            advanceCursorIfAllowed()
-            // No restore on rollback: a SENT batch is never re-delivered by CloudKit. Its only other
-            // home is the coordinator's pending-apply buffer.
-            try checkpoint.finishPass {}
+            let operationError = try await checkpoint.runPass(
+                operation: {
+                    for r in sent { self.store.setRecord(r) }
+                    self.sentDeliveryCount += 1
+                    await self.checkpoint.project(sent, [], via: self.onFetchedChanges)
+                    self.checkpoint.persistCheckpoint { self.writeCursor(self.persistedCursor + 1) }
+                },
+                // No restore: a SENT batch is never re-delivered by CloudKit. Its only other home is
+                // the coordinator's pending-apply buffer.
+                rollback: {})
+            if let operationError { throw operationError }
         }
 
-        private func advanceCursorIfAllowed() {
-            guard checkpoint.allowsDurableCheckpoint else { return }
-            cursor += 1
-            if let cursorURL { try? Data("\(cursor)".utf8).write(to: cursorURL, options: .atomic) }
+        private struct FetchBatch {
+            let mods: [CKRecord]
+            let dels: [CKRecord.ID]
+            let nextCursor: Int
+        }
+
+        private func nextFetchBatch() -> FetchBatch? {
+            if let remoteZone {
+                let start = persistedCursor
+                guard start < remoteZone.batches.count else { return nil }
+                let batch = remoteZone.batches[start]
+                return FetchBatch(mods: batch.mods, dels: batch.dels, nextCursor: start + 1)
+            }
+            let (mods, dels) = pendingFetch
+            pendingFetch = ([], [])
+            guard !mods.isEmpty || !dels.isEmpty else { return nil }
+            return FetchBatch(mods: mods, dels: dels, nextCursor: persistedCursor + 1)
+        }
+
+        private func writeCursor(_ value: Int) {
+            guard let cursorURL else { return }
+            try? Data("\(value)".utf8).write(to: cursorURL, options: .atomic)
         }
 
         var savedTypes: [String] { savedRecords.map(\.recordType) }
+    }
+
+    /// The ordered batches CloudKit would deliver for a zone, shared by every engine generation of
+    /// that zone — the server-side change feed a relaunched device reconnects to.
+    final class FakeRemoteZone: @unchecked Sendable {
+        let batches: [(mods: [CKRecord], dels: [CKRecord.ID])]
+        init(_ batches: [(mods: [CKRecord], dels: [CKRecord.ID])]) { self.batches = batches }
     }
 
     /// Stands in for the `ModelContext.save()` failure class the projection guard exists to catch.
@@ -366,98 +412,128 @@ struct HouseholdCloudCoordinatorTests {
     func sendProjectionFailureDoesNotCommitSyncedState() async throws {
         let hid = "hh-\(UUID().uuidString)"
         let container = makeContainer()
-        let engine1 = FakeEngine()
-        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
+
+        // Finish the one-time migration FIRST, so the relaunch below stages records through the
+        // ordinary dirty-record path and the assertion can only be satisfied by synced-state
+        // suppression being absent — not by the migration re-exporting the whole graph.
+        let engine0 = FakeEngine()
+        let coordinator0 = makeCoordinator(engine: engine0, container: container, householdID: hid)
+        await coordinator0.sync()
+        #expect(coordinator0.initialUploadComplete, "baseline: migration must be durably complete")
 
         let setup = ModelContext(container)
         setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 5,
                                source: .store, createdAt: 1, updatedAt: 500))
         try setup.save()
 
+        let engine1 = FakeEngine()
+        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
         engine1.pendingSentProjection = [remoteSeed(id: "s1", householdID: hid, name: "Merged", updatedAt: 900)]
         coordinator1.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
         await coordinator1.sync()
         #expect(engine1.savedRecords.contains { $0.recordID.recordName == "seed:s1" })
+        #expect(coordinator1.lastHumanizedError != nil)
+        let syncedState = (try? String(
+            contentsOf: HouseholdCloudCoordinator.ownerSyncedStateURL(householdID: hid),
+            encoding: .utf8)) ?? ""
+        #expect(syncedState.contains("seed:s1") == false,
+                "the refused pass must record no durable synced state for that record")
 
-        // Relaunch: the durable synced-state map is the only thing carried over. A record whose
-        // projection was refused must still look unconfirmed, or its merge is lost forever.
+        // Relaunch. The durable synced-state map is all that carries over; a record whose projection
+        // was refused must still look unconfirmed, or its merge is lost forever.
         let engine2 = FakeEngine()
         let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
         await coordinator2.sync()
+        #expect(engine2.savedTypes.contains("MigrationReceipt") == false,
+                "baseline check: the re-push must come from dirtyRecords, not a re-run migration")
         #expect(engine2.savedRecords.contains { $0.recordID.recordName == "seed:s1" },
                 "a record whose projection failed must not be durably marked synced")
     }
 
-    @Test("a failed FETCHED-batch projection leaves the durable cursor untouched and re-delivers once")
-    func fetchProjectionFailureKeepsDurableCursor() async throws {
+    @Test("owner relaunch: a batch SwiftData refused is re-delivered and applied exactly once")
+    func ownerRelaunchReappliesRefusedFetchBatch() async throws {
         let hid = "hh-\(UUID().uuidString)"
         let container = makeContainer()
-        let engine = FakeEngine()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ck-cursor-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let cursorURL = directory.appendingPathComponent("cursor")
-        engine.cursorURL = cursorURL
-        engine.pendingFetch = ([remoteSeed(id: "s1", householdID: hid, name: "Brandywine", updatedAt: 500)], [])
+        let zone = FakeRemoteZone([
+            (mods: [remoteSeed(id: "s1", householdID: hid, name: "Brandywine", updatedAt: 500)], dels: [])
+        ])
 
-        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
-        coordinator.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
-        await coordinator.sync()
+        let engine1 = FakeEngine()
+        engine1.remoteZone = zone
+        engine1.cursorURL = cursorURL
+        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
+        coordinator1.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
+        await coordinator1.sync()
 
         #expect(FileManager.default.fileExists(atPath: cursorURL.path) == false,
                 "the durable cursor must not advance past an unapplied batch")
         #expect(fetchSeed(ModelContext(container), "s1") == nil)
-        #expect(coordinator.lastHumanizedError != nil)
-        let deliveredWhileFailing = engine.fetchDeliveryCount
-        #expect(deliveredWhileFailing > 0)
+        #expect(coordinator1.lastHumanizedError != nil)
 
-        coordinator.projectionFaultForTesting = nil
-        await coordinator.sync()
+        // Crash/relaunch: a brand-new engine + coordinator. Only the on-disk cursor carries over, so
+        // the batch comes back solely because it was never checkpointed.
+        let engine2 = FakeEngine()
+        engine2.remoteZone = zone
+        engine2.cursorURL = cursorURL
+        let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
+        await coordinator2.sync()
 
-        #expect(engine.fetchDeliveryCount == deliveredWhileFailing + 1,
-                "the rolled-back batch must be re-delivered exactly once")
         let rows = try ModelContext(container).fetch(
             FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == "s1" }))
-        #expect(rows.count == 1)
+        #expect(rows.count == 1, "the relaunched engine must apply the batch exactly once")
         #expect(rows.first?.customName == "Brandywine")
+        #expect(engine2.fetchDeliveryCount == 1, "and must not re-deliver it after checkpointing")
         #expect((try? String(contentsOf: cursorURL, encoding: .utf8)) == "1",
-                "the cursor advances exactly once, after the batch is applied")
+                "the cursor advances only once the batch is applied")
     }
 
-    @Test("participant: a failed FETCHED-batch projection leaves the durable cursor untouched")
-    func participantFetchProjectionFailureKeepsDurableCursor() async throws {
+    @Test("participant relaunch: a batch SwiftData refused is re-delivered and applied exactly once")
+    func participantRelaunchReappliesRefusedFetchBatch() async throws {
         let hid = "hh-\(UUID().uuidString)"
         let container = makeContainer()
         let ownerZone = CKRecordZone.ID(
             zoneName: SeedkeepZoneProvisioner.zoneName(householdID: hid), ownerName: "owner-record-name")
-        let engine = FakeEngine()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ck-cursor-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let cursorURL = directory.appendingPathComponent("cursor")
-        engine.cursorURL = cursorURL
-        engine.pendingFetch = ([remoteSeed(id: "shared1", householdID: hid, name: "Owner Seed", updatedAt: 500)], [])
+        let zone = FakeRemoteZone([
+            (mods: [remoteSeed(id: "shared1", householdID: hid, name: "Owner Seed", updatedAt: 500)], dels: [])
+        ])
 
-        let coordinator = HouseholdCloudCoordinator(
-            engine: engine, zoneID: ownerZone, householdID: hid, householdName: "",
-            householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
-            provisioner: nil, stateURL: nil, isParticipant: true)
-        coordinator.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
-        await coordinator.sync()
+        func participantCoordinator(_ engine: FakeEngine) -> HouseholdCloudCoordinator {
+            engine.remoteZone = zone
+            engine.cursorURL = cursorURL
+            return HouseholdCloudCoordinator(
+                engine: engine, zoneID: ownerZone, householdID: hid, householdName: "",
+                householdCreatedAt: 0, householdUpdatedAt: 0, container: container,
+                provisioner: nil, stateURL: nil, isParticipant: true)
+        }
+
+        let engine1 = FakeEngine()
+        let coordinator1 = participantCoordinator(engine1)
+        coordinator1.projectionFaultForTesting = { throw ProjectionFault.modelContextSaveFailed }
+        await coordinator1.sync()
 
         #expect(FileManager.default.fileExists(atPath: cursorURL.path) == false,
                 "a participant's shared-zone cursor must not advance past an unapplied batch")
         #expect(fetchSeed(ModelContext(container), "shared1") == nil)
 
-        coordinator.projectionFaultForTesting = nil
-        await coordinator.sync()
+        let engine2 = FakeEngine()
+        let coordinator2 = participantCoordinator(engine2)
+        await coordinator2.sync()
 
         let rows = try ModelContext(container).fetch(
             FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == "shared1" }))
-        #expect(rows.count == 1, "the owner's batch must re-deliver and apply exactly once")
+        #expect(rows.count == 1, "the relaunched participant must apply the owner's batch exactly once")
         #expect(rows.first?.customName == "Owner Seed")
+        #expect((try? String(contentsOf: cursorURL, encoding: .utf8)) == "1")
     }
 
     @Test("updatedAt-LWW gate: an OLDER remote does not clobber a newer local edit")

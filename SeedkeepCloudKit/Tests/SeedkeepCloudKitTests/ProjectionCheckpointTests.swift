@@ -104,47 +104,156 @@ func checkpointConcurrentFailuresRollBackOnce() async throws {
     #expect(rollbacks == 1)
 }
 
-@Test("lifecycle gate serializes engine-state mutation against a concurrent retire storm")
-func lifecycleGateSerializesUnderConcurrentRetire() async {
-    // The engine's `@unchecked Sendable` conformance claims every `syncEngine` / `zoneEnsured` touch
-    // is serialized by this gate. Model that shared state as a deliberately race-prone counter+log
-    // mutated ONLY inside gate bodies, then storm it from CKSyncEngine-delegate-like tasks.
-    final class EngineState: @unchecked Sendable {
-        var generation = 0
-        var log: [Int] = []
+@Test("the pass driver reports a clean operation without rolling back")
+func runPassCleanOperation() async throws {
+    let gate = ProjectionCheckpointGate()
+    var rollbacks = 0
+    var validations = 0
+    let error = try await gate.runPass(
+        operation: { await gate.project([checkpointRecord("seed:1")], []) { _, _ in } },
+        validate: { validations += 1 },
+        rollback: { rollbacks += 1 })
+    #expect(error == nil)
+    #expect(validations == 1)
+    #expect(rollbacks == 0)
+}
+
+@Test("the pass driver returns the CloudKit operation's error instead of throwing it")
+func runPassReturnsOperationError() async throws {
+    let gate = ProjectionCheckpointGate()
+    var rollbacks = 0
+    let error = try await gate.runPass(
+        operation: { throw URLError(.networkConnectionLost) },
+        rollback: { rollbacks += 1 })
+    #expect((error as? URLError)?.code == .networkConnectionLost)
+    #expect(rollbacks == 0, "an operation error alone must not rewind durable state")
+}
+
+@Test("a projection failure still rolls back and wins when the operation ALSO throws")
+func runPassProjectionFailureBeatsOperationError() async throws {
+    // The dangerous shape: an early page projects and is refused, a later page fails on the network.
+    // Returning the network error would leave the latch to be cleared by the next `beginPass`, with
+    // the engine still holding the advanced in-memory cursor.
+    let gate = ProjectionCheckpointGate()
+    var rollbacks = 0
+    await #expect(throws: SyncEngineError.projectionFailed) {
+        _ = try await gate.runPass(
+            operation: {
+                await gate.project([checkpointRecord("seed:1")], []) { _, _ in
+                    throw SyncEngineError.projectionFailed
+                }
+                throw URLError(.networkConnectionLost)
+            },
+            rollback: { rollbacks += 1 })
     }
-    let gate = HouseholdEngineLifecycleGate()
-    let state = EngineState()
-    let staged = Counter()
+    #expect(rollbacks == 1, "the refused batch must be rewound even on an operation error")
+    #expect(gate.allowsDurableCheckpoint == true, "and the latch is consumed by that pass")
+}
+
+@Test("a validation failure (retired engine) short-circuits the pass")
+func runPassPropagatesValidationFailure() async throws {
+    let gate = ProjectionCheckpointGate()
+    var rollbacks = 0
+    await #expect(throws: SyncEngineError.accountInvalidated) {
+        _ = try await gate.runPass(
+            operation: {},
+            validate: { throw SyncEngineError.accountInvalidated },
+            rollback: { rollbacks += 1 })
+    }
+    #expect(rollbacks == 0, "a retired generation is already replaced; nothing to rewind")
+}
+
+@Test("a durable checkpoint is written only while the pass is unpoisoned")
+func persistCheckpointHonorsSuppression() async throws {
+    let gate = ProjectionCheckpointGate()
+    var writes = 0
+    gate.beginPass()
+    #expect(gate.persistCheckpoint { writes += 1 } == true)
+    await gate.project([checkpointRecord("seed:1")], []) { _, _ in throw SyncEngineError.projectionFailed }
+    #expect(gate.persistCheckpoint { writes += 1 } == false,
+            "no cursor may be persisted once a batch was refused")
+    #expect(writes == 1)
+}
+
+@Test("engine generation serializes every touch and survives a concurrent retire storm")
+func engineGenerationSerializesUnderConcurrentRetire() async {
+    // `HouseholdSyncEngine`'s `@unchecked Sendable` conformance rests on this holder: the live
+    // CKSyncEngine and its `zoneStaged` bit are private to it and reachable ONLY inside its lock, so
+    // there is no property left for a delegate task to read unsynchronized. Storm it the way
+    // CKSyncEngine's delegate callbacks and an account event would.
+    final class StandInEngine: @unchecked Sendable {
+        var staged: [Int] = []
+        var zoneSaves = 0
+    }
+    let first = StandInEngine()
+    let generation = EngineGeneration(first)
+    let replacement = StandInEngine()
+    let stagedCount = Counter()
     let retirements = Counter()
+
+    // Stage the zone once up front, so the storm's own zone-staging attempts can only ever be
+    // rejected — the retire task order is not deterministic, and this keeps the "exactly once per
+    // generation" assertion meaningful whichever task wins.
+    #expect(generation.withLive({ (engine, zoneStaged) -> Bool in
+        if !zoneStaged { engine.zoneSaves += 1; zoneStaged = true }
+        engine.staged.append(-2)
+        return true
+    }) != nil)
 
     await withTaskGroup(of: Void.self) { group in
         for index in 0..<256 {
             group.addTask {
                 if index % 16 == 0 {
-                    let won = gate.retireIfActive(when: { true }, perform: {
-                        state.generation += 1
-                        state.log.append(-1)
-                    })
+                    let won = generation.replaceLive(
+                        origin: nil, retire: true,
+                        drain: { engine in engine.staged.append(-1) },
+                        make: { replacement })
                     if won { retirements.increment() }
-                } else if gate.withActive({ () -> Bool in
-                    state.generation += 1
-                    state.log.append(index)
+                } else if generation.withLive({ (engine, zoneStaged) -> Bool in
+                    if !zoneStaged {
+                        engine.zoneSaves += 1
+                        zoneStaged = true
+                    }
+                    engine.staged.append(index)
                     return true
                 }) != nil {
-                    staged.increment()
+                    stagedCount.increment()
                 }
             }
         }
     }
 
-    #expect(retirements.value == 1, "exactly one account event may retire the engine")
-    #expect(state.generation == staged.value + 1, "an unsynchronized mutation would lose an update")
-    #expect(state.log.count == state.generation, "an unsynchronized append would lose an entry")
-    #expect(gate.withActive({ () -> Bool in state.generation += 1; return true }) == nil,
-            "a retired gate must fence every later delegate callback")
+    #expect(retirements.value == 1, "exactly one account event may retire the live generation")
+    #expect(first.zoneSaves == 1, "the zone save is staged exactly once per generation")
+    #expect(first.staged.count == stagedCount.value + 2,
+            "an unsynchronized append would lose an entry (+1 pre-storm, +1 retiring drain)")
+    #expect(generation.withLive({ (engine, _) -> Bool in engine.staged.append(0); return true }) == nil,
+            "a retired generation must fence every later delegate callback")
+    #expect(generation.isCurrent(first) == false)
 
-    gate.activate()
-    #expect(gate.withActive({ () -> Bool in state.generation += 1; return true }) != nil,
-            "the replacement account must be able to rearm the gate")
+    generation.reactivate()
+    #expect(generation.current() === replacement, "the replacement is live after rearming")
+    #expect(generation.withLive({ (engine, zoneStaged) -> Bool in
+        if !zoneStaged { engine.zoneSaves += 1; zoneStaged = true }
+        return true
+    }) != nil)
+    #expect(replacement.zoneSaves == 1, "a replacement generation must re-stage its zone save")
+}
+
+@Test("engine generation only lets the CURRENT generation act")
+func engineGenerationFencesStaleGenerations() {
+    final class StandInEngine: @unchecked Sendable {}
+    let stale = StandInEngine()
+    let generation = EngineGeneration(stale)
+    let fresh = StandInEngine()
+
+    // A rollback (not a retirement) swaps the live generation but leaves the gate usable.
+    #expect(generation.replaceLive(origin: stale, retire: false, drain: { _ in }, make: { fresh }) == true)
+    #expect(generation.isCurrent(stale) == false)
+    #expect(generation.isCurrent(fresh) == true)
+    #expect(generation.withCurrent(stale) { _ in true } == nil,
+            "a delegate event from the replaced generation must be inert")
+    #expect(generation.withCurrent(fresh) { _ in true } == true)
+    #expect(generation.replaceLive(origin: stale, retire: true, drain: { _ in }, make: { fresh }) == false,
+            "a stale generation may not retire its successor")
 }

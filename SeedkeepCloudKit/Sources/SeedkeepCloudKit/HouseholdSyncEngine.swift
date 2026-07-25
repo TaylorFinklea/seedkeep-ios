@@ -53,20 +53,22 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private let stateURL: URL
     private let log = Logger(subsystem: "app.seedkeep.cloud", category: "HouseholdSync")
 
-    private var syncEngine: CKSyncEngine!
+    /// The live CKSyncEngine generation + its staged-zone bit. Private to the holder, so no
+    /// delegate task can read them outside its lock (see `EngineGeneration`). Implicitly unwrapped
+    /// only because CKSyncEngine.Configuration needs `self` as its delegate: assigned exactly once,
+    /// on the last line of `init`, and never reassigned.
+    private var generation: EngineGeneration<CKSyncEngine>!
     private let automaticSync: Bool
-    private let lifecycleGate = HouseholdEngineLifecycleGate()
-    private var zoneEnsured = false
 
     /// Optional field-merger. When set, records whose type it `handles` are field-merged
     /// at the fetch + serverRecordChanged seams instead of blanket LWW.
     ///
-    /// `merger` + the two callbacks below are lock-guarded. Every read AND write of the `syncEngine`
-    /// / `zoneEnsured` pair happens inside `lifecycleGate`; delegate-driven code never re-reads
-    /// `self.syncEngine` — it operates on the instance `handleEvent` already validated and passes
-    /// down. Failure counters, the projection checkpoint, and the trace each carry their own lock;
-    /// `store` enforces its own. Those boundaries justify the explicit `@unchecked Sendable` required
-    /// by CKSyncEngineDelegate's concurrent callbacks.
+    /// `merger` + the two callbacks below are lock-guarded. The live CKSyncEngine and its
+    /// staged-zone bit are not stored here at all: `EngineGeneration` owns them and hands them out
+    /// only inside its lock, and delegate-driven code operates on the instance `handleEvent`
+    /// already validated. Failure counters, the projection checkpoint, and the trace each carry
+    /// their own lock; `store` enforces its own. Those boundaries justify the explicit
+    /// `@unchecked Sendable` required by CKSyncEngineDelegate's concurrent callbacks.
     private let callbackLock = NSLock()
     private var _merger: RecordMerger?
     private var _onFetchedChanges: (@Sendable ([CKRecord], [CKRecord.ID]) async throws -> Void)?
@@ -122,7 +124,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             stateSerialization: Self.loadState(from: stateURL),
             delegate: self)
         configuration.automaticallySync = automaticSync
-        self.syncEngine = CKSyncEngine(configuration)
+        self.generation = EngineGeneration(CKSyncEngine(configuration))
     }
 
     // MARK: - Public mutation API
@@ -139,20 +141,20 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// Stage a record save: write it locally, then tell the engine it's pending.
     /// The zone is created lazily on the first save.
     public func save(_ record: CKRecord) {
-        lifecycleGate.withActive {
+        generation.withLive { engine, zoneStaged in
             store.setRecord(record)
-            if !zoneEnsured {
-                syncEngine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-                zoneEnsured = true
+            if !zoneStaged {
+                engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
+                zoneStaged = true
             }
-            syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
+            engine.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
         }
     }
 
     public func delete(_ recordID: CKRecord.ID) {
-        lifecycleGate.withActive {
+        generation.withLive { engine, _ in
             store.removeRecord(recordID)
-            syncEngine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+            engine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
         }
     }
 
@@ -173,14 +175,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     }
 
     /// Pull remote changes. Throws `.projectionFailed` (after rewinding this engine to its last
-    /// durable serialization) if SwiftData refused the fetched batch, so the caller never treats an
-    /// unapplied batch as delivered.
+    /// durable serialization) if SwiftData refused the fetched batch — even when the CloudKit
+    /// operation ITSELF also failed — so the caller never treats an unapplied batch as delivered.
     public func fetchChanges() async throws {
         let engine = try currentActiveEngine()
-        checkpoint.beginPass()
-        try await engine.fetchChanges()
-        try ensureCurrent(engine)
-        try finishCheckpointPass(on: engine)
+        if let operationError = try await runCheckpointedPass(on: engine, { try await engine.fetchChanges() }) {
+            throw operationError
+        }
     }
 
     /// Push staged changes once. Symmetric with `fetchChanges()`: a SENT batch's projection (the
@@ -188,14 +189,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// refused projection throws here too rather than reporting a clean push.
     public func sendChanges() async throws {
         let engine = try currentActiveEngine()
-        checkpoint.beginPass()
-        try await engine.sendChanges()
-        try ensureCurrent(engine)
-        try finishCheckpointPass(on: engine)
+        if let operationError = try await runCheckpointedPass(on: engine, { try await engine.sendChanges() }) {
+            throw operationError
+        }
     }
 
     public var hasPendingRecordChanges: Bool {
-        lifecycleGate.withActive { !syncEngine.state.pendingRecordZoneChanges.isEmpty } ?? false
+        generation.withLive { engine, _ in !engine.state.pendingRecordZoneChanges.isEmpty } ?? false
     }
 
     /// Discard the outbound state that was staged for an account or shared-garden scope that is no
@@ -205,40 +205,39 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         _ = retirePendingChanges(originatingFrom: nil)
     }
 
-    public func activateForCurrentAccount() { lifecycleGate.activate() }
+    public func activateForCurrentAccount() { generation.reactivate() }
 
     private func currentActiveEngine() throws -> CKSyncEngine {
-        guard let engine = lifecycleGate.withActive({ syncEngine! }) else {
+        guard let engine = generation.current() else {
             throw SyncEngineError.accountInvalidated
         }
         return engine
     }
 
     private func ensureCurrent(_ engine: CKSyncEngine) throws {
-        guard lifecycleGate.withActive({ engine === syncEngine }) == true else {
+        guard generation.isCurrent(engine) else {
             throw SyncEngineError.accountInvalidated
         }
     }
 
     @discardableResult
     private func retirePendingChanges(originatingFrom origin: CKSyncEngine?) -> Bool {
-        lifecycleGate.retireIfActive(
-            when: { origin == nil || origin === self.syncEngine },
-            perform: {
-                let retiringEngine = self.syncEngine!
-                retiringEngine.state.remove(
-                    pendingRecordZoneChanges: retiringEngine.state.pendingRecordZoneChanges)
-                retiringEngine.state.remove(
-                    pendingDatabaseChanges: retiringEngine.state.pendingDatabaseChanges)
-                // A delegate event from the retiring engine can arrive after its queue was cleared.
-                // Replacing the engine plus the lifecycle gate makes every such callback inert.
-                self.syncEngine = self.makeSyncEngine(stateSerialization: nil)
-                self.zoneEnsured = false
-                self.failLock.lock()
-                self.attemptCounts.removeAll()
-                self.surfacedFailure = nil
-                self.failLock.unlock()
-            })
+        let retired = generation.replaceLive(
+            origin: origin,
+            retire: true,
+            // A delegate event from the retiring engine can arrive after its queue was cleared.
+            // Replacing the generation makes every such callback inert.
+            drain: { retiring in
+                retiring.state.remove(pendingRecordZoneChanges: retiring.state.pendingRecordZoneChanges)
+                retiring.state.remove(pendingDatabaseChanges: retiring.state.pendingDatabaseChanges)
+            },
+            make: { self.makeSyncEngine(stateSerialization: nil) })
+        guard retired else { return false }
+        failLock.lock()
+        attemptCounts.removeAll()
+        surfacedFailure = nil
+        failLock.unlock()
+        return true
     }
 
     /// Send repeatedly until nothing is pending (G11: a serverRecordChanged re-enqueues
@@ -249,27 +248,18 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     public func sendUntilDrained(maxPasses: Int = 6) async throws {
         let engine = try currentActiveEngine()
         failLock.withLock { surfacedFailure = nil }
-        checkpoint.beginPass()
         var lastError: Error?
         for pass in 0..<maxPasses {
-            var passError: Error?
-            do {
-                try await engine.sendChanges()
-            } catch {
-                passError = error
-                lastError = error
-            }
-            try ensureCurrent(engine)
             // A SENT batch's SwiftData projection is the LAST place a merged serverRecordChanged
             // result can land — this device never re-fetches records it authored — so a refused
-            // projection aborts the drain instead of letting the caller mark those records synced.
-            try finishCheckpointPass(on: engine)
+            // projection throws out of the drain instead of letting the caller mark those records
+            // synced, whether or not the send itself also failed.
+            let passError = try await runCheckpointedPass(on: engine, { try await engine.sendChanges() })
+            if let passError { lastError = passError }
             // A permanent per-record failure is reported via the .sentRecordZoneChanges event
             // (processed during sendChanges, NOT thrown) — surface it instead of a false success.
             if let surfaced = takeSurfacedFailure() { throw surfaced }
-            let pending = lifecycleGate.withActive {
-                engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
-            } ?? false
+            let pending = hasPendingChanges(on: engine)
             if let passError {
                 if !pending { throw passError }
                 if pass < maxPasses - 1 {
@@ -282,15 +272,15 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             if !pending { return }
         }
         try ensureCurrent(engine)
-        try finishCheckpointPass(on: engine)
         if let surfaced = takeSurfacedFailure() { throw surfaced }
-        let pending = lifecycleGate.withActive {
-            engine === syncEngine && !engine.state.pendingRecordZoneChanges.isEmpty
-        } ?? false
-        if pending {
+        if hasPendingChanges(on: engine) {
             log.error("sendUntilDrained exhausted \(maxPasses, privacy: .public) passes — record changes STILL pending")
             throw lastError ?? SyncEngineError.drainIncomplete
         }
+    }
+
+    private func hasPendingChanges(on engine: CKSyncEngine) -> Bool {
+        generation.withCurrent(engine) { !$0.state.pendingRecordZoneChanges.isEmpty } ?? false
     }
 
     // MARK: - CKSyncEngineDelegate
@@ -299,16 +289,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         _ context: CKSyncEngine.SendChangesContext,
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
-        guard let pending = lifecycleGate.withActive({
-            guard syncEngine === self.syncEngine else { return [CKSyncEngine.PendingRecordZoneChange]() }
-            return syncEngine.state.pendingRecordZoneChanges.filter {
-                context.options.scope.contains($0)
-            }
+        guard let pending = generation.withCurrent(syncEngine, { engine in
+            engine.state.pendingRecordZoneChanges.filter { context.options.scope.contains($0) }
         }), !pending.isEmpty else { return nil }
         let batch = await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { recordID in
             self.store.record(for: recordID)
         }
-        guard lifecycleGate.withActive({ syncEngine === self.syncEngine }) == true else { return nil }
+        guard generation.isCurrent(syncEngine) else { return nil }
         return batch
     }
 
@@ -317,15 +304,16 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             handleAccountChange(change, originatingFrom: syncEngine)
             return
         }
-        guard lifecycleGate.withActive({ syncEngine === self.syncEngine }) == true else { return }
+        guard generation.isCurrent(syncEngine) else { return }
         await handleCurrentEvent(event, syncEngine: syncEngine)
     }
 
     private func handleCurrentEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
         switch event {
         case .stateUpdate(let update):
-            guard checkpoint.allowsDurableCheckpoint else { return }
-            Self.saveState(update.stateSerialization, to: stateURL)
+            // Suppressed while this pass is poisoned: a cursor persisted past a batch SwiftData
+            // refused would strand that batch forever.
+            checkpoint.persistCheckpoint { Self.saveState(update.stateSerialization, to: stateURL) }
 
         case .fetchedRecordZoneChanges(let changes):
             let pendingSaves = pendingSaveIDs(on: syncEngine)
@@ -409,23 +397,30 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// Shared fetch/send durable-checkpoint policy — see `ProjectionCheckpointGate`.
     private let checkpoint = ProjectionCheckpointGate()
 
-    /// Close a driven pass. When a batch's SwiftData projection failed, rewind this engine to the
-    /// last serialization on disk (so CloudKit re-delivers a fetched batch) and throw, so the caller
-    /// records no false success. Mirrors `retirePendingChanges`' rebuild — including clearing
-    /// `zoneEnsured`, because the rebuilt engine carries no staged `.saveZone`.
-    private func finishCheckpointPass(on engine: CKSyncEngine) throws {
-        try checkpoint.finishPass {
-            _ = lifecycleGate.withActive {
-                guard engine === syncEngine else { return }
-                syncEngine = makeSyncEngine(stateSerialization: Self.loadState(from: stateURL))
-                zoneEnsured = false
-            }
-        }
+    /// Drive one checkpointed pass over `engine`. Returns the CloudKit operation's own error (the
+    /// caller decides whether it is retryable); throws `.projectionFailed` — after rewinding this
+    /// engine to the last serialization on disk, so CloudKit re-delivers a fetched batch — when the
+    /// SwiftData projection was refused, even if the operation ALSO failed. The rewind mirrors
+    /// `retirePendingChanges`, including resetting the staged-zone bit: a rebuilt engine carries no
+    /// staged `.saveZone`.
+    private func runCheckpointedPass(
+        on engine: CKSyncEngine,
+        _ operation: () async throws -> Void
+    ) async throws -> Error? {
+        try await checkpoint.runPass(
+            operation: operation,
+            validate: { try self.ensureCurrent(engine) },
+            rollback: {
+                self.generation.replaceLive(
+                    origin: engine,
+                    retire: false,
+                    drain: { _ in },
+                    make: { self.makeSyncEngine(stateSerialization: Self.loadState(from: self.stateURL)) })
+            })
     }
 
-    /// `engine` is the instance `handleEvent` validated against `syncEngine` under `lifecycleGate`;
-    /// re-reading `self.syncEngine` here would be an unsynchronized read of a property a concurrent
-    /// account retirement writes.
+    /// `engine` is the instance `handleEvent` validated as current; the live generation is private to
+    /// `EngineGeneration`, so there is no shared property here for a delegate task to race on.
     private func pendingSaveIDs(on engine: CKSyncEngine) -> Set<CKRecord.ID> {
         var ids = Set<CKRecord.ID>()
         for change in engine.state.pendingRecordZoneChanges {
@@ -573,7 +568,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             store.removeAll()
             onAccountChange?(.switchAccounts)
         case .signIn:
-            guard lifecycleGate.withActive({ engine === syncEngine }) == true else { return }
+            guard generation.isCurrent(engine) else { return }
             onAccountChange?(.signIn)
         @unknown default:
             break
@@ -590,37 +585,6 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private static func saveState(_ serialization: CKSyncEngine.State.Serialization, to url: URL) {
         guard let data = try? JSONEncoder().encode(serialization) else { return }
         try? data.write(to: url, options: .atomic)
-    }
-}
-
-/// Serializes the narrow synchronous boundary where an account event retires one CKSyncEngine and
-/// the coordinator later rearms its replacement. No lock is held across an `await`.
-final class HouseholdEngineLifecycleGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var active = true
-
-    @discardableResult
-    func withActive<T>(_ body: () -> T) -> T? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard active else { return nil }
-        return body()
-    }
-
-    @discardableResult
-    func retireIfActive(when predicate: () -> Bool, perform: () -> Void) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard active, predicate() else { return false }
-        active = false
-        perform()
-        return true
-    }
-
-    func activate() {
-        lock.lock()
-        active = true
-        lock.unlock()
     }
 }
 #endif

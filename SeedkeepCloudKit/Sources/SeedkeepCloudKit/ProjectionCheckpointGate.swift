@@ -39,6 +39,47 @@ public final class ProjectionCheckpointGate: @unchecked Sendable {
         return !failed
     }
 
+    /// Persist a durable checkpoint — but only while this pass is unpoisoned. Returns whether the
+    /// write ran, so a caller can log the suppression. This is the `.stateUpdate` seam: CloudKit
+    /// offers the advanced serialization after the delegate returns, and a batch SwiftData refused
+    /// must not be checkpointed past.
+    @discardableResult
+    public func persistCheckpoint(_ write: () -> Void) -> Bool {
+        lock.lock()
+        let poisoned = failed
+        lock.unlock()
+        guard !poisoned else { return false }
+        write()
+        return true
+    }
+
+    /// Drive one complete pass. `operation` is the CKSyncEngine call whose delegate callbacks project
+    /// batches through this gate; `validate` re-checks that the engine generation is still live;
+    /// `rollback` rewinds it to the last durable serialization.
+    ///
+    /// The operation's OWN error is returned rather than thrown, so a drain loop can decide whether
+    /// to retry it — but a refused projection always WINS: it rolls back and throws
+    /// `.projectionFailed` even when the operation failed too. Reporting only the operation error
+    /// would leave the latch for the next `beginPass()` to clear while the engine still holds an
+    /// in-memory cursor advanced past a batch that never reached SwiftData.
+    @discardableResult
+    public func runPass(
+        operation: () async throws -> Void,
+        validate: () throws -> Void = {},
+        rollback: () -> Void
+    ) async throws -> Error? {
+        beginPass()
+        var operationError: Error?
+        do {
+            try await operation()
+        } catch {
+            operationError = error
+        }
+        try validate()
+        try finishPass(rollback: rollback)
+        return operationError
+    }
+
     /// Hand one reconciled batch to the coordinator. A throw is LATCHED, not propagated: the caller is
     /// CloudKit's delegate task, which discards errors, so the pass boundary (`finishPass`) is the only
     /// place a projection failure can reach the code that drove the pass.
