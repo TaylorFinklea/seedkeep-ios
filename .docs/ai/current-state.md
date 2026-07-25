@@ -6,9 +6,8 @@
 
 ## Plan
 
-- [x] `seedkeep-27d.13`: Swift 6 CloudKit isolation (`27a294d`); strict warnings-as-errors package gate green.
-- [x] `seedkeep-27d.19`: await SwiftData projection before durable CKSyncEngine checkpoint (`1f694d6`); full `test-gate.sh` green.
-- [ ] `seedkeep-27d.12`: implement approved cross-repo resumable deletion transfer; spec/plan in umbrella `phases/2026-07-23-cloudkit-account-deletion-{spec,plan}.md`.
+- [x] `seedkeep-27d.13/.19` hardened after Opus 5 adversarial review: send/fetch-symmetric projection rollback, disk-backed owner/participant relaunch tests, structural engine-generation isolation (`7072ee3`, `979acda`). Sol re-review CLEAN. Strict package 79 + full gate 70 kit / 79 CloudKit / 476 app / 1 production-default green.
+- [ ] `seedkeep-27d.12`: Task 1 server state machine complete; next Task 2 CloudKit graph digest/copier. Spec/plan in umbrella `phases/2026-07-23-cloudkit-account-deletion-{spec,plan}.md`.
 
 ## Blockers
 
