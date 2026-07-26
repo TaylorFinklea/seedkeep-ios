@@ -59,6 +59,8 @@ enum ChangelogData {
             changes: [
                 ChangelogChange(category: .new,
                     text: "Account deletion now works correctly for everyone, including shared gardens. When you delete your account as a shared garden owner, you can transfer ownership to someone else first."),
+                ChangelogChange(category: .fixed,
+                    text: "Sprout AI assistant and MCP tools are temporarily unavailable while we improve server infrastructure. They'll return in a future update."),
             ]
         ),
         ChangelogRelease(

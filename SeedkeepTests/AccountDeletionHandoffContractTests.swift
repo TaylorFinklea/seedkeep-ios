@@ -65,7 +65,7 @@ struct AccountDeletionHandoffContractTests {
         #expect(!url.path.contains("test-token"), "Token must not appear in path")
     }
     
-    @Test("Web fallback route does not expose token in page content")
+    @Test("Web fallback does not expose token in rendered output")
     func webFallbackDoesNotExposeToken() throws {
         let routePath = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -74,11 +74,30 @@ struct AccountDeletionHandoffContractTests {
         
         let content = try String(contentsOf: routePath, encoding: .utf8)
         
-        // The route should only reference the transfer ID from params, never extract
-        // or display the token query parameter
-        #expect(content.contains("$page.params.id"), "Route should use transfer ID from path")
-        #expect(!content.contains("token") || content.contains("// Transfer ID from the route parameter, never log or expose the token"),
-                "Route must not extract or display the token query parameter")
+        // The route must only use transferId from path params, never extract the token
+        #expect(content.contains("$page.params.id"), "Route should use transfer ID from path params")
+        
+        // Token may exist ONLY in:
+        // 1. The deep-link href construction (appUrl = ... $page.url.search)
+        // 2. Security-explaining comments (e.g., "never log or expose the token")
+        // but must NEVER appear in any rendered text, logged value, or extracted variable
+        let lines = content.components(separatedBy: .newlines)
+        
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            
+            // Allow token in href construction and security comments
+            if trimmed.contains("appUrl =") || 
+               trimmed.contains("href={appUrl}") ||
+               trimmed.hasPrefix("//") ||
+               trimmed.hasPrefix("/*") ||
+               trimmed.hasPrefix("*") {
+                continue
+            }
+            
+            #expect(!trimmed.contains("token"), 
+                   "Token must not appear in rendered content (found in: '\(trimmed)')")
+        }
     }
 }
 
