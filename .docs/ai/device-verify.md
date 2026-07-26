@@ -13,11 +13,11 @@ TestFlight builds that introduce destructive CloudKit operations, universal-link
 
 These MUST be satisfied before ANY device gate is attempted:
 
-- [ ] **Web/AASA deployed and propagated**
+- [x] **Web/AASA deployed and propagated**
   - [x] `seedkeep-ios/web` built and deployed to Cloudflare Workers Static Assets (`seedkeep-web`, custom domain `seedkeep.app`)
   - [x] AASA origin verified: `200 OK`, `content-type: application/json`, `/garden-handoff/*` present
-  - [ ] Apple CDN propagation confirmed: `https://app-site-association.cdn-apple.com/a/v1/seedkeep.app` returns valid JSON with `/garden-handoff/*` in paths array
-  - [ ] Wait ~24h after web deploy before attempting two-account gate (documented AASA cache lag)
+  - [x] Apple CDN propagation confirmed: `/garden-handoff/*` present in the cached AASA
+  - [x] Propagation gate satisfied by direct Apple CDN verification on 2026-07-26
 
 - [ ] **Server deployed and smoke-tested**
   - [x] `seedkeep-server` deployed via `./scripts/deploy.sh`; migrations 0024–0029 applied by release command
