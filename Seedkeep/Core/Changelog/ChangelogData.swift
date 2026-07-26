@@ -53,6 +53,16 @@ enum ChangelogData {
     static let releases: [ChangelogRelease] = [
         ChangelogRelease(
             version: "0.4.0",
+            build: 52,
+            date: nil,
+            headline: "Account deletion improvements",
+            changes: [
+                ChangelogChange(category: .new,
+                    text: "Account deletion now works correctly for everyone, including shared gardens. When you delete your account as a shared garden owner, you can transfer ownership to someone else first."),
+            ]
+        ),
+        ChangelogRelease(
+            version: "0.4.0",
             build: 51,
             date: "Jul 21, 2026",
             headline: "See what's new",

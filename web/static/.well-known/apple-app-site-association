@@ -4,7 +4,7 @@
     "details": [
       {
         "appID": "K7CBQW6MPG.app.seedkeep.ios",
-        "paths": ["/invite/*"]
+        "paths": ["/invite/*", "/garden-handoff/*"]
       }
     ]
   }
