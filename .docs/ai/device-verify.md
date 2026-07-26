@@ -14,19 +14,19 @@ TestFlight builds that introduce destructive CloudKit operations, universal-link
 These MUST be satisfied before ANY device gate is attempted:
 
 - [ ] **Web/AASA deployed and propagated**
-  - [ ] `seedkeep-ios/web` built and deployed to Cloudflare Pages
-  - [ ] AASA file verified: `curl -I https://seedkeep.app/.well-known/apple-app-site-association` returns `200 OK` + `content-type: application/json`
+  - [x] `seedkeep-ios/web` built and deployed to Cloudflare Workers Static Assets (`seedkeep-web`, custom domain `seedkeep.app`)
+  - [x] AASA origin verified: `200 OK`, `content-type: application/json`, `/garden-handoff/*` present
   - [ ] Apple CDN propagation confirmed: `https://app-site-association.cdn-apple.com/a/v1/seedkeep.app` returns valid JSON with `/garden-handoff/*` in paths array
   - [ ] Wait ~24h after web deploy before attempting two-account gate (documented AASA cache lag)
 
 - [ ] **Server deployed and smoke-tested**
-  - [ ] `seedkeep-server` deployed via `./scripts/deploy.sh`
-  - [ ] Health check green: `curl https://api.seedkeep.app/api/health`
+  - [x] `seedkeep-server` deployed via `./scripts/deploy.sh`; migrations 0024–0029 applied by release command
+  - [x] Health check green: `https://seedkeep-server.fly.dev/api/health` reports healthy, current worker tick, fresh backup
   - [ ] **Explicit DELETE smoke test**: `DELETE /api/me` exercised against a disposable test account (not just /api/health) — confirms route works, migrations applied, receipt table exists
-  - [ ] GARDEN_TOOLS_ENABLED status confirmed (expected: false/unset, Sprout/MCP return 503)
+  - [x] `GARDEN_TOOLS_ENABLED` absent from Production secrets (expected fail-closed default; Sprout/MCP disabled)
 
 - [ ] **iOS build processed**
-  - [ ] Build 52 uploaded to TestFlight
+  - [x] Build 52 uploaded to TestFlight
   - [ ] Processing complete in App Store Connect
   - [ ] Build installable on test devices
 
