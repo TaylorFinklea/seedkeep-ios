@@ -30,9 +30,9 @@ Pages, Netlify, GitHub Pages, S3 + CloudFront, whatever.
 
 ## Deploy to Cloudflare
 
-The repo ships a `wrangler.toml` that configures the project as static-only
-(no Worker code, just assets). The Cloudflare Workers Builds dashboard
-settings for a fresh project:
+The repo ships a `wrangler.toml` for Cloudflare Workers Static Assets. Fixed
+pages are static; the narrow `worker.js` route serves SvelteKit's generated
+fallback for arbitrary `/garden-handoff/*` IDs. Workers Builds settings:
 
 | Setting | Value |
 |---|---|
@@ -41,24 +41,20 @@ settings for a fresh project:
 | **Path / root directory** | `/web` (where this README lives — *not* `/web/build`) |
 | **Non-production deploy** | `npx wrangler versions upload` (default) |
 
-After the first deploy:
+The Wrangler config owns the `seedkeep.app` custom domain. A deploy updates the
+assets, the handoff fallback Worker, and that domain route together.
+Validate the AASA file:
 
-1. Add the custom domain `seedkeep.app` in the Cloudflare dashboard → Workers
-   & Pages → seedkeep-web → Custom domains. DNS resolves automatically if the
-   domain is on Cloudflare; otherwise add the CNAME record the dashboard
-   shows.
-2. Validate the AASA file:
-   ```bash
-   curl -I https://seedkeep.app/.well-known/apple-app-site-association
-   ```
-   Expected `200 OK` + `content-type: application/json`. Apple's CDN cache
-   warms up over the next ~24 hours at
-   <https://app-site-association.cdn-apple.com/a/v1/seedkeep.app>.
+```bash
+curl -I https://seedkeep.app/.well-known/apple-app-site-association
+```
+Expected `200 OK` + `content-type: application/json`. Apple's CDN cache warms
+up over the next ~24 hours at
+<https://app-site-association.cdn-apple.com/a/v1/seedkeep.app>.
 
 ## Manual deploy (alternative)
 
-If you'd rather skip the Cloudflare dashboard wiring and deploy from your
-machine:
+Deploy from the repository:
 
 ```bash
 cd web
