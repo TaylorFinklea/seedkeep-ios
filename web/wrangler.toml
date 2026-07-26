@@ -1,16 +1,21 @@
 #:schema node_modules/wrangler/config-schema.json
 
-# Static-assets-only Cloudflare project: no Worker code, no server-side
-# rendering or edge functions. SvelteKit prerenders fixed routes into ./build;
-# dynamic handoff URLs use SPA fallback routing at Cloudflare's edge. Custom
-# domain (seedkeep.app) and DNS are configured in the Cloudflare dashboard.
+# Static website with one narrow Worker route: SvelteKit prerenders fixed routes
+# into ./build; /garden-handoff/* serves the generated SPA fallback so arbitrary
+# transfer IDs render the handoff page without exposing query parameters.
 
 name = "seedkeep-web"
 compatibility_date = "2026-07-25"
+main = "./worker.js"
 
 [assets]
 directory = "./build"
-not_found_handling = "single-page-application"
+binding = "ASSETS"
+run_worker_first = ["/garden-handoff/*"]
+
+[[routes]]
+pattern = "seedkeep.app"
+custom_domain = true
 
 # The _headers file in build/ is honored automatically by Cloudflare's
 # asset server, which is how the AASA file gets served as
