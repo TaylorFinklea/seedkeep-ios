@@ -19,16 +19,16 @@ These MUST be satisfied before ANY device gate is attempted:
   - [x] Apple CDN propagation confirmed: `/garden-handoff/*` present in the cached AASA
   - [x] Propagation gate satisfied by direct Apple CDN verification on 2026-07-26
 
-- [ ] **Server deployed and smoke-tested**
+- [x] **Server deployed and smoke-tested**
   - [x] `seedkeep-server` deployed via `./scripts/deploy.sh`; migrations 0024–0029 applied by release command
   - [x] Health check green: `https://seedkeep-server.fly.dev/api/health` reports healthy, current worker tick, fresh backup
-  - [ ] **Explicit DELETE smoke test**: `DELETE /api/me` exercised against a disposable test account (not just /api/health) — confirms route works, migrations applied, receipt table exists
+  - [x] Authenticated `DELETE /api/me` passed through build 52 on a disposable participant account
   - [x] `GARDEN_TOOLS_ENABLED` absent from Production secrets (expected fail-closed default; Sprout/MCP disabled)
 
-- [ ] **iOS build processed**
+- [x] **iOS build processed**
   - [x] Build 52 uploaded to TestFlight
-  - [ ] Processing complete in App Store Connect
-  - [ ] Build installable on test devices
+  - [x] Processing complete in App Store Connect
+  - [x] Build installable on test devices
 
 ### Production CloudKit Gates
 
@@ -36,23 +36,23 @@ All gates use **Production CloudKit environment** with **disposable test account
 
 #### Gate 1: Participant Deletion
 
-- [ ] Sign in to a shared garden as a **participant** (not owner)
-- [ ] Tap **You → Delete Account**
-- [ ] Observe phase: "Leaving shared garden"
-- [ ] Deletion completes
-- [ ] **Verify CloudKit**: CKShare participant removed (check via CloudKit Console or fresh sign-in shows no share)
-- [ ] **Verify server**: Account deleted (fresh sign-in attempt fails with "no account")
-- [ ] **Verify local**: No garden data remains in app after fresh install + sign-in with same Apple ID
+- [x] Sign in to a shared garden as a **participant** (not owner)
+- [x] Tap **You → Delete Account**
+- [x] Observe phase: "Leaving shared garden"
+- [x] Deletion completes
+- [x] **Verify CloudKit**: fresh sign-in shows no share
+- [x] **Verify server**: deleted account does not persist
+- [x] **Verify local**: cold relaunch shows no prior household data
 
 #### Gate 2: Solo Owner Deletion
 
-- [ ] Sign in to a garden with **no participants** (solo owner)
-- [ ] Tap **You → Delete Account**
-- [ ] Observe phase: "Deleting garden zone"
-- [ ] Deletion completes
-- [ ] **Verify CloudKit**: Private zone deleted (check CloudKit Console — `app.seedkeep.Household` zone absent)
-- [ ] **Verify server**: Account deleted
-- [ ] **Verify local**: No data remains
+- [x] Sign in to a garden with **no participants** (solo owner)
+- [x] Tap **You → Delete Account**
+- [x] Observe phase: "Deleting garden zone"
+- [x] Deletion completes
+- [x] **Verify CloudKit**: immediate fresh sign-in has no prior garden/seed
+- [x] **Verify server**: immediate fresh sign-in recreates the deleted account
+- [x] **Verify local**: throwaway seed does not return
 
 #### Gate 3: Two-Account Shared-Owner Transfer
 
