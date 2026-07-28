@@ -52,13 +52,24 @@ public struct SeedkeepRecordMerger: RecordMerger {
         SeedkeepRecordType.allCases.contains { $0.recordTypeName == recordType }
     }
 
+    /// Dispatch is EXHAUSTIVE over `SeedkeepRecordType` (CaseIterable), not a string match ending
+    /// in `default:` — a future record type is then a compile error here, not a silently-defaulted
+    /// table entry (Photos-on-CloudKit D5).
     public func resolve(local: CKRecord, remote: CKRecord) -> MergeResult {
-        switch remote.recordType {
-        case SeedkeepRecordType.seed.recordTypeName:
+        guard let type = SeedkeepRecordType.type(forRecordTypeName: remote.recordType) else {
+            // Unreachable in practice: DispatchingMerger only calls resolve() after `handles()`
+            // confirmed the type is in the manifest. Never alias remote (see DispatchingMerger).
+            return MergeResult(record: remote.copy() as! CKRecord, needsResave: false)
+        }
+        switch type {
+        case .seed:
             return mergeSeed(local: local, remote: remote)
-        case SeedkeepRecordType.journalChecklistItem.recordTypeName:
+        case .journalChecklistItem:
             return mergeChecklistItem(local: local, remote: remote)
-        default:
+        case .seedPhoto, .journalEntryPhoto:
+            return mergePhoto(local: local, remote: remote)
+        case .household, .location, .tag, .bed, .plantingEvent, .journalEntry,
+             .petDeparture, .migrationReceipt:
             // All other shared-zone types: honest whole-record LWW by updatedAt.
             return mergeDefaultLWW(local: local, remote: remote)
         }
@@ -73,14 +84,22 @@ public struct SeedkeepRecordMerger: RecordMerger {
     /// their partner edits it concurrently on another.
     /// `result` is a COPY of remote (carries the change tag; leaves remote pristine for reads).
     /// Types with no `updatedAt`/`deletedAt` (the immutable photo types) take the plain LWW tie.
-    private func mergeDefaultLWW(local: CKRecord, remote: CKRecord) -> MergeResult {
+    /// Internal (not `private`) so the bulk-copy asset guard can be unit-tested directly: no
+    /// manifest type routes through this path AND carries an asset field today (both photo types
+    /// go through `mergePhoto`), so the guard needs a seam to prove it holds independent of dispatch.
+    func mergeDefaultLWW(local: CKRecord, remote: CKRecord) -> MergeResult {
         let localUpdatedAt  = (local["updatedAt"]  as? Int) ?? 0
         let remoteUpdatedAt = (remote["updatedAt"] as? Int) ?? 0
         let localWasNewer   = localUpdatedAt > remoteUpdatedAt
 
         let result = remote.copy() as! CKRecord
         if localWasNewer {
-            for key in local.allKeys() { result[key] = local[key] }
+            // General guard, for every type: never let the local-wins bulk copy carry a manifest
+            // asset key. Photos route through `mergePhoto` today, but this neutralizes the
+            // landmine even if some future asset-carrying type forgets its own merge case
+            // (Photos-on-CloudKit D5).
+            let assetKeys = Self.assetFieldNames(for: remote.recordType)
+            for key in local.allKeys() where !assetKeys.contains(key) { result[key] = local[key] }
         }
 
         let remoteDeletedAt = remote["deletedAt"] as? Int
@@ -89,6 +108,23 @@ public struct SeedkeepRecordMerger: RecordMerger {
         let didChangeDeleted = sticky != remoteDeletedAt
 
         return MergeResult(record: result, needsResave: localWasNewer || didChangeDeleted)
+    }
+
+    // MARK: - Photo merge (create + delete only; "replace" is delete-then-create)
+
+    /// Photos are immutable once created (D5): `mergePhoto` always adopts remote verbatim, never
+    /// marks the asset key changed (nothing here ever touches it), never resaves, and never writes
+    /// `deletedAt` — hard delete via the parent cascade is the only removal path for either photo
+    /// type.
+    private func mergePhoto(local: CKRecord, remote: CKRecord) -> MergeResult {
+        MergeResult(record: remote.copy() as! CKRecord, needsResave: false)
+    }
+
+    /// Manifest asset field names for a CloudKit record type name — used to keep bulk field copies
+    /// (LWW's local-wins path) from ever carrying a CKAsset key.
+    static func assetFieldNames(for recordTypeName: String) -> Set<String> {
+        guard let type = SeedkeepRecordType.type(forRecordTypeName: recordTypeName) else { return [] }
+        return Set(type.fields.filter { $0.type == .asset }.map(\.name))
     }
 
     // MARK: - Seed merge

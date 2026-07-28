@@ -62,6 +62,21 @@ public struct HouseholdGraphDigest: Equatable, Codable, Sendable {
     }
 }
 
+// MARK: - Asset observation
+
+/// Identifies one asset field on one record, so a caller-supplied hash observation can be looked
+/// up during canonicalisation. Keys `assetHashes` maps threaded through the digest and the copier
+/// (Photos-on-CloudKit D3): the canonical token for an asset field is the hash of its OBSERVED
+/// bytes, never a value trusted from the record itself.
+public struct AssetRef: Hashable, Sendable {
+    public let recordName: String
+    public let field: String
+    public init(recordName: String, field: String) {
+        self.recordName = recordName
+        self.field = field
+    }
+}
+
 public enum HouseholdGraphDigestError: Error, Equatable, CustomStringConvertible {
     /// Two records share a record name. A zone cannot contain both, so the input is not a faithful
     /// snapshot and the digest would be ambiguous.
@@ -103,16 +118,23 @@ public enum HouseholdGraphDigestError: Error, Equatable, CustomStringConvertible
 public enum HouseholdGraphDigester {
     /// Canonical-format tag. Bump it when the encoding changes; a mixed-version pair of devices
     /// must disagree loudly rather than compare two differently-built hashes.
-    public static let formatVersion = "seedkeep-graph-digest/1"
+    /// /2: Photos-on-CloudKit Stage A added the `.asset` canonical token ("a:<sha256>").
+    public static let formatVersion = "seedkeep-graph-digest/2"
 
     /// SHA-256 over `canonicalDocument`, plus exact per-type counts.
     ///
     /// `zoneID` is the zone the caller believes these records came from: the owner passes the
     /// source zone, the successor passes their destination zone. Every app record and every in-zone
     /// reference must live there, which is what licenses leaving zone identity out of the hash.
+    ///
+    /// `assetHashes` supplies the OBSERVED sha256 for every asset field the caller has fetched and
+    /// hashed (Photos-on-CloudKit D3) — recordName+field → hash. Defaults to `[:]`, so an asset-free
+    /// graph digests exactly as before; a graph that carries an asset field with no matching entry
+    /// FAILS CLOSED (see `CanonicalFieldValue.read`), it is never silently skipped.
     public static func digest(of records: [CKRecord],
-                              in zoneID: CKRecordZone.ID) throws -> HouseholdGraphDigest {
-        let entries = try canonicalEntries(of: records, in: zoneID)
+                              in zoneID: CKRecordZone.ID,
+                              assetHashes: [AssetRef: String] = [:]) throws -> HouseholdGraphDigest {
+        let entries = try canonicalEntries(of: records, in: zoneID, assetHashes: assetHashes)
         var counts: [String: Int] = [:]
         for entry in entries { counts[entry.recordType, default: 0] += 1 }
         let hash = SHA256.hash(data: Data(document(from: entries).utf8))
@@ -123,8 +145,9 @@ public enum HouseholdGraphDigester {
     /// The exact bytes that get hashed. Public so a mismatch can be diffed on-device instead of
     /// being reported as two opaque hashes.
     public static func canonicalDocument(of records: [CKRecord],
-                                         in zoneID: CKRecordZone.ID) throws -> String {
-        document(from: try canonicalEntries(of: records, in: zoneID))
+                                         in zoneID: CKRecordZone.ID,
+                                         assetHashes: [AssetRef: String] = [:]) throws -> String {
+        document(from: try canonicalEntries(of: records, in: zoneID, assetHashes: assetHashes))
     }
 
     // MARK: Internals
@@ -136,7 +159,8 @@ public enum HouseholdGraphDigester {
     }
 
     private static func canonicalEntries(of records: [CKRecord],
-                                         in zoneID: CKRecordZone.ID) throws -> [Entry] {
+                                         in zoneID: CKRecordZone.ID,
+                                         assetHashes: [AssetRef: String] = [:]) throws -> [Entry] {
         var entries: [Entry] = []
         var seen = Set<String>()
         for record in records {
@@ -158,7 +182,8 @@ public enum HouseholdGraphDigester {
             guard seen.insert(recordName).inserted else {
                 throw HouseholdGraphDigestError.duplicateRecordName(recordName)
             }
-            switch CanonicalRecordEncoder.fieldLines(of: record, as: type, in: zoneID) {
+            switch CanonicalRecordEncoder.fieldLines(of: record, as: type, in: zoneID,
+                                                     assetHashes: assetHashes) {
             case .success(let lines):
                 entries.append(Entry(recordType: type.recordTypeName,
                                      recordName: recordName,
@@ -199,14 +224,26 @@ enum CanonicalFieldValue {
     /// Bool fields are stored as INT64 (G3). The raw storage integer is kept so a copy is lossless,
     /// while the canonical encoding compares them as booleans.
     case bool(Int)
+    /// A CKAsset field, paired with the sha256 of its OBSERVED bytes (Photos-on-CloudKit D3). The
+    /// asset itself rides along so a copy stays byte-identical; the canonical token is derived
+    /// SOLELY from the hash, never from the asset's fileURL.
+    case asset(CKAsset, sha256: String)
 
-    static func read(_ raw: Any, as fieldType: CKFieldType) -> CanonicalFieldValue? {
+    /// `assetHash` is the caller's OWN observation of this field's bytes (staged at fetch time —
+    /// see D3/D4), never a value read off the record. For `.asset`, both a real `CKAsset` AND a
+    /// non-nil, non-empty hash are required or this returns nil — there is no lenient fallback.
+    /// A graph containing an asset can therefore never be digested or copied without first
+    /// observing its bytes: fail-closed by construction.
+    static func read(_ raw: Any, as fieldType: CKFieldType, assetHash: String?) -> CanonicalFieldValue? {
         switch fieldType {
         case .string: return (raw as? String).map(CanonicalFieldValue.string)
         case .int:    return (raw as? Int).map(CanonicalFieldValue.int)
         case .double: return (raw as? Double).map(CanonicalFieldValue.double)
         case .date:   return (raw as? Date).map(CanonicalFieldValue.date)
         case .bool:   return (raw as? Int).map(CanonicalFieldValue.bool)
+        case .asset:
+            guard let asset = raw as? CKAsset, let assetHash, !assetHash.isEmpty else { return nil }
+            return .asset(asset, sha256: assetHash)
         }
     }
 
@@ -227,6 +264,12 @@ enum CanonicalFieldValue {
             return "t:" + CanonicalRecordEncoder.hex(value.timeIntervalSinceReferenceDate.bitPattern)
         case .bool(let value):
             return "b:\(value != 0 ? 1 : 0)"
+        case .asset(_, let sha256):
+            // Pure and file-I/O-free (D3): the token is the OBSERVED hash the caller supplied to
+            // `read`, never a hash computed here and never the asset's fileURL. Two assets with
+            // different fileURLs but identical observed bytes canonicalise identically (device
+            // independence); two different observed hashes canonicalise differently.
+            return "a:" + CanonicalRecordEncoder.escaped(sha256)
         }
     }
 
@@ -238,6 +281,7 @@ enum CanonicalFieldValue {
         case .double(let value): return value as CKRecordValue
         case .date(let value):   return value as CKRecordValue
         case .bool(let value):   return value as CKRecordValue
+        case .asset(let asset, _): return asset
         }
     }
 }
@@ -256,12 +300,14 @@ enum CanonicalRecordEncoder {
     /// manifest order, scalars before references).
     static func fieldLines(of record: CKRecord,
                            as type: SeedkeepRecordType,
-                           in expectedZoneID: CKRecordZone.ID) -> Result<[String], CanonicalFieldFailure> {
+                           in expectedZoneID: CKRecordZone.ID,
+                           assetHashes: [AssetRef: String] = [:]) -> Result<[String], CanonicalFieldFailure> {
         var encoded: [(name: String, value: String)] = []
 
         for field in type.fields {
             guard let raw = record[field.name] else { continue }
-            guard let value = CanonicalFieldValue.read(raw, as: field.type) else {
+            let assetHash = assetHashes[AssetRef(recordName: record.recordID.recordName, field: field.name)]
+            guard let value = CanonicalFieldValue.read(raw, as: field.type, assetHash: assetHash) else {
                 return .failure(.unsupportedValue(field: field.name))
             }
             encoded.append((field.name, value.canonicalEncoding))
@@ -296,8 +342,9 @@ enum CanonicalRecordEncoder {
     }
 
     /// Test/diagnostic seam over `CanonicalFieldValue` — nil for a value the manifest rejects.
-    static func encodeScalar(_ raw: Any, as fieldType: CKFieldType) -> String? {
-        CanonicalFieldValue.read(raw, as: fieldType)?.canonicalEncoding
+    /// `assetHash` is only relevant for `.asset` fields; other field types ignore it.
+    static func encodeScalar(_ raw: Any, as fieldType: CKFieldType, assetHash: String? = nil) -> String? {
+        CanonicalFieldValue.read(raw, as: fieldType, assetHash: assetHash)?.canonicalEncoding
     }
 
     /// References hash their TARGET RECORD NAME and action, never a zone-qualified record ID — that

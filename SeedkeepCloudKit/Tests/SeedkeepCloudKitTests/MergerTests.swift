@@ -44,6 +44,15 @@ private func checklistRecord(
     return record
 }
 
+// MARK: - Photo helpers (Photos-on-CloudKit D5: create + delete only, never merged field-by-field)
+
+/// A CKAsset backed by a real temp file — CKAsset requires a fileURL.
+private func makeTestAsset(bytes: [UInt8] = [0x01, 0x02]) throws -> CKAsset {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try Data(bytes).write(to: url)
+    return CKAsset(fileURL: url)
+}
+
 // MARK: - packetCount → min(local, remote)
 
 @Test("packetCount: concurrent decrements both survive (min wins, not LWW)")
@@ -252,6 +261,76 @@ func checklistUncheckLaterWins() {
     let res2 = merger.resolve(local: checkedEarlier, remote: uncheckedLater)
     #expect((res2.record as! CKRecord)["completed"] as! Int == 0)
     #expect(res2.needsResave == false, "remote newer → nothing to push")
+}
+
+// MARK: - mergePhoto (Photos-on-CloudKit D5: create + delete only, remote always wins)
+
+@Test("mergePhoto: SeedPhoto — remote wins verbatim and needsResave is false")
+func mergePhotoSeedPhotoRemoteWins() throws {
+    let asset = try makeTestAsset()
+    let recordID = CKRecord.ID(recordName: "seedPhoto:1", zoneID: zoneID)
+
+    let local = CKRecord(recordType: "SeedPhoto", recordID: recordID)
+    local["r2Key"] = "local/key" as CKRecordValue
+
+    let remote = CKRecord(recordType: "SeedPhoto", recordID: recordID)
+    remote["r2Key"] = "remote/key" as CKRecordValue
+    remote["asset"] = asset
+
+    let result = SeedkeepRecordMerger().resolve(local: local, remote: remote)
+    let merged = result.record as! CKRecord
+    #expect(merged["r2Key"] as? String == "remote/key", "photos are create+delete only — remote always wins")
+    #expect((merged["asset"] as? CKAsset)?.fileURL == asset.fileURL)
+    #expect(result.needsResave == false)
+    #expect(merged["deletedAt"] == nil, "mergePhoto must never write deletedAt")
+}
+
+@Test("mergePhoto: JournalEntryPhoto — remote wins even though it declares updatedAt and is older")
+func mergePhotoJournalEntryPhotoRemoteWinsDespiteOlderUpdatedAt() throws {
+    // JournalEntryPhoto is the one photo type with an `updatedAt` clock, which would let it take
+    // mergeDefaultLWW's local-wins bulk copy if it were ever dispatched there. Exhaustive dispatch
+    // routes it through mergePhoto instead, so a NEWER local updatedAt must still lose to remote.
+    let asset = try makeTestAsset()
+    let recordID = CKRecord.ID(recordName: "journalEntryPhoto:1", zoneID: zoneID)
+
+    let local = CKRecord(recordType: "JournalEntryPhoto", recordID: recordID)
+    local["updatedAt"] = 200 as CKRecordValue
+    local["storageKey"] = "local/key" as CKRecordValue
+
+    let remote = CKRecord(recordType: "JournalEntryPhoto", recordID: recordID)
+    remote["updatedAt"] = 100 as CKRecordValue   // OLDER — a naive LWW would pick local
+    remote["storageKey"] = "remote/key" as CKRecordValue
+    remote["asset"] = asset
+
+    let result = SeedkeepRecordMerger().resolve(local: local, remote: remote)
+    let merged = result.record as! CKRecord
+    #expect(merged["storageKey"] as? String == "remote/key",
+            "naive LWW would pick local (updatedAt=200) — photos are exempt from LWW entirely")
+    #expect(result.needsResave == false)
+}
+
+// MARK: - Bulk-copy asset guard (mergeDefaultLWW must never carry a manifest asset key)
+
+@Test("bulk-copy guard: mergeDefaultLWW's local-wins copy never carries a manifest asset field")
+func bulkCopyGuardSkipsAssetField() throws {
+    // No manifest type routes through mergeDefaultLWW AND declares an asset field today (both
+    // photo types go through mergePhoto) — this test exercises the guard directly so it is proven
+    // even if a future asset-carrying type is mistakenly left off the exhaustive dispatch's photo
+    // case (Photos-on-CloudKit D5's "one-line general guard").
+    let asset = try makeTestAsset()
+    let recordID = CKRecord.ID(recordName: "journalEntryPhoto:1", zoneID: zoneID)
+
+    let local = CKRecord(recordType: "JournalEntryPhoto", recordID: recordID)
+    local["updatedAt"] = 200 as CKRecordValue
+    local["asset"] = asset
+
+    let remote = CKRecord(recordType: "JournalEntryPhoto", recordID: recordID)
+    remote["updatedAt"] = 100 as CKRecordValue   // local is newer → the bulk-copy path engages
+
+    let result = SeedkeepRecordMerger().mergeDefaultLWW(local: local, remote: remote)
+    let merged = result.record as! CKRecord
+    #expect(merged["updatedAt"] as? Int == 200, "sanity: the local-wins bulk copy DID run")
+    #expect(merged["asset"] == nil, "the asset key must never ride the local-wins bulk copy")
 }
 
 // MARK: - Codec round-trip

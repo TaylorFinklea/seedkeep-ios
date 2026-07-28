@@ -33,8 +33,10 @@ import Foundation
 // MARK: - Scalar field types
 
 /// CloudKit scalar field types. `bool` is stored as INT64 0/1 (G3: Bool→INT64).
+/// `asset` is a CKAsset (photo bytes) — see HouseholdGraphDigest.swift for how the digest
+/// observes asset bytes rather than trusting a copied identity (Photos-on-CloudKit D1/D3).
 public enum CKFieldType: Equatable {
-    case string, int, double, date, bool
+    case string, int, double, date, bool, asset
 }
 
 public struct FieldSpec: Equatable {
@@ -227,6 +229,10 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
         case .seedPhoto:
             // Immutable + hard-deleted via the Seed cascade — no updatedAt/deletedAt columns.
             // (householdID omitted, like every type: the zone IS the household boundary.)
+            // `r2Key` stays as inert provenance (D8: no R2 backfill). `asset` carries the photo
+            // bytes; `assetSHA256` is a cache-integrity companion, NOT load-bearing for transfer
+            // verification (D2/D3 — the digest observes the asset's actual bytes). Neither is
+            // queryable or sortable.
             return [
                 F("r2Key", .string),
                 F("roleRaw", .string),          // PhotoRole.rawValue
@@ -234,6 +240,8 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
                 F("height", .int),
                 F("byteSize", .int),
                 F("capturedAt", .int),
+                F("asset", .asset),
+                F("assetSHA256", .string),
             ]
 
         case .bed:
@@ -281,6 +289,9 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
 
         case .journalEntryPhoto:
             // Hard-deleted via the JournalEntry cascade — has updatedAt but no deletedAt.
+            // `storageKey` stays as inert provenance (D8: no R2 backfill). `asset` carries the
+            // photo bytes; `assetSHA256` is a cache-integrity companion, NOT load-bearing for
+            // transfer verification (D2/D3). Neither is queryable or sortable.
             return [
                 F("storageKey", .string),
                 F("sortOrder", .int),
@@ -288,6 +299,8 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
                 F("height", .int),
                 F("createdAt", .int),
                 F("updatedAt", .int),
+                F("asset", .asset),
+                F("assetSHA256", .string),
             ]
 
         case .journalChecklistItem:

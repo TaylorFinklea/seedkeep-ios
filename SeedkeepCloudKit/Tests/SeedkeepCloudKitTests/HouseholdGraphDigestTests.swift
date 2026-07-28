@@ -41,13 +41,23 @@ private func inZoneRef(_ name: String, _ action: CKRecord.ReferenceAction,
 }
 
 private func digest(of records: [CKRecord],
-                    in zone: CKRecordZone.ID = sourceZone) throws -> HouseholdGraphDigest {
-    try HouseholdGraphDigester.digest(of: records, in: zone)
+                    in zone: CKRecordZone.ID = sourceZone,
+                    assetHashes: [AssetRef: String] = [:]) throws -> HouseholdGraphDigest {
+    try HouseholdGraphDigester.digest(of: records, in: zone, assetHashes: assetHashes)
 }
 
 private func canonical(of records: [CKRecord],
-                       in zone: CKRecordZone.ID = sourceZone) throws -> String {
-    try HouseholdGraphDigester.canonicalDocument(of: records, in: zone)
+                       in zone: CKRecordZone.ID = sourceZone,
+                       assetHashes: [AssetRef: String] = [:]) throws -> String {
+    try HouseholdGraphDigester.canonicalDocument(of: records, in: zone, assetHashes: assetHashes)
+}
+
+/// A CKAsset backed by a real temp file — CKAsset requires a fileURL, and the device-independence
+/// tests need genuinely distinct files to prove the canonical token never reads them.
+private func makeAsset(bytes: [UInt8] = [0xAB, 0xCD, 0xEF]) throws -> CKAsset {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try Data(bytes).write(to: url)
+    return CKAsset(fileURL: url)
 }
 
 /// A representative graph: two root types, a set-null child, two cascade children, a cross-DB
@@ -284,6 +294,62 @@ func digestDistinguishesAbsentField() throws {
     #expect(try digest(of: [absent]) != digest(of: [present]))
 }
 
+// MARK: - Asset fields (Photos-on-CloudKit D3: the digest OBSERVES bytes, never trusts a copy)
+
+@Test("an absent asset field emits no line, so it digests differently from one that has it")
+func digestDistinguishesAbsentAssetField() throws {
+    let asset = try makeAsset()
+    let hashes: [AssetRef: String] = [AssetRef(recordName: "seedPhoto:p1", field: "asset"): "abc123"]
+
+    let absent = makeRecord(.seedPhoto, "seedPhoto:p1", scalars: ["r2Key": "k/abc" as CKRecordValue])
+    let present = makeRecord(.seedPhoto, "seedPhoto:p1",
+                             scalars: ["r2Key": "k/abc" as CKRecordValue, "asset": asset as CKRecordValue])
+
+    #expect(try digest(of: [absent]) != digest(of: [present], assetHashes: hashes))
+}
+
+@Test("a record carrying an asset FAILS the digest instead of silently skipping the field when no observation is supplied")
+func digestFailsClosedWithoutAssetObservation() throws {
+    // The exact hazard D3 exists to prevent: without a fail-closed read, an unobserved asset field
+    // would be silently dropped and two truncated copies could compare equal.
+    let asset = try makeAsset()
+    let record = makeRecord(.seedPhoto, "seedPhoto:p1",
+                            scalars: ["asset": asset as CKRecordValue],
+                            refs: ["seedID": inZoneRef("seed:s1", .deleteSelf)])
+
+    #expect(throws: HouseholdGraphDigestError.unsupportedValue(
+        recordType: "SeedPhoto", recordName: "seedPhoto:p1", field: "asset")) {
+        try digest(of: [record])   // default assetHashes: [:]
+    }
+}
+
+@Test("device independence: two records whose asset fileURLs differ but whose OBSERVED hash is the same digest identically")
+func digestAssetIsDeviceIndependent() throws {
+    // The whole point of D3: the digest never reads `fileURL`. Two entirely different files, hashed
+    // by each device's own fetch into the SAME observed value, must canonicalise identically.
+    let assetHere = try makeAsset(bytes: [1, 2, 3])
+    let assetThere = try makeAsset(bytes: [9, 9, 9, 9])
+    #expect(assetHere.fileURL != assetThere.fileURL)
+
+    func photoRecord(_ asset: CKAsset, in zone: CKRecordZone.ID) -> CKRecord {
+        makeRecord(.seedPhoto, "seedPhoto:p1", in: zone,
+                   scalars: ["r2Key": "k/abc" as CKRecordValue, "asset": asset as CKRecordValue],
+                   refs: ["seedID": inZoneRef("seed:s1", .deleteSelf, in: zone)])
+    }
+
+    let observedHash = "same-observed-hash"
+    let hashes: [AssetRef: String] = [AssetRef(recordName: "seedPhoto:p1", field: "asset"): observedHash]
+
+    let digestHere = try digest(of: [photoRecord(assetHere, in: sourceZone)], assetHashes: hashes)
+    let digestThere = try digest(of: [photoRecord(assetThere, in: sourceZone)], assetHashes: hashes)
+    #expect(digestHere == digestThere,
+            "identical observed hash → identical digest, regardless of the underlying file")
+
+    let differentHashes: [AssetRef: String] = [AssetRef(recordName: "seedPhoto:p1", field: "asset"): "a-different-hash"]
+    let digestDifferent = try digest(of: [photoRecord(assetHere, in: sourceZone)], assetHashes: differentHashes)
+    #expect(digestHere != digestDifferent, "a different observed hash must change the digest")
+}
+
 @Test("changing a cross-DB string reference changes the digest and it is never zone-qualified")
 func digestDetectsCrossDBChange() throws {
     let a = makeRecord(.seed, "seed:s1", scalars: ["catalogID": "cat-1" as CKRecordValue])
@@ -405,7 +471,7 @@ func digestRejectsCrossDBReferenceValue() throws {
 // MARK: - Scalar encoding (every manifest field type, including ones no type declares yet)
 
 @Test("every CKFieldType has an injective canonical encoding")
-func canonicalScalarEncoding() {
+func canonicalScalarEncoding() throws {
     #expect(CanonicalRecordEncoder.encodeScalar("a\tb" as NSString, as: .string) == #"s:a\tb"#)
     #expect(CanonicalRecordEncoder.encodeScalar(7 as NSNumber, as: .int) == "i:7")
     #expect(CanonicalRecordEncoder.encodeScalar(-7 as NSNumber, as: .int) == "i:-7")
@@ -419,6 +485,23 @@ func canonicalScalarEncoding() {
                                                 as: .date) == "t:3fe0000000000000")
     #expect(CanonicalRecordEncoder.encodeScalar("x" as NSString, as: .int) == nil)
     #expect(CanonicalRecordEncoder.encodeScalar(3 as NSNumber, as: .string) == nil)
+
+    // `.asset`: `CKFieldType` is NOT CaseIterable, so nothing forces this case to be added when a
+    // new field type lands — it is added here BY HAND, same as every other case above. The token
+    // is the CALLER-SUPPLIED observed hash — never derived from the CKAsset itself, and never
+    // accepted when nil/empty (Photos-on-CloudKit D3).
+    let asset = try makeAsset()
+    #expect(CanonicalRecordEncoder.encodeScalar(asset, as: .asset, assetHash: "abc123") == "a:abc123")
+    #expect(CanonicalRecordEncoder.encodeScalar(asset, as: .asset, assetHash: "xyz789")
+            != CanonicalRecordEncoder.encodeScalar(asset, as: .asset, assetHash: "abc123"))
+    #expect(CanonicalRecordEncoder.encodeScalar(asset, as: .asset, assetHash: nil) == nil,
+            "no observation supplied → fail closed, never silently accepted")
+    #expect(CanonicalRecordEncoder.encodeScalar(asset, as: .asset, assetHash: "") == nil,
+            "an empty hash string is not a real observation")
+    #expect(CanonicalRecordEncoder.encodeScalar("not an asset" as NSString, as: .asset, assetHash: "abc123") == nil,
+            "the raw value must actually be a CKAsset")
+    #expect(CanonicalRecordEncoder.encodeScalar(asset, as: .asset, assetHash: "a\tb") == #"a:a\tb"#,
+            "the hash is escaped like any other string component — it cannot forge extra lines")
 }
 
 @Test("dates encode exactly: two sub-millisecond-distinct instants never share a token")

@@ -107,10 +107,16 @@ public enum HouseholdGraphCopyError: Error, Equatable, CustomStringConvertible {
 public enum HouseholdGraphCopier {
 
     /// Plan the destination-zone writes that reproduce `records`. Pure: same input, same plan.
+    ///
+    /// `assetHashes` supplies the OBSERVED sha256 for every asset field (Photos-on-CloudKit D3),
+    /// keyed by the SOURCE record's name+field. Defaults to `[:]`, so an asset-free graph plans
+    /// exactly as before; a graph carrying an asset field with no matching entry fails closed (see
+    /// `CanonicalFieldValue.read`) rather than silently copying an unobserved value.
     public static func plan(
         _ records: [CKRecord],
         from sourceZoneID: CKRecordZone.ID,
-        to destinationZoneID: CKRecordZone.ID
+        to destinationZoneID: CKRecordZone.ID,
+        assetHashes: [AssetRef: String] = [:]
     ) throws -> HouseholdGraphCopyPlan {
         guard sourceZoneID != destinationZoneID else {
             throw HouseholdGraphCopyError.destinationIsSource(zoneName: sourceZoneID.zoneName)
@@ -136,7 +142,8 @@ public enum HouseholdGraphCopier {
                     recordType: type.recordTypeName, recordName: recordName, field: undeclared)
             }
 
-            let built = try copy(record, as: type, from: sourceZoneID, to: destinationZoneID)
+            let built = try copy(record, as: type, from: sourceZoneID, to: destinationZoneID,
+                                 assetHashes: assetHashes)
 
             if let existing = planned[recordName] {
                 // A retry can legitimately hand the same record twice; conflicting content cannot.
@@ -199,7 +206,8 @@ public enum HouseholdGraphCopier {
         _ record: CKRecord,
         as type: SeedkeepRecordType,
         from sourceZoneID: CKRecordZone.ID,
-        to destinationZoneID: CKRecordZone.ID
+        to destinationZoneID: CKRecordZone.ID,
+        assetHashes: [AssetRef: String]
     ) throws -> PlannedRecord {
         let recordName = record.recordID.recordName
         let destination = CKRecord(
@@ -211,7 +219,8 @@ public enum HouseholdGraphCopier {
 
         for field in type.fields {
             guard let raw = record[field.name] else { continue }
-            guard let value = CanonicalFieldValue.read(raw, as: field.type) else {
+            let assetHash = assetHashes[AssetRef(recordName: recordName, field: field.name)]
+            guard let value = CanonicalFieldValue.read(raw, as: field.type, assetHash: assetHash) else {
                 throw HouseholdGraphCopyError.unsupportedValue(
                     recordType: type.recordTypeName, recordName: recordName, field: field.name)
             }

@@ -53,6 +53,9 @@ public enum SeedkeepRecordCodec {
             case .double: if let v = raw as? Double  { scalars[field.name] = .double(v) }
             case .date:   if let v = raw as? Date    { scalars[field.name] = .date(v) }
             case .bool:   if let v = raw as? Int     { scalars[field.name] = .bool(v != 0) }
+            // CKAsset has no ScalarValue representation (D1: no ScalarValue case is added).
+            // Assets are handled outside this migration-mapping codec (attachAssets, Stage B/C).
+            case .asset:  break
             }
         }
         var refs: [String: String] = [:]

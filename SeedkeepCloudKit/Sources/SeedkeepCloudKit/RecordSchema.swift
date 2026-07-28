@@ -41,6 +41,7 @@ public extension SeedkeepRecordType {
         case .int, .bool: return "INT64"  // G3: Bool → INT64
         case .double: return "DOUBLE"
         case .date: return "TIMESTAMP"
+        case .asset: return "ASSET"
         }
     }
 }
