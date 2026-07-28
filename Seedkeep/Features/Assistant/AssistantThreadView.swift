@@ -3,6 +3,8 @@ import SwiftData
 import PhotosUI
 import SeedkeepKit
 
+// Intentionally unwired for 1.0 — no entry point reaches this view; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// Per-thread chat detail. Renders messages + inline tool-call cards from
 /// SwiftData (the coordinator persists each event as it arrives, so the
 /// view re-renders give the typewriter UX). Bottom composer sends new
@@ -110,7 +112,7 @@ struct AssistantThreadView: View {
                 .font(HerbFont.display(size: 22))
                 .foregroundStyle(HerbColor.ink)
                 .multilineTextAlignment(.center)
-            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+            Text(AIAssistantCoordinator.capabilityUnavailableMessage)
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
                 .multilineTextAlignment(.center)

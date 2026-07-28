@@ -1,6 +1,8 @@
 import SwiftUI
 import SeedkeepKit
 
+// Intentionally unwired for 1.0 — no entry point reaches this view; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// Settings → AI Assistant. Lets the user paste their Anthropic API key
 /// (write-only — never displayed back), replace it, or revoke. Privacy
 /// disclosure explains that the key is encrypted on Seedkeep's server.
@@ -98,7 +100,7 @@ struct AssistantKeySettingsView: View {
                 .font(HerbFont.display(size: 22))
                 .foregroundStyle(HerbColor.ink)
                 .multilineTextAlignment(.center)
-            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+            Text(AIAssistantCoordinator.capabilityUnavailableMessage)
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
                 .multilineTextAlignment(.center)
@@ -112,7 +114,7 @@ struct AssistantKeySettingsView: View {
 
     private func save() async {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
-            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            errorMessage = AIAssistantCoordinator.capabilityUnavailableMessage
             return
         }
         working = true
@@ -134,7 +136,7 @@ struct AssistantKeySettingsView: View {
 
     private func revoke() async {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
-            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            errorMessage = AIAssistantCoordinator.capabilityUnavailableMessage
             return
         }
         working = true

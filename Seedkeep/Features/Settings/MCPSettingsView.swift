@@ -1,6 +1,8 @@
 import SwiftUI
 import SeedkeepKit
 
+// Intentionally unwired for 1.0 — no entry point reaches this view; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// Phase 4 E — issue + manage MCP bearer tokens for connecting
 /// Seedkeep to Claude Desktop / claude.ai.
 ///
@@ -139,7 +141,7 @@ struct MCPSettingsView: View {
                 .font(HerbFont.display(size: 22))
                 .foregroundStyle(HerbColor.ink)
                 .multilineTextAlignment(.center)
-            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+            Text(AIAssistantCoordinator.capabilityUnavailableMessage)
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
                 .multilineTextAlignment(.center)
@@ -228,7 +230,7 @@ struct MCPSettingsView: View {
 
     private func refresh() async {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
-            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            errorMessage = AIAssistantCoordinator.capabilityUnavailableMessage
             return
         }
         loading = true
@@ -245,7 +247,7 @@ struct MCPSettingsView: View {
 
     private func create() async {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
-            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            errorMessage = AIAssistantCoordinator.capabilityUnavailableMessage
             return
         }
         creating = true
@@ -266,7 +268,7 @@ struct MCPSettingsView: View {
 
     private func revoke(at offsets: IndexSet) {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
-            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            errorMessage = AIAssistantCoordinator.capabilityUnavailableMessage
             return
         }
         let targets = offsets.map { tokens[$0] }
@@ -289,7 +291,7 @@ struct MCPSettingsView: View {
 
     private func pairBrowser() async {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
-            errorMessage = FeatureFlags.cloudKitGardenCapabilityMessage
+            errorMessage = AIAssistantCoordinator.capabilityUnavailableMessage
             return
         }
         generatingPair = true

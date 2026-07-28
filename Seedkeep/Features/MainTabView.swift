@@ -3,9 +3,12 @@ import SeedkeepKit
 
 /// Five-tab root: Today / Library / Garden / Journal / You. Today (Diurnalis)
 /// is the default landing — a daily dashboard with sun arc + sowing queue +
-/// recent journal margin note. Sprout (the BYOK AI assistant) is reachable
-/// via the bottom-right FAB (new thread) or You → Sprout (past conversations).
-/// Settings lives under You → Settings.
+/// recent journal margin note. Settings lives under You → Settings.
+///
+/// Sprout (the BYOK AI assistant) and Claude/MCP connections have no entry
+/// point as of the 2026-07-27 V1 plan's removal of "temporarily unavailable"
+/// surfaces — the FAB, the overlay sheet, and the You → Sprout link are gone.
+/// The implementation and its unreferenced views remain for a 1.1 re-wire.
 struct MainTabView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @State private var selection: AppEnvironment.AppTab = .today

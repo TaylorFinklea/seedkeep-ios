@@ -119,7 +119,6 @@ struct GardenView: View {
             .refreshable {
                 await appEnv.syncIfPossible()
             }
-            .overlay(alignment: .bottomTrailing) { SproutFAB() }
         }
     }
 

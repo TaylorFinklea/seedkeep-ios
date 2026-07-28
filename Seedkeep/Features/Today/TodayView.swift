@@ -58,7 +58,6 @@ struct TodayView: View {
                         showHomeLocationSheet: $showHomeLocationSheet
                     )
                 }
-                .overlay(alignment: .bottomTrailing) { SproutFAB() }
             }
             .navigationTitle("")
             .publishesAssistantContext(pageType: "today")

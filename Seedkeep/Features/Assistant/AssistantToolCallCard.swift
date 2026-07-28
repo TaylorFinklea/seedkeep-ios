@@ -1,5 +1,7 @@
 import SwiftUI
 
+// Intentionally unwired for 1.0 — no entry point reaches this view; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// Inline tool-call card rendered within an assistant message bubble.
 /// Renders status (running/done/failed/cancelled/proposed). The proposed
 /// variant pops a confirm/cancel card with a Was→Becomes description.

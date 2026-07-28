@@ -112,7 +112,7 @@ struct CloudKitPendingWriteRegressionTests {
         #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty,
                 "CloudKit mode must not ask the server for assistant capability")
         #expect(coordinator.keyConfigured == false)
-        #expect(coordinator.keyCheckError == FeatureFlags.cloudKitGardenCapabilityMessage)
+        #expect(coordinator.keyCheckError == AIAssistantCoordinator.capabilityUnavailableMessage)
     }
 
     @Test("CloudKit mode skips the background assistant thread feed")
@@ -571,7 +571,7 @@ struct CloudKitPendingWriteRegressionTests {
             Issue.record("CloudKit-gated assistant operation unexpectedly succeeded")
         } catch let error as SeedkeepError {
             #expect(error.code == "cloudkit_feature_unavailable")
-            #expect(error.message == FeatureFlags.cloudKitGardenCapabilityMessage)
+            #expect(error.message == AIAssistantCoordinator.capabilityUnavailableMessage)
         } catch {
             Issue.record("Unexpected gate error: \(error)")
         }

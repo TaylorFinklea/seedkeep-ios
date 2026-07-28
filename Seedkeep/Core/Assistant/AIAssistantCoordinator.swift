@@ -40,6 +40,15 @@ final class AIAssistantCoordinator {
     private(set) var keyConfigured: Bool = false
     private(set) var keyCheckError: String?
 
+    /// Message for the `serverGardenFeaturesRestricted` guard below. No UI
+    /// entry point reaches this after the 2026-07-27 V1 Sprout unwiring —
+    /// kept as a concrete error for 1.1 if a caller is re-wired before
+    /// Sprout's CloudKit-aware bridge ships. Replaces the former
+    /// `FeatureFlags.cloudKitGardenCapabilityMessage`, removed with the rest
+    /// of the "temporarily unavailable" surfaces.
+    static let capabilityUnavailableMessage =
+        "Sprout and Claude/MCP connections are temporarily unavailable while CloudKit garden sync is active. Your shared garden stays on iCloud; these server-backed tools will return with a CloudKit-aware bridge."
+
     enum StreamingState: Equatable {
         case idle
         case streaming(messageID: String)
@@ -86,7 +95,7 @@ final class AIAssistantCoordinator {
     func refreshKeyStatus() async {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
             keyConfigured = false
-            keyCheckError = FeatureFlags.cloudKitGardenCapabilityMessage
+            keyCheckError = Self.capabilityUnavailableMessage
             return
         }
         do {
@@ -264,7 +273,7 @@ final class AIAssistantCoordinator {
         guard !FeatureFlags.serverGardenFeaturesRestricted else {
             throw SeedkeepError(
                 code: "cloudkit_feature_unavailable",
-                message: FeatureFlags.cloudKitGardenCapabilityMessage
+                message: Self.capabilityUnavailableMessage
             )
         }
     }

@@ -34,11 +34,6 @@ struct SettingsContent: View {
         .font(.footnote)
     }
 
-    /// New preference: hide the bottom-right Sprout FAB on every primary
-    /// page. The FAB is the popup-assistant entry point; users who don't
-    /// use Sprout can reclaim that corner.
-    @AppStorage("seedkeep.sparkleOnEveryPage") private var sparkleOnEveryPage: Bool = true
-
     var body: some View {
         ZStack {
             VellumBackground()
@@ -83,38 +78,6 @@ struct SettingsContent: View {
                     }
                 } header: {
                     Rubric(text: "garden")
-                }
-
-                if FeatureFlags.serverGardenFeaturesRestricted {
-                    Section {
-                        Text(FeatureFlags.cloudKitGardenCapabilityMessage)
-                            .font(HerbFont.bodyItalic(size: 12))
-                            .foregroundStyle(HerbColor.inkSoft)
-                    } header: {
-                        Rubric(text: "sprout · temporarily unavailable")
-                    }
-                } else {
-                    Section {
-                        NavigationLink {
-                            AssistantKeySettingsView()
-                        } label: {
-                            Label("AI assistant key", systemImage: "sparkles")
-                        }
-                        NavigationLink {
-                            MCPSettingsView()
-                        } label: {
-                            Label("Connect Claude / MCP", systemImage: "link")
-                        }
-                        Toggle(isOn: $sparkleOnEveryPage) {
-                            Label("Sparkle on every page", systemImage: "wand.and.stars")
-                        }
-                    } header: {
-                        Rubric(text: "sprout · the scribe")
-                    } footer: {
-                        Text("When on, a sparkle button sits in the bottom-right of every primary page and opens Sprout with the current page's context attached.")
-                            .font(HerbFont.bodyItalic(size: 11))
-                            .foregroundStyle(HerbColor.inkSoft)
-                    }
                 }
 
                 Section {
@@ -212,27 +175,6 @@ struct SettingsContent: View {
                             .font(.footnote)
                             .foregroundStyle(HerbColor.rose)
                     }
-                    // The legacy server write-queue is only meaningful on the server path — when the
-                    // CloudKit flag is ON those rows never flush (and a manual flush would push them to
-                    // the server, re-introducing a second writer), so hide the entry to avoid a fake
-                    // backlog + footgun.
-                    if !FeatureFlags.cloudKitHouseholdSyncEnabled {
-                        NavigationLink {
-                            PendingWritesView()
-                        } label: {
-                            Label("Pending writes", systemImage: "tray.full")
-                        }
-                    }
-                    Toggle(isOn: Binding(
-                        get: { FeatureFlags.cloudKitHouseholdSyncEnabled },
-                        set: { FeatureFlags.setCloudKitHouseholdSync($0) }
-                    )) {
-                        Label("CloudKit sync (beta)", systemImage: "icloud")
-                    }
-                    Text("Experimental — syncs your garden across your devices via iCloud instead of the server. Both devices must use the same iCloud account. Tap “Sync now” after toggling.")
-                        .font(.footnote)
-                        .foregroundStyle(HerbColor.inkFaint)
-
                     if FeatureFlags.cloudKitHouseholdSyncEnabled {
                         // Visible CloudKit status so the beta test isn't blind.
                         Button {

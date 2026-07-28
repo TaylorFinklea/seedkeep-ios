@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
 
+// Intentionally unwired for 1.0 — no entry point reaches this view; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// Popup-sheet host for Sprout. Mounted by `SproutAssistantOverlay` at the
 /// root and presented when `AIAssistantCoordinator.isSheetPresented` flips
 /// true (triggered by the bottom-right `SproutFAB`).

@@ -134,7 +134,6 @@ struct RootView: View {
                         // failed re-deposits the metadata; foregrounding retries it without a relaunch).
                         Task { await appEnv.processPendingShare(); await appEnv.syncIfPossible() }
                     }
-                    .overlay { SproutAssistantOverlay() }
                     .sheet(item: $whatsNewRelease) { release in
                         WhatsNewSheet(initialRelease: release)
                     }

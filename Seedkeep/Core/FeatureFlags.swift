@@ -18,11 +18,13 @@ enum FeatureFlags {
     /// `SeedkeepCloudKit` `CKSyncEngine` shared zone (+ CKShare households) instead of the
     /// legacy server `SyncEngine` feeds. **OFF by default — additive, ships nothing.**
     ///
-    /// Runtime-toggleable via UserDefaults (NOT a compile-time constant) so a TestFlight build can
-    /// opt in ON-DEVICE (Settings ▸ Sync ▸ "CloudKit sync (beta)") without a new build, with an
-    /// instant kill-switch. The test-only compilation condition used by the release gate lets the
-    /// suite run both the legacy OFF lane and the shipping default-ON lane without changing release
-    /// behavior.
+    /// Runtime-toggleable via UserDefaults (NOT a compile-time constant), with an instant
+    /// kill-switch. As of the 2026-07-27 V1 plan there is no user-facing Settings control for
+    /// this — it defaults ON in shipping builds and is flipped only as an internal recovery
+    /// affordance (debug build or support gesture), since off drops the user to legacy server
+    /// sync with no working escape hatch once Phase 2 lands. The test-only compilation
+    /// condition used by the release gate lets the suite run both the legacy OFF lane and the
+    /// shipping default-ON lane without changing release behavior.
     /// When ON, `SyncEngine.syncAll` skips the 7 household feeds + flushPending (else double-sync);
     /// `catalogCorrections` (R3) stays on the server; assistant threads are gated with Sprout while
     /// CloudKit is active. See the 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
@@ -47,11 +49,6 @@ enum FeatureFlags {
     static func setCloudKitHouseholdSync(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)
     }
-
-    /// R1 capability copy for server-backed garden features that cannot yet
-    /// address the active CloudKit household.
-    static let cloudKitGardenCapabilityMessage =
-        "Sprout and Claude/MCP connections are temporarily unavailable while CloudKit garden sync is active. Your shared garden stays on iCloud; these server-backed tools will return with a CloudKit-aware bridge."
 
     /// Temporary R1 limit for server-backed photo bytes. CloudKit mirrors photo metadata and
     /// preserves the existing server objects, but the server photo APIs cannot address the active

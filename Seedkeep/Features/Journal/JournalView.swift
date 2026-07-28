@@ -129,7 +129,6 @@ struct JournalView: View {
             .task {
                 await refresh()
             }
-            .overlay(alignment: .bottomTrailing) { SproutFAB() }
         }
     }
 

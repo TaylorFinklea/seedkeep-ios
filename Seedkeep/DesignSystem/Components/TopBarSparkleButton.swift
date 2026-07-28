@@ -1,5 +1,8 @@
 import SwiftUI
 
+// Intentionally unwired for 1.0 — no toolbar mounts this (it had zero call
+// sites even before this pass); see the 2026-07-27 V1 plan's Sprout/MCP
+// removal.
 /// Toolbar button that opens Sprout in a fresh thread, with the current
 /// page's context pre-attached. Place in a `.toolbar { ToolbarItem(...) }`
 /// on any primary view (Library, Garden, SeedDetail, BedDetail, etc.).

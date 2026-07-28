@@ -1,10 +1,14 @@
 name: Seedkeep
 options:
   deploymentTarget:
-    # iOS 18.1 floor lets us link FoundationModels (iOS 26+ at runtime,
-    # availability-gated) without dropping pre-26 devices entirely. Older
-    # devices fall through to manual entry or the Hosted (server) tier.
-    iOS: "18.1"
+    # iOS 26 floor: ship only what we actually verify. The 18.1 floor was never
+    # exercised anywhere — CI runs latest-stable (iOS 26), both test devices run
+    # iOS 26, and no iOS 18 simulator runtime is installed — so it asserted
+    # support we had zero evidence for. Raised for 1.0 (decisions.md 2026-07-27).
+    # Side effect: FoundationModels is now unconditionally available, so every
+    # Free-tier user gets on-device extraction and the OCR-only fallback path
+    # is unreachable.
+    iOS: "26.0"
   developmentLanguage: en
   groupSortPosition: top
   generateEmptyDirectories: true

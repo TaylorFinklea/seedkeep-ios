@@ -1,5 +1,7 @@
 import SwiftUI
 
+// Intentionally unwired for 1.0 — no page mounts this anymore; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// Floating action button mounted bottom-right of every primary page.
 /// Opens Sprout in a fresh thread with the current page's context
 /// pre-attached (read from `AIAssistantCoordinator.pageContext`, which

@@ -55,7 +55,6 @@ struct LibraryView: View {
                 .refreshable {
                     await appEnv.syncIfPossible()
                 }
-                .overlay(alignment: .bottomTrailing) { SproutFAB() }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)

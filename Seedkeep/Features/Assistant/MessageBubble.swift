@@ -1,5 +1,7 @@
 import SwiftUI
 
+// Intentionally unwired for 1.0 — no entry point reaches this view; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// One message in the assistant thread. Renders the text content and any
 /// inline tool-call cards. Herbarium styling — small-caps role tag
 /// ("— the gardener" / "Sprout ✦") above each bubble, vellum paper

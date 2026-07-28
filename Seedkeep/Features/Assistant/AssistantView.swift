@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
 
+// Intentionally unwired for 1.0 — no entry point reaches this view; see the
+// 2026-07-27 V1 plan's Sprout/MCP removal.
 /// Top-level Assistant tab. Shows a list of threads or starter prompts +
 /// a "+" button. Empty state when the user hasn't configured their key.
 struct AssistantView: View {
@@ -117,7 +119,7 @@ struct AssistantView: View {
                 .font(HerbFont.display(size: 22))
                 .foregroundStyle(HerbColor.ink)
                 .multilineTextAlignment(.center)
-            Text(FeatureFlags.cloudKitGardenCapabilityMessage)
+            Text(AIAssistantCoordinator.capabilityUnavailableMessage)
                 .font(HerbFont.bodyItalic(size: 12))
                 .foregroundStyle(HerbColor.inkSoft)
                 .multilineTextAlignment(.center)
