@@ -314,8 +314,11 @@ struct JournalEntryView: View {
         for item in items {
             do {
                 guard let rawData = try await item.loadTransferable(type: Data.self) else { continue }
-                // Resize off main actor (same idiom as ScanFlow).
-                let jpegData = await Self.resizedJPEG(rawData, maxDimension: 2048, quality: 0.85) ?? rawData
+                // Resize off main actor (same idiom as ScanFlow). Photo path: resize failure means
+                // "photo not created" (D6) — never fall back to uploading the original.
+                let jpegData = try await Task.detached(priority: .userInitiated) {
+                    try PhotoResizer.resizedPhotoJPEG(rawData)
+                }.value
                 // Decode width/height for the server's optional X-Photo-* headers.
                 let (width, height) = await Self.imageDimensions(jpegData)
                 let dto = try await appEnv.sync.uploadJournalPhoto(
@@ -339,30 +342,6 @@ struct JournalEntryView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-
-    /// Resize a JPEG/PNG/HEIC to fit within `maxDimension` (longer side) and
-    /// re-encode as JPEG at the given quality. Returns nil on failure.
-    /// Copied from ScanFlow.swift — keeping a local copy here so the journal
-    /// flow doesn't accidentally regress if the scan flow's helper changes.
-    nonisolated private static func resizedJPEG(
-        _ data: Data, maxDimension: CGFloat, quality: CGFloat
-    ) async -> Data? {
-        return await Task.detached(priority: .userInitiated) { () -> Data? in
-            guard let source = UIImage(data: data) else { return nil }
-            let size = source.size
-            let longest = max(size.width, size.height)
-            if longest <= maxDimension {
-                return source.jpegData(compressionQuality: quality)
-            }
-            let scale = maxDimension / longest
-            let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-            let renderer = UIGraphicsImageRenderer(size: newSize)
-            let resized = renderer.image { _ in
-                source.draw(in: CGRect(origin: .zero, size: newSize))
-            }
-            return resized.jpegData(compressionQuality: quality)
-        }.value
     }
 
     /// Decode pixel dimensions from JPEG bytes — used to populate the

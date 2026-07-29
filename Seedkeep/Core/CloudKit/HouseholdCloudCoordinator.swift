@@ -387,7 +387,7 @@ final class HouseholdCloudCoordinator {
             updates[value.recordName] = SyncedRecordState(clock: clock, tombstoned: (record["deletedAt"] as? Int) != nil)
         }
         for id in dels {
-            HouseholdApplyGate.deleteLocal(recordName: id.recordName, into: context)
+            HouseholdApplyGate.deleteLocal(recordName: id.recordName, householdID: householdID, into: context)
             appliedSinceLastPush.insert(id.recordName)
             removals.insert(id.recordName)   // S7 — clear the entry; nothing local left to compare against
         }
@@ -455,7 +455,7 @@ final class HouseholdCloudCoordinator {
         guard isCurrent(passEpoch) else { return }
         if !deletionIntents.isEmpty {
             for intent in deletionIntents {
-                HouseholdApplyGate.deleteLocal(recordName: intent.recordName, into: context)
+                HouseholdApplyGate.deleteLocal(recordName: intent.recordName, householdID: householdID, into: context)
                 context.delete(intent)
             }
             try context.save()
@@ -554,6 +554,14 @@ final class HouseholdCloudCoordinator {
             )
             for intent in intents { context.delete(intent) }
             try context.save()
+            // AC5 — a PRIVACY requirement: another household's photo bytes must not survive an
+            // account switch. `householdID` identifies the same garden regardless of owner vs
+            // participant role (the participant factory derives it from the shared zone's name —
+            // see `Self.participant`), so purging under it here also covers the CKShare
+            // adopt/leave paths (`AppEnvironment.bootParticipant` / `leaveSharedHousehold`), which
+            // both route through this same function. THROWS into the existing wipe-retry
+            // machinery below rather than silently leaving bytes behind on failure.
+            try PhotoByteStore.purgeHousehold(householdID)
             if let stateURL { try Self.removeItemIfPresent(at: stateURL) }
             try Self.removeItemIfPresent(at: syncedStateURL)
             if let cleanupMarkerURL { try Self.removeItemIfPresent(at: cleanupMarkerURL) }
@@ -675,11 +683,15 @@ final class HouseholdCloudCoordinator {
     /// the marker is otherwise env-agnostic, so a switched device would skip migration and its data
     /// would never reach the empty Production zone (silent divergence). The old env-agnostic
     /// keys/tokens are left as harmless orphans.
-    static let cloudKitEnvironmentTag = "production"
+    nonisolated static let cloudKitEnvironmentTag = "production"
 
     // MARK: - Durable engine-state token paths (single source of truth for the factories + the
     // adopt/leave token resets — a full re-fetch repopulates wiped SwiftData).
-    private static func householdSyncDir() -> URL {
+    /// `nonisolated` (pure Foundation path/mkdir logic, safe off the main actor) and not `private`
+    /// so `PhotoByteStore` (Photos-on-CloudKit Stage B) can derive its own namespaced
+    /// subdirectories from the SAME root without duplicating this derivation — see
+    /// `PhotoByteStore.rootDirectory`. "Do not invent a new location scheme."
+    nonisolated static func householdSyncDir() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("HouseholdSync", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

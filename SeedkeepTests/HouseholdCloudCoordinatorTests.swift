@@ -581,6 +581,35 @@ struct HouseholdCloudCoordinatorTests {
         #expect(fetchSeed(ModelContext(container), "s1") == nil, "deletion must remove the local row")
     }
 
+    // Photos-on-CloudKit Stage B — HouseholdApplyGate.deleteLocal's .seedPhoto/.journalEntryPhoto
+    // arms purge cached bytes, not just the SwiftData row. A remote delete landing here is exactly
+    // the moment the bytes stop being wanted; leaving them behind would orphan disk space forever.
+    @Test("a CloudKit deletion of a seedPhoto also purges its cached bytes")
+    func seedPhotoDeletionPurgesCachedBytes() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        let setup = ModelContext(container)
+        setup.insert(LocalSeedPhoto(
+            id: "p1", seedID: "s1", householdID: hid, r2Key: "", role: .front, capturedAt: 1))
+        try setup.save()
+
+        let recordName = SeedkeepRecordNames.seedPhoto("p1")
+        let cache = PhotoByteStore(lifetime: .cache, householdID: hid)
+        let ref = try cache.write(Data("cached-photo-bytes".utf8), for: recordName)
+        #expect(FileManager.default.fileExists(atPath: ref.url.path))
+
+        let delID = CKRecord.ID(recordName: recordName, zoneID: zoneID(hid))
+        engine.pendingFetch = ([], [delID])
+        await coordinator.sync()
+
+        #expect((try? ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>()))?.isEmpty == true)
+        #expect(!FileManager.default.fileExists(atPath: ref.url.path),
+                "a remote photo delete must purge the cached bytes, not just the SwiftData row")
+    }
+
     // MARK: - Watermark push + echo exclusion
 
     @Test("pushDirty stages a local edit newer than the watermark")
@@ -1533,5 +1562,31 @@ struct HouseholdCloudCoordinatorTests {
         coordinator.handleAccountChange(.signOut)
         #expect(FileManager.default.fileExists(atPath: url.path) == false,
                 "wipeAndClear must remove the durable synced-state file")
+    }
+
+    // Photos-on-CloudKit Stage B / AC5 — a PRIVACY requirement: another household's photo bytes
+    // must not survive an account switch. `wipeAndClear` is the shared implementation behind
+    // handleAccountChange AND the CKShare adopt/leave paths, so covering it here covers all three.
+    @Test("wipeAndClear purges this household's photo byte store across all three lifetimes")
+    func wipeRemovesPhotoBytes() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+
+        var refs: [PhotoByteStore.Ref] = []
+        for lifetime in PhotoByteStore.Lifetime.allCases {
+            let store = PhotoByteStore(lifetime: lifetime, householdID: hid)
+            refs.append(try store.write(Data("bytes-\(lifetime.rawValue)".utf8), for: "seedPhoto:p1"))
+        }
+        for ref in refs { #expect(FileManager.default.fileExists(atPath: ref.url.path)) }
+
+        coordinator.handleAccountChange(.signOut)
+
+        for ref in refs {
+            #expect(!FileManager.default.fileExists(atPath: ref.url.path),
+                    "wipeAndClear must purge every lifetime's bytes for this household on account switch")
+        }
     }
 }

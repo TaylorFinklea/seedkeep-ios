@@ -130,7 +130,9 @@ struct ScanFlow: View {
         // MainActor.
         let phaseBeforeResize = phase
         Task.detached(priority: .userInitiated) {
-            let resized = Self.resizedJPEG(data, maxDimension: 2048, quality: 0.75) ?? data
+            // Scan bytes are transient extraction input, never a stored photo — falling back to
+            // the original on a decode failure is intentional here (see PhotoResizer.scan).
+            let resized = PhotoResizer.resizedJPEG(data, budget: PhotoResizer.scan) ?? data
             await self.applyResizedPhoto(resized, phaseAtCapture: phaseBeforeResize)
         }
     }
@@ -154,58 +156,6 @@ struct ScanFlow: View {
         default:
             break
         }
-    }
-
-    /// Resize + recompress an oversize JPEG. Returns nil only if UIImage
-    /// can't decode the bytes (e.g. corrupted capture); callers fall back
-    /// to the original Data in that case.
-    ///
-    /// Guarantees the returned bytes are ≤ `targetBytes` by progressively
-    /// dropping JPEG quality if the first pass overruns. Anthropic's
-    /// vision API caps at 5 MB on the base64-encoded form, so a raw cap
-    /// of 4 MB leaves headroom for the ~33% base64 inflation.
-    ///
-    /// `nonisolated` so the resize can run on a detached background task
-    /// — UIImage/UIGraphicsImageRenderer are safe off main, and the
-    /// MainActor isolation inherited from `View` would otherwise force
-    /// this multi-second sync work back onto the main thread.
-    nonisolated private static func resizedJPEG(
-        _ data: Data,
-        maxDimension: CGFloat,
-        quality: CGFloat,
-        targetBytes: Int = 4 * 1024 * 1024
-    ) -> Data? {
-        guard let image = UIImage(data: data) else { return nil }
-        let size = image.size
-        let longest = max(size.width, size.height)
-
-        // Critical: format.scale = 1 forces the renderer to emit a real
-        // pixel-for-pixel bitmap at our requested CGSize. The default is
-        // UIScreen.main.scale (2.0 or 3.0), which silently inflates a
-        // "2048-point" output to 4096 or 6144 actual pixels.
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0
-        format.opaque = true
-
-        let drawSize: CGSize = {
-            if longest <= maxDimension { return size }
-            let scale = maxDimension / longest
-            return CGSize(width: size.width * scale, height: size.height * scale)
-        }()
-
-        let scaled = UIGraphicsImageRenderer(size: drawSize, format: format).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: drawSize))
-        }
-
-        // Progressive quality fallback: rare but possible that an image
-        // with a lot of fine detail still busts the budget at the first
-        // chosen quality. Try descending steps before giving up.
-        for q in [quality, 0.6, 0.5, 0.4, 0.3] as [CGFloat] {
-            guard let encoded = scaled.jpegData(compressionQuality: q) else { continue }
-            if encoded.count <= targetBytes { return encoded }
-        }
-        // Last resort: return the smallest one we got, even if it's over.
-        return scaled.jpegData(compressionQuality: 0.3)
     }
 
     /// Run base64 encoding for both photos on a detached background task

@@ -41,7 +41,14 @@ enum HouseholdApplyGate {
 
     /// Hard-delete the local model addressed by a fetched CloudKit deletion `recordName`
     /// ("seed:s1" → LocalSeed id "s1"). Infrastructure records (household/migrated) are ignored.
-    static func deleteLocal(recordName: String, into context: ModelContext) {
+    ///
+    /// `householdID` scopes the photo byte-store purge on the `.seedPhoto` / `.journalEntryPhoto`
+    /// arms (Photos-on-CloudKit Stage B) — a delete landing from CloudKit (or the local cascade)
+    /// must not leave orphaned PendingUploads/PhotoCache bytes behind for a row that no longer
+    /// exists. Best-effort (`PhotoByteStore.purgeRecord` swallows its own failures): this is a
+    /// disk-space cleanup, not the AC5 cross-household privacy purge (`wipeAndClear`), so it must
+    /// not turn a routine per-record delete loop into one that can fail mid-batch.
+    static func deleteLocal(recordName: String, householdID: String, into context: ModelContext) {
         guard let slug = recordName.split(separator: ":", maxSplits: 1).first.map(String.init),
               let type = SeedkeepRecordType(rawValue: slug) else { return }
         let id = SeedkeepRecordNames.rawID(recordName)
@@ -49,11 +56,15 @@ enum HouseholdApplyGate {
         case .seed:                 delete(LocalSeed.self, id, context)
         case .location:             delete(LocalLocation.self, id, context)
         case .tag:                  delete(LocalTag.self, id, context)
-        case .seedPhoto:            delete(LocalSeedPhoto.self, id, context)
+        case .seedPhoto:
+            delete(LocalSeedPhoto.self, id, context)
+            PhotoByteStore.purgeRecord(recordName, householdID: householdID)
         case .bed:                  delete(LocalBed.self, id, context)
         case .plantingEvent:        delete(LocalPlantingEvent.self, id, context)
         case .journalEntry:         delete(LocalJournalEntry.self, id, context)
-        case .journalEntryPhoto:    delete(LocalJournalEntryPhoto.self, id, context)
+        case .journalEntryPhoto:
+            delete(LocalJournalEntryPhoto.self, id, context)
+            PhotoByteStore.purgeRecord(recordName, householdID: householdID)
         case .journalChecklistItem: delete(LocalJournalChecklistItem.self, id, context)
         case .petDeparture:
             // Keyed on plantingEventID (recordName "petDeparture:<plantingEventID>").

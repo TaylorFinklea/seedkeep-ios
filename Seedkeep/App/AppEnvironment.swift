@@ -651,6 +651,14 @@ public final class AppEnvironment {
         if let failure = coordinator.lastHumanizedError {
             throw TransferredGardenCutover.Failure.destinationSyncIncomplete(message: failure)
         }
+        // Photos-on-CloudKit D6 — TransferWorkspace is durable through destination save AND
+        // verification, then deleted. This device just confirmed the destination synced clean, so
+        // any bytes staged here for THIS household (by a prior attempt, or by whichever device ran
+        // the transfer copy) are no longer needed. Best-effort: a miss here is an orphaned
+        // directory, not a correctness/privacy issue on its own. PendingUploads/PhotoCache are
+        // deliberately left untouched — `householdID` is the SAME garden this device may already
+        // have cached photos for as a participant, and those bytes remain valid under ownership.
+        try? PhotoByteStore(lifetime: .transferWorkspace, householdID: householdID).removeAll()
     }
 
     /// Leave the shared household: clear the marker + wipe the shared local data + drop the participant
