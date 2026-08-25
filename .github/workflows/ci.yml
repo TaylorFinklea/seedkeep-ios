@@ -6,14 +6,65 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
+  cloudkit-schema:
+    name: CloudKit Schema Parity
+    if: ${{ github.actor != 'dependabot[bot]' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact iOS revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: seedkeep-ios
+          persist-credentials: false
+
+      - name: Require immutable Seedkeep revision
+        working-directory: seedkeep-ios
+        env:
+          SEEDKEEP_SCHEMA_REF: ${{ vars.SEEDKEEP_SCHEMA_REF }}
+        run: bash scripts/require-immutable-git-sha.sh "$SEEDKEEP_SCHEMA_REF" SEEDKEEP_SCHEMA_REF
+
+      - name: Checkout exact private Seedkeep revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: TaylorFinklea/seedkeep
+          ref: ${{ vars.SEEDKEEP_SCHEMA_REF }}
+          ssh-key: ${{ secrets.SEEDKEEP_UMBRELLA_DEPLOY_KEY }}
+          path: seedkeep
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/cloudkit-schema
+            .docs/ai/cloudkit/seedkeep-schema.ckdb
+          sparse-checkout-cone-mode: false
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: latest-stable
+
+      - name: Record paired revisions
+        env:
+          SEEDKEEP_SCHEMA_REF: ${{ vars.SEEDKEEP_SCHEMA_REF }}
+        run: |
+          printf 'seedkeep-ios: `%s`\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'seedkeep: `%s`\n' "$SEEDKEEP_SCHEMA_REF" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check CloudKit schema parity
+        run: bash seedkeep/scripts/cloudkit-schema check --ios-root "$GITHUB_WORKSPACE/seedkeep-ios"
+
   test:
     name: Build & Test
     runs-on: macos-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # Use the runner image's newest STABLE Xcode. Pinning a specific version
       # (e.g. 16.2) is fragile: setup-xcode switches the active toolchain, but a
@@ -22,7 +73,7 @@ jobs:
       # Simulator destination. latest-stable always pairs with an installed
       # runtime, and the app (iOS 18.1+ deployment) builds on any recent Xcode.
       - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
           xcode-version: latest-stable
 

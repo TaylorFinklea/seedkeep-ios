@@ -18,12 +18,22 @@ let package = Package(
             name: "SeedkeepCloudKit",
             targets: ["SeedkeepCloudKit"]
         ),
+        .executable(
+            name: "seedkeep-schema",
+            targets: ["SeedkeepSchemaTool"]
+        ),
     ],
     targets: [
         // Swift 5 mode: CKSyncEngine/CKRecord predate strict-concurrency.
         .target(
             name: "SeedkeepCloudKit",
             path: "Sources/SeedkeepCloudKit",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
+            name: "SeedkeepSchemaTool",
+            dependencies: ["SeedkeepCloudKit"],
+            path: "Sources/SeedkeepSchemaTool",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
