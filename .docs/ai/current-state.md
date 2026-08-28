@@ -2,7 +2,7 @@
 
 ## Branch
 
-`main` — M2 exact 1.0.0 build 53 uploaded once, processed VALID; `origin/main` `ac51380`.
+`main` — M2 build 53 VALID; `origin/main` `87afb67`, frozen source `ac51380`; journal QA blocked.
 
 ## Plan
 
@@ -15,4 +15,4 @@
 - [ ] Final native + GLM 5.2 review; publish M2 evidence and stop before M3.
 
 ## Blockers
-- No second account/physical device; unsafe pre-existing data blocks destructive QA; build 54/M3 excluded.
+- `seedkeep-27d.32.1`: Aug 28 entry renders Aug 27 in journal index; build 54/M3 remain unauthorized.
