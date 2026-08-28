@@ -15,4 +15,4 @@
 - [ ] Final native + roster different-family review; publish M2 evidence and stop before M3.
 
 ## Blockers
-- None. Build 54 authority is limited by umbrella recovery spec; build 55/M3 unauthorized.
+- iPhone 17 Apple Account needs local password reauth; M2 QA resumes after user confirms Done.
