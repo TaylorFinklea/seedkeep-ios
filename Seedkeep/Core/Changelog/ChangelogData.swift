@@ -53,6 +53,22 @@ enum ChangelogData {
     static let releases: [ChangelogRelease] = [
         ChangelogRelease(
             version: "1.0.0",
+            build: 54,
+            date: nil,
+            headline: "Photos, faster sync, and journal fixes",
+            changes: [
+                ChangelogChange(category: .improved,
+                    text: "Seed and journal photos are back in iCloud gardens, including shared gardens. If a photo needs attention, you can retry it directly."),
+                ChangelogChange(category: .improved,
+                    text: "Journal entries and checklist changes now sync sooner between your devices."),
+                ChangelogChange(category: .fixed,
+                    text: "Today in your garden now handles leap-day dates correctly."),
+                ChangelogChange(category: .fixed,
+                    text: "Journal entries now keep their selected date in the Daybook in every time zone."),
+            ]
+        ),
+        ChangelogRelease(
+            version: "1.0.0",
             build: 53,
             date: nil,
             headline: "Photos and faster garden sync",

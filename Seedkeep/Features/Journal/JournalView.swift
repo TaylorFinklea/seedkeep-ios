@@ -1,6 +1,52 @@
 import SwiftUI
 import SwiftData
 
+enum JournalDatePresentation {
+    static func parts(
+        for ymd: String,
+        timeZone: TimeZone
+    ) -> (monthAbbrev: String, day: Int, yearRoman: String) {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = timeZone
+        guard let date = parser.date(from: ymd) else { return ("MAY", 1, "MMXXVI") }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let components = calendar.dateComponents([.day, .year], from: date)
+
+        let monthFormatter = DateFormatter()
+        monthFormatter.dateFormat = "MMM"
+        monthFormatter.locale = Locale(identifier: "en_US_POSIX")
+        monthFormatter.timeZone = timeZone
+        return (
+            monthFormatter.string(from: date).uppercased(with: Locale(identifier: "en_US_POSIX")),
+            components.day ?? 1,
+            HerbRomanNumeral.string(for: components.year ?? 2026, lowercase: false)
+        )
+    }
+
+    static func accessibleDate(
+        for ymd: String,
+        timeZone: TimeZone,
+        locale: Locale = .current
+    ) -> String {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = timeZone
+        guard let date = parser.date(from: ymd) else { return ymd }
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        return formatter.string(from: date)
+    }
+}
+
 /// Top-level Journal tab. Read-only feed of `LocalJournalEntry` rows
 /// reverse-sorted by `occurredOn`. Pull-to-refresh hits the server feed
 /// via `JournalStore.refresh()`. Rows + the toolbar "+" both push into
@@ -192,20 +238,12 @@ struct JournalView: View {
     }
 
     private func accessibleDateString(ymd: String) -> String {
-        let parser = DateFormatter()
-        parser.dateFormat = "yyyy-MM-dd"
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        parser.timeZone = TimeZone(secondsFromGMT: 0)
-        guard let date = parser.date(from: ymd) else { return ymd }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .long
-        formatter.timeStyle = .none
-        return formatter.string(from: date)
+        JournalDatePresentation.accessibleDate(for: ymd, timeZone: .current)
     }
 
     @ViewBuilder
     private func dateRoundel(ymd: String) -> some View {
-        let parts = parseYMD(ymd)
+        let parts = JournalDatePresentation.parts(for: ymd, timeZone: .current)
         VStack(spacing: 1) {
             Text(parts.monthAbbrev)
                 .font(HerbFont.smallCaps(size: 8))
@@ -222,21 +260,4 @@ struct JournalView: View {
         }
     }
 
-    private func parseYMD(_ ymd: String) -> (monthAbbrev: String, day: Int, yearRoman: String) {
-        let parser = DateFormatter()
-        parser.dateFormat = "yyyy-MM-dd"
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        parser.timeZone = TimeZone(secondsFromGMT: 0)
-        guard let date = parser.date(from: ymd) else { return ("MAY", 1, "MMXXVI") }
-        let cal = Calendar(identifier: .gregorian)
-        let comps = cal.dateComponents([.day, .month, .year], from: date)
-        let f = DateFormatter()
-        f.dateFormat = "MMM"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return (
-            f.string(from: date),
-            comps.day ?? 1,
-            HerbRomanNumeral.string(for: comps.year ?? 2026, lowercase: false)
-        )
-    }
 }

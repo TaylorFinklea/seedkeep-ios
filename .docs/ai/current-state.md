@@ -2,17 +2,17 @@
 
 ## Branch
 
-`main` — M2 build 53 VALID; `origin/main` `87afb67`, frozen source `ac51380`; journal QA blocked.
+`main` — build 53 VALID but rejected by journal-date QA; build 54 replacement approved.
 
 ## Plan
 
-- [x] M1 prerequisites: paired-revision CI, additive Production CKAsset schema, and live site accepted.
-- [x] Candidate scope: Photos CKAsset sync/UI/retry/transfer, account-deletion hardening, leap-day fix, APNs removal, release auth/count/Xcode/major-version gates, 1.0.0 changelog.
-- [x] Candidate audit + pre-upload Sol review; all blocker repairs re-reviewed ready.
-- [x] Fail-closed signed-archive guard + release regressions; gates green: Kit 97, CloudKit 148, iOS 760/789 executions, Production-default 1; zero failures/skips.
-- [x] Freeze/commit/push source; run `scripts/release.sh --major` once; push 1.0.0/53 bump; TestFlight processed VALID.
-- [ ] Production single-account simulator QA + same-account convergence; validated screenshot sets.
-- [ ] Final native + GLM 5.2 review; publish M2 evidence and stop before M3.
+- [x] Build 53 frozen/uploaded once + VALID; Production QA found `2026-08-28` → `AUG 27`.
+- [x] TDD repair; focused 2/2 + gates 97/148/762+1 green; exact plan 1.0.0/53→54.
+- [x] Native Sol/max pre-upload review ready; exact 1.0.0/53→54 plan proved.
+- [ ] Freeze/commit/push repair.
+- [ ] Run `scripts/release.sh --build` once; inspect archive, confirm VALID, push bump.
+- [ ] Production one-account simulator QA + convergence; validated build-54 screenshots.
+- [ ] Final native + roster different-family review; publish M2 evidence and stop before M3.
 
 ## Blockers
-- `seedkeep-27d.32.1`: Aug 28 entry renders Aug 27 in journal index; build 54/M3 remain unauthorized.
+- None. Build 54 authority is limited by umbrella recovery spec; build 55/M3 unauthorized.

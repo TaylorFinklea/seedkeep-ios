@@ -24,7 +24,8 @@ struct ChangelogDataTests {
 
     @Test("the planned 1.0 shipping build has an entry")
     func shippingBuildPresent() throws {
-        let release = try #require(ChangelogData.releases.first { $0.build == 53 })
+        let release = try #require(ChangelogData.releases.first { $0.build == 54 })
         #expect(release.version == "1.0.0")
+        #expect(release.changes.contains { $0.text.localizedCaseInsensitiveContains("journal") })
     }
 }

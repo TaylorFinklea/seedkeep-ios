@@ -205,6 +205,49 @@ final class HangingURLProtocol: URLProtocol, @unchecked Sendable {
     }
 }
 
+// MARK: - Journal date-only display
+
+@Suite("JournalView — date-only display")
+struct JournalDatePresentationTests {
+    @Test("roundel keeps the wire date across time zones")
+    func roundelKeepsWireDateAcrossTimeZones() {
+        let chicago = TimeZone(identifier: "America/Chicago")!
+        let utc = TimeZone(secondsFromGMT: 0)!
+
+        for timeZone in [chicago, utc] {
+            let parts = JournalDatePresentation.parts(
+                for: "2026-08-28",
+                timeZone: timeZone
+            )
+
+            #expect(parts.monthAbbrev == "AUG")
+            #expect(parts.day == 28)
+            #expect(parts.yearRoman == "MMXXVI")
+        }
+    }
+
+    @Test("accessibility label keeps the wire date across time zones")
+    func accessibilityLabelKeepsWireDateAcrossTimeZones() {
+        let chicago = TimeZone(identifier: "America/Chicago")!
+        let utc = TimeZone(secondsFromGMT: 0)!
+
+        #expect(
+            JournalDatePresentation.accessibleDate(
+                for: "2026-08-28",
+                timeZone: chicago,
+                locale: Locale(identifier: "en_US_POSIX")
+            ) == "August 28, 2026"
+        )
+        #expect(
+            JournalDatePresentation.accessibleDate(
+                for: "2026-08-28",
+                timeZone: utc,
+                locale: Locale(identifier: "en_US_POSIX")
+            ) == "August 28, 2026"
+        )
+    }
+}
+
 // MARK: - [3] UTC-midnight off-by-one (AddPlantingEventView)
 
 /// Verifies that `AddPlantingEventView.parseYYYYMMDD` (now using `.current`)
