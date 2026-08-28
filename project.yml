@@ -17,8 +17,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.4.0"
-    CURRENT_PROJECT_VERSION: "52"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "53"
     # DEVELOPMENT_TEAM intentionally not pinned here — flows in from
     # Seedkeep/Config/AppConfig.example.xcconfig (or AppConfig.local).
     CODE_SIGN_STYLE: Automatic
