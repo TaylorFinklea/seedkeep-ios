@@ -122,6 +122,28 @@ func seedPhotoCascadeRef() {
     #expect(decoded == value)
 }
 
+@Test("codec: CKAsset is returned out-of-band without entering CloudKitRecordValue")
+func codecAssetDecodedOutOfBand() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codec-asset-\(UUID().uuidString).jpg")
+    try Data("asset-bytes".utf8).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let value = CloudKitRecordValue(
+        type: .seedPhoto,
+        recordName: "seedPhoto:p1",
+        scalars: ["r2Key": .string("legacy/key"), "capturedAt": .int(7)],
+        refs: ["seedID": "seed:s1"]
+    )
+    let record = SeedkeepRecordCodec.encode(value, zoneID: zoneID)
+    record["asset"] = CKAsset(fileURL: url)
+
+    let decoded = SeedkeepRecordCodec.decodeWithAssets(record, as: .seedPhoto)
+
+    #expect(decoded.value == value)
+    #expect(decoded.assets["asset"]?.fileURL == url)
+}
+
 @Test("codec: PlantingEvent setNull refs encode .none; crossDB encodes STRING")
 func plantingEventRefs() {
     let value = CloudKitRecordValue(

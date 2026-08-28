@@ -7,7 +7,7 @@ public final class LocalSeedPhoto {
     @Attribute(.unique) public var id: String
     public var seedID: String
     public var householdID: String
-    public var r2Key: String
+    public var r2Key: String?
     public var roleRaw: String
     public var width: Int?
     public var height: Int?
@@ -18,7 +18,7 @@ public final class LocalSeedPhoto {
         id: String,
         seedID: String,
         householdID: String,
-        r2Key: String,
+        r2Key: String?,
         role: PhotoRole,
         width: Int? = nil,
         height: Int? = nil,

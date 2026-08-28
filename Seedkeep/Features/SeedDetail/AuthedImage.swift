@@ -1,18 +1,16 @@
 import SwiftUI
 import SeedkeepKit
 
-/// `AsyncImage` doesn't support custom Authorization headers. This loader
-/// fetches photo bytes via `SeedkeepClient.fetchSeedPhotoData(photoID:)`
-/// (which adds the Bearer token) and renders them. Cached in-memory only;
-/// good enough for Phase 1 — the photos are small and the seed detail
-/// view is not list-scrolling.
+/// Loads seed-photo bytes through the active storage boundary: the durable
+/// CloudKit photo stores while that mode is active, or the authenticated
+/// server route in rollback mode.
 struct AuthedImage: View {
     @Environment(AppEnvironment.self) private var appEnv
     let photoID: String
     let contentMode: ContentMode
 
     @State private var image: UIImage?
-    @State private var failed = false
+    @State private var isLoading = true
 
     init(photoID: String, contentMode: ContentMode = .fill) {
         self.photoID = photoID
@@ -21,18 +19,15 @@ struct AuthedImage: View {
 
     var body: some View {
         ZStack {
-            if PhotoFeatureGate.isRestricted {
-                Image(systemName: "photo.slash")
-                    .foregroundStyle(.secondary)
-            } else if let image {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
-            } else if failed {
-                Image(systemName: "photo.badge.exclamationmark")
-                    .foregroundStyle(.secondary)
-            } else {
+            } else if isLoading {
                 ProgressView().controlSize(.small).herbProgressStyle()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
             }
         }
         .task(id: photoID) {
@@ -41,15 +36,18 @@ struct AuthedImage: View {
     }
 
     private func load() async {
-        guard !PhotoFeatureGate.isRestricted else { return }
+        await MainActor.run { isLoading = true }
+        defer { Task { @MainActor in isLoading = false } }
         do {
-            let data = try await appEnv.sync.fetchSeedPhotoData(photoID: photoID)
+            guard let data = try await appEnv.sync.fetchSeedPhotoData(
+                photoID: photoID,
+                householdID: appEnv.activeGardenHouseholdID
+            ) else { return }
             await MainActor.run {
                 self.image = UIImage(data: data)
-                if self.image == nil { self.failed = true }
             }
         } catch {
-            await MainActor.run { self.failed = true }
+            await MainActor.run { self.image = nil }
         }
     }
 }

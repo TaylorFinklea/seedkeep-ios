@@ -168,6 +168,28 @@ struct HouseholdRecordApplierTests {
         #expect(m.height == nil)
     }
 
+    @Test("CloudKit-born photos round-trip without legacy server storage pointers")
+    func cloudKitBornPhotosRoundTripWithoutLegacyPointers() throws {
+        let c = ctx("cloudkit-born-photo-pointers")
+        let seedPhoto = LocalSeedPhoto(
+            id: "sp-local", seedID: "s1", householdID: "hh1", r2Key: nil,
+            role: .front, width: 640, height: 480, byteSize: 12, capturedAt: 7)
+        let journalPhoto = LocalJournalEntryPhoto(
+            id: "jp-local", entryID: "je1", storageKey: nil, sortOrder: 0,
+            width: 640, height: 480, createdAt: 7, updatedAt: 7)
+
+        HouseholdRecordApplier.apply(seedPhoto.cloudKitValue, householdID: "hh1", into: c)
+        HouseholdRecordApplier.apply(journalPhoto.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+
+        let storedSeed = try fetchOne(
+            c, FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == "sp-local" }))
+        let storedJournal = try fetchOne(
+            c, FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.id == "jp-local" }))
+        #expect(storedSeed.r2Key == nil)
+        #expect(storedJournal.storageKey == nil)
+    }
+
     @Test("Tag round-trips (non-nil color + deletedAt)")
     func tagRoundTrip() throws {
         let c = ctx("tag")

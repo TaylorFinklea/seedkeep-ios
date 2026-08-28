@@ -268,10 +268,14 @@ private struct InviteRoute: Identifiable {
 // MARK: - R1 Phase-0 LIVE CloudKit spike harness (DEBUG only, launch-arg gated — inert in normal use)
 //
 // Drive from the command line:
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike asset-engine (gate 0c, one sim)
 //   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike roundtrip   (gate 1, one sim)
 //   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike merge       (gate 1b, one sim)
 //   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike owner       (gate 2 owner)
 //   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike participant (gate 2, the OTHER sim/account)
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike asset-transfer-destination (gate 0b successor)
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike asset-transfer-source      (gate 0b source)
+//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike asset-transfer-cleanup     (gate 0b successor verify/cleanup)
 //
 // Result is os_log'd (subsystem app.seedkeep.cloud, category Spike, marker "CKSPIKE-RESULT") AND
 // written to Documents/ck-spike-result.txt (read back via `simctl get_app_container … data`).
@@ -309,7 +313,12 @@ struct CKSpikeView: View {
     }
 
     private func run() async {
-        let r = await runSeedkeepSpike(mode: mode)
+        let r: String
+        if AccountDeletionGate0bSpike.handles(mode) {
+            r = await AccountDeletionGate0bSpike.run(mode: mode)
+        } else {
+            r = await runSeedkeepSpike(mode: mode)
+        }
         result = r
         log.log("CKSPIKE-RESULT mode=\(mode, privacy: .public) :: \(r, privacy: .public)")
         try? r.write(to: CKSpike.resultURL, atomically: true, encoding: .utf8)

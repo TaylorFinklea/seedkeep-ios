@@ -225,8 +225,8 @@ enum CanonicalFieldValue {
     /// while the canonical encoding compares them as booleans.
     case bool(Int)
     /// A CKAsset field, paired with the sha256 of its OBSERVED bytes (Photos-on-CloudKit D3). The
-    /// asset itself rides along so a copy stays byte-identical; the canonical token is derived
-    /// SOLELY from the hash, never from the asset's fileURL.
+    /// asset's file rides along through a fresh wrapper so a copy stays byte-identical; the
+    /// canonical token is derived SOLELY from the hash, never from the asset's fileURL.
     case asset(CKAsset, sha256: String)
 
     /// `assetHash` is the caller's OWN observation of this field's bytes (staged at fetch time —
@@ -273,15 +273,19 @@ enum CanonicalFieldValue {
         }
     }
 
-    /// The value to write onto a copied record — byte-identical to what was read.
-    var ckValue: CKRecordValue {
+    /// The value to write onto a copied record — byte-identical to what was read. CloudKit forbids
+    /// attaching one CKAsset object to multiple records, so assets receive a fresh wrapper around
+    /// the same staged file. A missing URL cannot be copied.
+    var copiedCKValue: CKRecordValue? {
         switch self {
         case .string(let value): return value as CKRecordValue
         case .int(let value):    return value as CKRecordValue
         case .double(let value): return value as CKRecordValue
         case .date(let value):   return value as CKRecordValue
         case .bool(let value):   return value as CKRecordValue
-        case .asset(let asset, _): return asset
+        case .asset(let asset, _):
+            guard let fileURL = asset.fileURL else { return nil }
+            return CKAsset(fileURL: fileURL)
         }
     }
 }

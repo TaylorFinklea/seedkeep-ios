@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import SeedkeepKit
+import SeedkeepCloudKit
 
 /// Reconciles SwiftData with the Workers backend.
 ///
@@ -43,6 +44,8 @@ public final class SyncEngine {
     /// pass, via `humanizeError`. `nil` after a clean pass.
     public private(set) var lastHumanizedError: String?
     public var onLocalHouseholdMutation: (() -> Void)?
+    var cloudKitScopeIDProvider: (@MainActor () -> String?)?
+    var onCloudKitPhotoCacheMiss: (@MainActor (String) async throws -> Data?)?
 
     public init(client: SeedkeepClient, container: ModelContainer) {
         self.client = client
@@ -827,27 +830,27 @@ public final class SyncEngine {
             payload: payload, now: now, in: context)
     }
 
-    /// Updates the local-only growing-info snapshot on a seed. Not sent to
-    /// the server — the catalog remains the shared source of truth — but
-    /// guarantees the user can always see the depth / temp / spacing they
-    /// reviewed at save time, even offline or before the catalog row
-    /// finishes processing.
+    /// Updates the growing-info snapshot stored in the CloudKit household record.
+    /// Successful edits set `updatedAt` to max(now, previous + 1), then schedule a coordinator save.
     public func setLocalGrowingInfo(seedID: String, snapshot: GrowingInfoSnapshot?) throws {
         let context = ModelContext(container)
         guard let local = try fetchSeed(id: seedID, in: context) else { return }
         local.growingInfo = snapshot
+        local.updatedAt = max(Self.nowMs(), local.updatedAt + 1)
         try context.save()
+        noteLocalHouseholdMutation()
     }
 
-    /// Updates the local-only `customType` (e.g. "Pepper", "Tomato") used
-    /// to group/filter the Library. Not yet sent to the server — Phase 2
-    /// adds a corresponding column so the value syncs across devices.
+    /// Updates the custom type stored in the CloudKit household record.
+    /// Successful edits set `updatedAt` to max(now, previous + 1), then schedule a coordinator save.
     public func setLocalCustomType(seedID: String, type: String?) throws {
         let context = ModelContext(container)
         guard let local = try fetchSeed(id: seedID, in: context) else { return }
         let trimmed = type?.trimmingCharacters(in: .whitespacesAndNewlines)
         local.customType = (trimmed?.isEmpty == false) ? trimmed : nil
+        local.updatedAt = max(Self.nowMs(), local.updatedAt + 1)
         try context.save()
+        noteLocalHouseholdMutation()
     }
 
     public func enqueueDeleteSeed(id: String) throws {
@@ -1515,91 +1518,306 @@ public final class SyncEngine {
         try context.save()
     }
 
-    /// Refreshes a seed's photo rows from `GET /api/seeds/:id`. Used after
-    /// a photo upload so the detail view sees the new entry. Cheap — the
-    /// detail endpoint returns the seed plus its photos.
-    public func refreshSeedPhotos(seedID: String, householdID: String) async throws {
-        try PhotoFeatureGate.requireAvailable()
-        let detail = try await client.seed(id: seedID)
+    /// Creates a seed photo through the active storage path and persists its local row.
+    public func uploadPhoto(seedID: String, role: PhotoRole, jpegData: Data, householdID: String) async throws {
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            guard !householdID.isEmpty else {
+                throw SeedkeepError(
+                    code: "missing_active_garden",
+                    message: "The active garden is unavailable. Sync or reopen the garden and try again."
+                )
+            }
+            let context = ModelContext(container)
+            guard let seed = try fetchSeed(id: seedID, in: context),
+                  seed.householdID == householdID,
+                  seed.deletedAt == nil else {
+                throw SeedkeepError(
+                    code: "inactive_garden_seed",
+                    message: "This seed belongs to a different garden. Reopen the active garden and try again."
+                )
+            }
+            let id = "seed_photo_local_\(UUID().uuidString)"
+            let recordName = SeedkeepRecordNames.seedPhoto(id)
+            let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            try pending.write(jpegData, for: recordName)
+            let photo = LocalSeedPhoto(
+                id: id,
+                seedID: seedID,
+                householdID: householdID,
+                r2Key: nil,
+                role: role,
+                byteSize: jpegData.count,
+                capturedAt: Int64(Date().timeIntervalSince1970 * 1_000)
+            )
+            context.insert(photo)
+            do {
+                try context.save()
+            } catch {
+                pending.remove(recordName)
+                throw error
+            }
+            onLocalHouseholdMutation?()
+            return
+        }
+
+        let dto = try await client.uploadSeedPhoto(seedID: seedID, role: role, jpegData: jpegData)
         let context = ModelContext(container)
-
-        // Update the seed itself in case its updated_at changed.
-        try upsertSeeds([detail.seed])
-
-        // Replace the photo set for this seed: delete locals not in the
-        // server response, upsert ones that are.
-        let serverIDs = Set(detail.photos.map(\.id))
-        let descriptor = FetchDescriptor<LocalSeedPhoto>(
-            predicate: #Predicate { $0.seedID == seedID }
-        )
-        for local in (try? context.fetch(descriptor)) ?? [] {
-            if !serverIDs.contains(local.id) {
-                context.delete(local)
-            }
-        }
-        for dto in detail.photos {
-            let id = dto.id
-            let descriptor = FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id })
-            if let existing = try? context.fetch(descriptor).first {
-                existing.r2Key = dto.r2_key
-                existing.role = dto.role
-                existing.width = dto.width
-                existing.height = dto.height
-                existing.byteSize = dto.byte_size
-                existing.capturedAt = dto.captured_at
-            } else {
-                context.insert(LocalSeedPhoto(
-                    id: dto.id,
-                    seedID: dto.seed_id,
-                    householdID: dto.household_id,
-                    r2Key: dto.r2_key,
-                    role: dto.role,
-                    width: dto.width,
-                    height: dto.height,
-                    byteSize: dto.byte_size,
-                    capturedAt: dto.captured_at
-                ))
-            }
-        }
+        context.insert(LocalSeedPhoto(
+            id: dto.id,
+            seedID: dto.seed_id,
+            householdID: dto.household_id,
+            r2Key: dto.r2_key,
+            role: dto.role,
+            width: dto.width,
+            height: dto.height,
+            byteSize: dto.byte_size,
+            capturedAt: dto.captured_at
+        ))
         try context.save()
     }
 
-    /// Convenience wrapper called by views: upload a photo and refresh
-    /// the seed's photo list. Online-only in Phase 1; offline photo
-    /// queueing is deferred (see `.docs/ai/roadmap.md`).
-    public func uploadPhoto(seedID: String, role: PhotoRole, jpegData: Data, householdID: String) async throws {
-        try PhotoFeatureGate.requireAvailable()
-        _ = try await client.uploadSeedPhoto(seedID: seedID, role: role, jpegData: jpegData)
-        try await refreshSeedPhotos(seedID: seedID, householdID: householdID)
-    }
+    public func fetchSeedPhotoData(
+        photoID: String,
+        householdID: String? = nil
+    ) async throws -> Data? {
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            guard let householdID, !householdID.isEmpty else {
+                throw SeedkeepError(
+                    code: "missing_active_garden",
+                    message: "The active garden is unavailable. Sync or reopen the garden and try again."
+                )
+            }
+            let context = ModelContext(container)
+            let id = photoID
+            guard let photo = try context.fetch(
+                FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id })
+            ).first else { return nil }
+            guard photo.householdID == householdID else {
+                throw SeedkeepError(
+                    code: "inactive_garden_photo",
+                    message: "This photo belongs to a different garden. Reopen the active garden and try again."
+                )
+            }
+            let recordName = SeedkeepRecordNames.seedPhoto(photoID)
+            let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            let cache = PhotoByteStore(lifetime: .cache, householdID: householdID)
+            if let data = pending.data(for: recordName) ?? cache.data(for: recordName) {
+                return data
+            }
+            return try await onCloudKitPhotoCacheMiss?(recordName)
+        }
 
-    public func fetchSeedPhotoData(photoID: String) async throws -> Data {
-        try PhotoFeatureGate.requireAvailable()
         return try await client.fetchSeedPhotoData(photoID: photoID)
     }
 
-    public func uploadJournalPhoto(
+    func deleteSeedPhoto(_ photoID: String, householdID: String) async throws {
+        guard FeatureFlags.cloudKitHouseholdSyncEnabled else {
+            throw SeedkeepError(
+                code: "photo_delete_unavailable",
+                message: "Seed photo deletion is available for iCloud gardens."
+            )
+        }
+        guard !householdID.isEmpty else {
+            throw SeedkeepError(
+                code: "missing_active_garden",
+                message: "The active garden is unavailable. Sync or reopen the garden and try again."
+            )
+        }
+        guard let scopeID = cloudKitScopeIDProvider?(), !scopeID.isEmpty else {
+            throw SeedkeepError(
+                code: "missing_cloudkit_scope",
+                message: "The active iCloud garden is unavailable. Sync or reopen the garden and try again."
+            )
+        }
+        let context = ModelContext(container)
+        let id = photoID
+        guard let photo = try context.fetch(
+            FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id })
+        ).first else { return }
+        guard photo.householdID == householdID else {
+            throw SeedkeepError(
+                code: "inactive_garden_photo",
+                message: "This photo belongs to a different garden. Reopen the active garden and try again."
+            )
+        }
+        let recordName = SeedkeepRecordNames.seedPhoto(photo.id)
+        let deletionID = "\(scopeID)|\(recordName)"
+        let existingIntent = try context.fetch(
+            FetchDescriptor<LocalCloudKitDeletion>(predicate: #Predicate { $0.id == deletionID })
+        ).first
+        if existingIntent == nil {
+            context.insert(LocalCloudKitDeletion(
+                scopeID: scopeID,
+                householdID: householdID,
+                recordName: recordName,
+                createdAt: Int64(Date().timeIntervalSince1970 * 1_000)
+            ))
+        }
+        context.delete(photo)
+        try context.save()
+        PhotoByteStore.purgeRecord(recordName, householdID: householdID)
+        onLocalHouseholdMutation?()
+    }
+
+    func uploadJournalPhoto(
         entryId: String,
         jpegData: Data,
         width: Int? = nil,
-        height: Int? = nil
-    ) async throws -> JournalEntryPhotoDTO {
-        try PhotoFeatureGate.requireAvailable()
-        return try await client.uploadJournalPhoto(
+        height: Int? = nil,
+        householdID: String? = nil
+    ) async throws -> LocalJournalEntryPhoto {
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            guard let householdID, !householdID.isEmpty else {
+                throw SeedkeepError(
+                    code: "missing_active_garden",
+                    message: "The active garden is unavailable. Sync or reopen the garden and try again."
+                )
+            }
+            let context = ModelContext(container)
+            let entryID = entryId
+            guard let entry = try context.fetch(
+                FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == entryID })
+            ).first, entry.deletedAt == nil, entry.householdID == householdID else {
+                throw SeedkeepError(
+                    code: "inactive_garden_entry",
+                    message: "This entry belongs to a different garden. Reopen the active garden and try again."
+                )
+            }
+            let existing = try context.fetch(
+                FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.entryID == entryID })
+            )
+            let id = "journal_photo_local_\(UUID().uuidString)"
+            let recordName = SeedkeepRecordNames.journalEntryPhoto(id)
+            let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            try pending.write(jpegData, for: recordName)
+            let now = Int64(Date().timeIntervalSince1970 * 1_000)
+            let photo = LocalJournalEntryPhoto(
+                id: id,
+                entryID: entryId,
+                storageKey: nil,
+                sortOrder: (existing.map(\.sortOrder).max() ?? -1) + 1,
+                width: width,
+                height: height,
+                createdAt: now,
+                updatedAt: now
+            )
+            context.insert(photo)
+            do {
+                try context.save()
+            } catch {
+                pending.remove(recordName)
+                throw error
+            }
+            onLocalHouseholdMutation?()
+            return photo
+        }
+
+        let dto = try await client.uploadJournalPhoto(
             entryId: entryId,
             jpegData: jpegData,
             width: width,
             height: height
         )
+        let context = ModelContext(container)
+        let photo = dto.makeLocal()
+        context.insert(photo)
+        try context.save()
+        return photo
     }
 
-    public func deleteJournalPhoto(_ photoId: String) async throws {
-        try PhotoFeatureGate.requireAvailable()
-        try await client.deleteJournalPhoto(photoId)
+    func deleteJournalPhoto(_ photoID: String, householdID: String? = nil) async throws {
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            guard let householdID, !householdID.isEmpty else {
+                throw SeedkeepError(
+                    code: "missing_active_garden",
+                    message: "The active garden is unavailable. Sync or reopen the garden and try again."
+                )
+            }
+            guard let scopeID = cloudKitScopeIDProvider?(), !scopeID.isEmpty else {
+                throw SeedkeepError(
+                    code: "missing_cloudkit_scope",
+                    message: "The active iCloud garden is unavailable. Sync or reopen the garden and try again."
+                )
+            }
+            let context = ModelContext(container)
+            let id = photoID
+            guard let photo = try context.fetch(
+                FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.id == id })
+            ).first else { return }
+            let entryID = photo.entryID
+            guard let entry = try context.fetch(
+                FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == entryID })
+            ).first, entry.householdID == householdID else {
+                throw SeedkeepError(
+                    code: "inactive_garden_photo",
+                    message: "This photo belongs to a different garden. Reopen the active garden and try again."
+                )
+            }
+            let recordName = SeedkeepRecordNames.journalEntryPhoto(photo.id)
+            let deletionID = "\(scopeID)|\(recordName)"
+            let existingIntent = try context.fetch(
+                FetchDescriptor<LocalCloudKitDeletion>(predicate: #Predicate { $0.id == deletionID })
+            ).first
+            if existingIntent == nil {
+                context.insert(LocalCloudKitDeletion(
+                    scopeID: scopeID,
+                    householdID: householdID,
+                    recordName: recordName,
+                    createdAt: Int64(Date().timeIntervalSince1970 * 1_000)
+                ))
+            }
+            context.delete(photo)
+            try context.save()
+            PhotoByteStore.purgeRecord(recordName, householdID: householdID)
+            onLocalHouseholdMutation?()
+            return
+        }
+
+        try await client.deleteJournalPhoto(photoID)
+        let context = ModelContext(container)
+        let id = photoID
+        if let photo = try context.fetch(
+            FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.id == id })
+        ).first {
+            context.delete(photo)
+            try context.save()
+        }
     }
 
-    public func journalPhotoData(photoId: String) async throws -> Data {
-        try PhotoFeatureGate.requireAvailable()
+    public func journalPhotoData(
+        photoId: String,
+        householdID: String? = nil
+    ) async throws -> Data? {
+        if FeatureFlags.cloudKitHouseholdSyncEnabled {
+            guard let householdID, !householdID.isEmpty else {
+                throw SeedkeepError(
+                    code: "missing_active_garden",
+                    message: "The active garden is unavailable. Sync or reopen the garden and try again."
+                )
+            }
+            let context = ModelContext(container)
+            let id = photoId
+            guard let photo = try context.fetch(
+                FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.id == id })
+            ).first else { return nil }
+            let entryID = photo.entryID
+            guard let entry = try context.fetch(
+                FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == entryID })
+            ).first, entry.householdID == householdID else {
+                throw SeedkeepError(
+                    code: "inactive_garden_photo",
+                    message: "This photo belongs to a different garden. Reopen the active garden and try again."
+                )
+            }
+            let recordName = SeedkeepRecordNames.journalEntryPhoto(photoId)
+            let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            let cache = PhotoByteStore(lifetime: .cache, householdID: householdID)
+            if let data = pending.data(for: recordName) ?? cache.data(for: recordName) {
+                return data
+            }
+            return try await onCloudKitPhotoCacheMiss?(recordName)
+        }
+
         return try await client.journalPhotoData(photoId: photoId)
     }
 

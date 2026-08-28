@@ -309,6 +309,27 @@ func mergePhotoJournalEntryPhotoRemoteWinsDespiteOlderUpdatedAt() throws {
     #expect(result.needsResave == false)
 }
 
+@Test("mergePhoto: unavailable remote asset preserves known-good local bytes and hash")
+func mergePhotoUnavailableRemoteAssetPreservesLocalBytes() throws {
+    let localAsset = try makeTestAsset()
+    let recordID = CKRecord.ID(recordName: "seedPhoto:asset-fallback", zoneID: zoneID)
+
+    let local = CKRecord(recordType: "SeedPhoto", recordID: recordID)
+    local["r2Key"] = "local/key" as CKRecordValue
+    local["asset"] = localAsset
+    local["assetSHA256"] = "local-sha" as CKRecordValue
+
+    let remote = CKRecord(recordType: "SeedPhoto", recordID: recordID)
+    remote["r2Key"] = "remote/key" as CKRecordValue
+
+    let result = SeedkeepRecordMerger().resolve(local: local, remote: remote)
+    let merged = result.record as! CKRecord
+    #expect(merged["r2Key"] as? String == "remote/key", "remote scalar metadata still wins")
+    #expect((merged["asset"] as? CKAsset)?.fileURL == localAsset.fileURL)
+    #expect(merged["assetSHA256"] as? String == "local-sha")
+    #expect(result.needsResave == false, "fallback bytes are local materialization, not a mutation")
+}
+
 // MARK: - Bulk-copy asset guard (mergeDefaultLWW must never carry a manifest asset key)
 
 @Test("bulk-copy guard: mergeDefaultLWW's local-wins copy never carries a manifest asset field")

@@ -242,10 +242,10 @@ public enum SeedkeepRecordValues {
     }
 
     /// LocalJournalEntryPhoto → JournalEntryPhoto. cascadeParent ref → JournalEntry.
-    public static func journalEntryPhoto(id: String, entryID: String, storageKey: String, sortOrder: Int, width: Int?, height: Int?, createdAt: Int64, updatedAt: Int64) -> CloudKitRecordValue {
+    public static func journalEntryPhoto(id: String, entryID: String, storageKey: String?, sortOrder: Int, width: Int?, height: Int?, createdAt: Int64, updatedAt: Int64) -> CloudKitRecordValue {
         recordValue(type: .journalEntryPhoto, id: id,
             scalars: scalars([
-                "storageKey": .string(storageKey),
+                "storageKey": storageKey.map(ScalarValue.string),
                 "sortOrder":  .int(sortOrder),
                 "width":      width.map(ScalarValue.int),
                 "height":     height.map(ScalarValue.int),
@@ -256,10 +256,10 @@ public enum SeedkeepRecordValues {
     }
 
     /// LocalSeedPhoto → SeedPhoto. Immutable; cascadeParent ref → Seed.
-    public static func seedPhoto(id: String, seedID: String, r2Key: String, roleRaw: String, width: Int?, height: Int?, byteSize: Int?, capturedAt: Int64) -> CloudKitRecordValue {
+    public static func seedPhoto(id: String, seedID: String, r2Key: String?, roleRaw: String, width: Int?, height: Int?, byteSize: Int?, capturedAt: Int64) -> CloudKitRecordValue {
         recordValue(type: .seedPhoto, id: id,
             scalars: scalars([
-                "r2Key":      .string(r2Key),
+                "r2Key":      r2Key.map(ScalarValue.string),
                 "roleRaw":    .string(roleRaw),
                 "width":      width.map(ScalarValue.int),
                 "height":     height.map(ScalarValue.int),

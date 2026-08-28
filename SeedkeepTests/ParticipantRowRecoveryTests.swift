@@ -57,6 +57,40 @@ struct ParticipantRowRecoveryTests {
         #expect(plan.contains { $0.recordName == "seed:seed1" })
     }
 
+    @Test("a stranded seed photo re-homes with its seed into the owner-zone export")
+    func strandedSeedPhotoRehomesWithItsSeed() throws {
+        let container = makeContainer()
+        let signedIn = "signed-\(UUID().uuidString)"
+        let owner = "owner-\(UUID().uuidString)"
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(
+            id: "seed-with-photo", householdID: signedIn, state: .active,
+            packetCount: 1, source: .store, createdAt: 1, updatedAt: 2))
+        setup.insert(LocalSeedPhoto(
+            id: "stranded-seed-photo", seedID: "seed-with-photo", householdID: signedIn,
+            r2Key: nil, role: .front, width: 640, height: 480,
+            byteSize: 5, capturedAt: 3))
+        try setup.save()
+
+        let before = HouseholdMigrationPlanner.fetchInput(
+            from: ModelContext(container), householdID: owner, householdName: "G",
+            householdCreatedAt: 1, householdUpdatedAt: 1)
+        #expect(before.seeds.isEmpty)
+        #expect(before.seedPhotos.isEmpty)
+
+        let ran = ParticipantRowRecovery.runIfNeeded(
+            container: container, signedInHouseholdID: signedIn, ownerZoneHouseholdID: owner)
+        #expect(ran == true)
+
+        let after = HouseholdMigrationPlanner.fetchInput(
+            from: ModelContext(container), householdID: owner, householdName: "G",
+            householdCreatedAt: 1, householdUpdatedAt: 1)
+        #expect(after.seeds.map(\.id) == ["seed-with-photo"])
+        #expect(after.seedPhotos.map(\.id) == ["stranded-seed-photo"])
+        #expect(after.seedPhotos.first?.householdID == owner)
+    }
+
     // MARK: - Invariant 2 (REPRO) — FK-evidenced journal entry + checklist re-home together
 
     @Test("FK-evidenced journal entry and its checklist items re-home together (post-step-1 union)")

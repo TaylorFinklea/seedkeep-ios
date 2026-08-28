@@ -1,5 +1,9 @@
 import Foundation
 import CryptoKit
+#if canImport(CloudKit)
+import CloudKit
+import SeedkeepCloudKit
+#endif
 
 /// On-disk byte storage for photo content — Photos-on-CloudKit Stage B (see
 /// `.docs/ai/phases/2026-07-28-photos-on-cloudkit-spec.md` D2/D6 in the seedkeep repo, especially
@@ -166,3 +170,159 @@ struct PhotoByteStore: Sendable {
         s.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
     }
 }
+
+#if canImport(CloudKit)
+enum PhotoAssetSyncError: Error, LocalizedError {
+    case missingLocalBytes(recordName: String)
+    case unreadableLocalBytes(recordName: String)
+    case localIntegrityMismatch(recordName: String)
+    case fetchedAssetUnavailable(recordName: String)
+    case transferRosterMarkerMissing(recordName: String)
+    case retryRequired(recordName: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingLocalBytes(let recordName):
+            return "Photo bytes are missing for \(recordName); the photo was not staged."
+        case .unreadableLocalBytes(let recordName):
+            return "Photo bytes are unreadable for \(recordName); the photo was not staged."
+        case .localIntegrityMismatch(let recordName):
+            return "Photo bytes failed their integrity check for \(recordName); the photo was not staged."
+        case .fetchedAssetUnavailable(let recordName):
+            return "CloudKit delivered \(recordName) without readable photo bytes."
+        case .transferRosterMarkerMissing(let recordName):
+            return "CloudKit delivered photo bytes for \(recordName) without a transfer roster marker."
+        case .retryRequired(let recordName):
+            return "Photo sync is paused for \(recordName); retry it explicitly to resume."
+        }
+    }
+}
+
+/// Stage D's read boundary for account-deletion transfers. CloudKit owns the
+/// lifetime of fetched CKAsset URLs, so every read copies those bytes into the
+/// durable transfer workspace before a copy or digest is allowed to inspect
+/// the graph. Each caller receives the hashes from its own observation; source
+/// and destination verification never share asserted metadata.
+struct AccountDeletionTransferAssetStager: Sendable {
+    private let workspace: PhotoByteStore
+
+    init(householdID: String) {
+        workspace = PhotoByteStore(lifetime: .transferWorkspace, householdID: householdID)
+    }
+
+    func snapshot(_ records: [CKRecord]) throws -> AccountDeletionRecordSnapshot {
+        var assetHashes: [AssetRef: String] = [:]
+        var expectedAssets: [AssetRef] = []
+
+        for record in records {
+            guard let type = SeedkeepRecordType.type(forRecordTypeName: record.recordType) else {
+                continue
+            }
+            for field in type.fields where field.type == .asset {
+                let recordName = record.recordID.recordName
+                let assetRef = AssetRef(recordName: recordName, field: field.name)
+                let hasRosterMarker = record["\(field.name)SHA256"] != nil
+                if hasRosterMarker {
+                    expectedAssets.append(assetRef)
+                }
+                guard let raw = record[field.name] else { continue }
+                guard hasRosterMarker else {
+                    throw PhotoAssetSyncError.transferRosterMarkerMissing(
+                        recordName: recordName)
+                }
+                guard let asset = raw as? CKAsset, let sourceURL = asset.fileURL else {
+                    throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: recordName)
+                }
+                let data: Data
+                do { data = try Data(contentsOf: sourceURL) }
+                catch { throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: recordName) }
+
+                let ref = try workspace.write(data, for: recordName)
+                record[field.name] = CKAsset(fileURL: ref.url)
+                assetHashes[assetRef] = ref.sha256
+            }
+        }
+
+        if let missing = expectedAssets.first(where: { assetHashes[$0] == nil }) {
+            throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: missing.recordName)
+        }
+
+        return AccountDeletionRecordSnapshot(records: records, assetHashes: assetHashes)
+    }
+}
+
+/// Stage C's filesystem boundary between immutable local photo bytes and CKAsset's temporary URLs.
+struct PhotoAssetSyncBridge: Sendable {
+    private let pending: PhotoByteStore
+    private let cache: PhotoByteStore
+
+    init(householdID: String) {
+        pending = PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+        cache = PhotoByteStore(lifetime: .cache, householdID: householdID)
+    }
+
+    /// Attach a photo's immutable local file and exact hash before the record reaches engine.save.
+    /// Non-photo records pass through unchanged.
+    func prepareForUpload(_ record: CKRecord) throws -> CKRecord {
+        guard Self.isPhoto(record) else { return record }
+        let recordName = record.recordID.recordName
+        guard let ref = pending.ref(for: recordName) ?? cache.ref(for: recordName) else {
+            throw PhotoAssetSyncError.missingLocalBytes(recordName: recordName)
+        }
+        try validate(ref)
+        record["asset"] = CKAsset(fileURL: ref.url)
+        record["assetSHA256"] = ref.sha256 as CKRecordValue
+        return record
+    }
+
+    /// Copy a fetched CKAsset into the durable cache while CloudKit's framework URL is still valid.
+    /// Non-photo records have no byte work and return nil.
+    @discardableResult
+    func materializeFetchedAsset(_ record: CKRecord) throws -> PhotoByteStore.Ref? {
+        guard let type = Self.photoType(record) else { return nil }
+        let decoded = SeedkeepRecordCodec.decodeWithAssets(record, as: type)
+        let recordName = record.recordID.recordName
+        guard let sourceURL = decoded.assets["asset"]?.fileURL else {
+            throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: recordName)
+        }
+        let data: Data
+        do { data = try Data(contentsOf: sourceURL) }
+        catch { throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: recordName) }
+        return try cache.write(data, for: recordName)
+    }
+
+    /// A clean drain confirms every name supplied here. Cache the bytes first, then remove the
+    /// PendingUploads copy so a failed cache write can never destroy the user's only local copy.
+    func confirmUploaded(recordNames: [String]) throws {
+        for recordName in recordNames {
+            guard let ref = pending.ref(for: recordName) else { continue }
+            try validate(ref)
+            let data: Data
+            do { data = try Data(contentsOf: ref.url) }
+            catch { throw PhotoAssetSyncError.unreadableLocalBytes(recordName: recordName) }
+            _ = try cache.write(data, for: recordName)
+            pending.remove(recordName)
+        }
+    }
+
+    private func validate(_ ref: PhotoByteStore.Ref) throws {
+        let data: Data
+        do { data = try Data(contentsOf: ref.url) }
+        catch { throw PhotoAssetSyncError.unreadableLocalBytes(recordName: ref.recordName) }
+        let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard actual == ref.sha256 else {
+            throw PhotoAssetSyncError.localIntegrityMismatch(recordName: ref.recordName)
+        }
+    }
+
+    private static func isPhoto(_ record: CKRecord) -> Bool { photoType(record) != nil }
+
+    private static func photoType(_ record: CKRecord) -> SeedkeepRecordType? {
+        guard let type = SeedkeepRecordType.type(forRecordTypeName: record.recordType) else { return nil }
+        switch type {
+        case .seedPhoto, .journalEntryPhoto: return type
+        default: return nil
+        }
+    }
+}
+#endif

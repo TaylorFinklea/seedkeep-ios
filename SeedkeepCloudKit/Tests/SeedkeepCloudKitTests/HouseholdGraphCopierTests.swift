@@ -300,6 +300,27 @@ func copyProducesFreshRecords() throws {
     }
 }
 
+@Test("an asset copy uses a fresh CKAsset wrapper around the observed file")
+func copyProducesFreshAssetWrappers() throws {
+    let fileURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("HouseholdGraphCopierAsset-\(UUID().uuidString).jpg")
+    try Data("copied-asset-bytes".utf8).write(to: fileURL, options: .atomic)
+    defer { try? FileManager.default.removeItem(at: fileURL) }
+
+    let source = sourceRecord(.seedPhoto, "seedPhoto:p1")
+    let sourceAsset = CKAsset(fileURL: fileURL)
+    source["asset"] = sourceAsset
+    let hashes = [AssetRef(recordName: "seedPhoto:p1", field: "asset"): "observed-sha256"]
+
+    let plan = try HouseholdGraphCopier.plan(
+        [source], from: copySource, to: copyDestination, assetHashes: hashes)
+    let copied = try planned(plan, "seedPhoto:p1")
+    let copiedAsset = try #require(copied["asset"] as? CKAsset)
+
+    #expect(copiedAsset !== sourceAsset)
+    #expect(copiedAsset.fileURL == fileURL)
+}
+
 // MARK: - Execution against a destination that already holds records
 
 @Test("the plan demands an all-keys save policy")

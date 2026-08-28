@@ -102,12 +102,13 @@ private final class StubCloudKit: AccountDeletionCloudKitOperating {
         return reportOwnedZoneAbsent && absentZones.contains(zoneKey(zoneID))
     }
 
-    func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> [CKRecord] {
+    func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> AccountDeletionRecordSnapshot {
         calls.append("fetchRecords")
         guard let records = recordsByZone[zoneKey(zoneID)] else {
             throw CKError(.zoneNotFound)
         }
-        return records
+        let householdID = SeedkeepRecordNames.householdID(fromZoneName: zoneID.zoneName)
+        return try AccountDeletionTransferAssetStager(householdID: householdID).snapshot(records)
     }
 
     func saveRecords(_ records: [CKRecord],

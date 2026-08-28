@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 import SeedkeepKit
+import SeedkeepCloudKit
 
 /// Create + edit a journal entry. `entryID == nil` means create; otherwise
 /// the view loads the existing `LocalJournalEntry` and PATCHes on save.
@@ -79,11 +80,7 @@ struct JournalEntryView: View {
             }
 
             Section {
-                if PhotoFeatureGate.isRestricted {
-                    Text(FeatureFlags.cloudKitPhotoCapabilityMessage)
-                        .font(.footnote)
-                        .foregroundStyle(HerbColor.inkSoft)
-                } else if photos.isEmpty && entryID == nil {
+                if photos.isEmpty && entryID == nil {
                     Text("Save the entry before adding photos")
                         .font(.footnote)
                         .foregroundStyle(HerbColor.inkSoft)
@@ -226,7 +223,28 @@ struct JournalEntryView: View {
         JournalPhotoThumbnail(photoId: photo.id)
             .frame(width: 88, height: 88)
             .clipShape(.rect(cornerRadius: 8))
+            .overlay(alignment: .topTrailing) {
+                if isFailedPhoto(photo) {
+                    Button {
+                        Task { await retryPhoto(photo) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, HerbColor.rose)
+                            .padding(4)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Retry photo sync")
+                }
+            }
             .contextMenu {
+                if isFailedPhoto(photo) {
+                    Button {
+                        Task { await retryPhoto(photo) }
+                    } label: {
+                        Label("Retry sync", systemImage: "arrow.clockwise")
+                    }
+                }
                 Button(role: .destructive) {
                     Task { await deletePhoto(photo) }
                 } label: {
@@ -301,12 +319,6 @@ struct JournalEntryView: View {
     @MainActor
     private func uploadPicked(_ items: [PhotosPickerItem], entryID: String) async {
         uploadingPhotos = true
-        guard !PhotoFeatureGate.isRestricted else {
-            errorMessage = FeatureFlags.cloudKitPhotoCapabilityMessage
-            uploadingPhotos = false
-            photosPickerItems = []
-            return
-        }
         defer {
             uploadingPhotos = false
             photosPickerItems = []
@@ -321,13 +333,12 @@ struct JournalEntryView: View {
                 }.value
                 // Decode width/height for the server's optional X-Photo-* headers.
                 let (width, height) = await Self.imageDimensions(jpegData)
-                let dto = try await appEnv.sync.uploadJournalPhoto(
+                _ = try await appEnv.sync.uploadJournalPhoto(
                     entryId: entryID,
                     jpegData: jpegData,
                     width: width,
-                    height: height)
-                modelContext.insert(dto.makeLocal())
-                try modelContext.save()
+                    height: height,
+                    householdID: appEnv.activeGardenHouseholdID)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -336,9 +347,26 @@ struct JournalEntryView: View {
 
     private func deletePhoto(_ photo: LocalJournalEntryPhoto) async {
         do {
-            try await appEnv.sync.deleteJournalPhoto(photo.id)
-            modelContext.delete(photo)
-            try modelContext.save()
+            try await appEnv.sync.deleteJournalPhoto(
+                photo.id,
+                householdID: appEnv.activeGardenHouseholdID
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func isFailedPhoto(_ photo: LocalJournalEntryPhoto) -> Bool {
+        appEnv.cloudKit?.failedPhotoRecordNames.contains(
+            SeedkeepRecordNames.journalEntryPhoto(photo.id)
+        ) == true
+    }
+
+    private func retryPhoto(_ photo: LocalJournalEntryPhoto) async {
+        guard let coordinator = appEnv.cloudKit else { return }
+        do {
+            try await coordinator.retryPhotoSync(
+                recordName: SeedkeepRecordNames.journalEntryPhoto(photo.id))
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -374,28 +402,35 @@ private struct JournalPhotoThumbnail: View {
     let photoId: String
     @Environment(AppEnvironment.self) private var appEnv
     @State private var image: UIImage?
+    @State private var isLoading = false
 
     var body: some View {
         Group {
-            if PhotoFeatureGate.isRestricted {
-                Image(systemName: "photo.slash")
-                    .foregroundStyle(.secondary)
-            } else if let image {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
-            } else {
+            } else if isLoading {
                 ProgressView()
                     .herbProgressStyle()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
             }
         }
         .task {
-            guard image == nil, !PhotoFeatureGate.isRestricted else { return }
+            guard image == nil else { return }
+            isLoading = true
+            defer { isLoading = false }
             do {
-                let data = try await appEnv.sync.journalPhotoData(photoId: photoId)
-                self.image = UIImage(data: data)
+                if let data = try await appEnv.sync.journalPhotoData(
+                    photoId: photoId,
+                    householdID: appEnv.activeGardenHouseholdID
+                ) {
+                    image = UIImage(data: data)
+                }
             } catch {
-                // Silent — thumbnail just stays as a spinner.
+                // The neutral placeholder remains available for a later retry.
             }
         }
     }

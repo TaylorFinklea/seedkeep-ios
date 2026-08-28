@@ -21,7 +21,9 @@ iOS client for Seedkeep. Phase 1 ships a household seed library with offline-fir
 - [x] **Smart planting window** (Phase B, merged to `main` 2026-05-20) — server-driven recommendations: home-ZIP location, `RecommendationStore`, `WeatherKitRefiner`, `RecommendationPanel`, four UI surfaces (Library dot, seed detail, planting event, "What to plant" view). Replaced the old local `SowRecommendation` engine. Not yet TestFlight-cut (gated on the Phase A server deploy + a 0.2.0 build).
 - [ ] **R1 core-shared CRUD capability gate** — iOS hides Sprout/MCP entry points and blocks assistant background/detail requests in `a7e8bf0`; existing MCP/OAuth credentials remain executable at the server boundary pending `seedkeep-6wm` / `seedkeep-27d.9`.
 - [x] **Production-default CloudKit release gate** — shared package/simulator gate with explicit legacy OFF regression and production-default ON routing contract (`seedkeep-n91`, 2026-07-15).
-- [x] **R1 photo capability gate** — CloudKit-active owner, participant, and rollback modes preserve photo metadata/server objects while hiding server-backed seed/journal photo bytes, galleries, uploads, and deletes; flag OFF retains the existing paths.
+- [x] **Photos-on-CloudKit Stage E restoration** (`seedkeep-cko.7`, local/uncommitted 2026-08-21) — owner/participant active-garden seed and journal photos create from the shared fail-closed resizer, stage bytes locally, render from pending/cache with on-demand retry, delete through scoped CloudKit intents, expose explicit permanent-failure retry, and re-home seed photos in participant recovery; flag OFF remains server-backed. CloudKit package 148/148 + serialized iOS 754 tests/63 suites + production-default 1/1.
+- [x] **Photos-on-CloudKit Stage C sync seams** (`seedkeep-cko.2`, local/uncommitted 2026-08-07) — CKSyncEngine receive copies each asset durably without wedging its batch; normal push and migration attach immutable bytes + exact SHA-256 fail-closed; nil-URL conflicts preserve known-good bytes; permanent photo-save failures pause durably until explicit retry. Package 146/146 + serial iOS 721/721 + simulator build green. Gate 0b is V1-accepted with its real two-account run deferred as `seedkeep-cko.4`; Stage D is unblocked.
+- [x] **Account-deletion CKAsset transfer hardening** (`seedkeep-yfl`, `seedkeep-cko.5`, `seedkeep-cko.6`, local/uncommitted 2026-08-20) — durable fetch snapshots provide observed hashes to all five planning/verification sites; copied records use fresh wrappers; ordered save batches retain the scalar 300-record limit and cap asset-bearing operations at 25 records/32 MiB. Marker presence independently requires readable observed bytes for each post-cutover photo, while unmarked legacy metadata-only shells remain accepted under the locked no-backfill policy. Focused 100/100 (108 invocations) + SeedkeepKit 97/97 + SeedkeepCloudKit 147/147 + serial iOS 746/746 (775 parameterized invocations) + production-default contract 1/1 on the iPhone 17 simulator.
 - [ ] **Extension-calendar integration** (regional planting calendars from state cooperative-extension feeds) — deferred to 0.3.0+ per the smart-planting-window spec.
 - [ ] **TestFlight feedback triage** — pull tester feedback / crash logs from App Store Connect for builds 11–16.
 - [x] **In-app "What's New" changelog** (`seedkeep-rdd`, merged 2026-07-19) — auto-presents the build's New/Improved/Fixed notes once after update; Settings row + unseen dot + History drill-down; `release.sh` fail-closed on a missing entry. Swift-constant `ChangelogData`. Spec/plan/report in `phases/`+`plans/`. **Cut to TestFlight as 0.4.0 (build 51) on 2026-07-21** (`b99b185`; build-51 entry announces the feature; fail-closed gate verified live). Human device-verify pending (see report). Bead `seedkeep-rdd` closed in `~/git/seedkeep` beads.
@@ -74,8 +76,9 @@ iOS client for Seedkeep. Phase 1 ships a household seed library with offline-fir
 
 ## Constraints
 
-- iOS 18.1+ floor (FoundationModels gated behind `if #available(iOS 26.0, *)`).
-- No CloudKit — `seedkeep-server` is the source of truth.
+- iOS 26.0+ floor; FoundationModels is available on every supported device.
+- CloudKit/CKShare is the household-garden source of truth; the server remains for auth, catalog,
+  recommendations, and account-deletion coordination, not a mirrored garden data plane.
 - `.xcodeproj` is generated from `project.yml`; do not hand-edit it.
 - Bundle ID: `app.seedkeep.ios`.
 

@@ -12,6 +12,17 @@ import Foundation
 
 public enum SeedkeepRecordCodec {
 
+    /// A decoded record plus CKAssets kept outside CloudKitRecordValue.
+    public struct DecodedRecord {
+        public let value: CloudKitRecordValue
+        public let assets: [String: CKAsset]
+
+        public init(value: CloudKitRecordValue, assets: [String: CKAsset]) {
+            self.value = value
+            self.assets = assets
+        }
+    }
+
     /// Encode a value into a CKRecord in the given zone.
     /// Reference fields with no target are left absent (= null on CloudKit).
     /// Cross-DB refs encode as plain String keys (G4 — never CKReferences).
@@ -44,7 +55,13 @@ public enum SeedkeepRecordCodec {
 
     /// Decode a fetched CKRecord back into a CloudKitRecordValue using the manifest.
     public static func decode(_ record: CKRecord, as type: SeedkeepRecordType) -> CloudKitRecordValue {
+        decodeWithAssets(record, as: type).value
+    }
+
+    /// Decode scalar/reference fields while returning CKAssets out of band.
+    public static func decodeWithAssets(_ record: CKRecord, as type: SeedkeepRecordType) -> DecodedRecord {
         var scalars: [String: ScalarValue] = [:]
+        var assets: [String: CKAsset] = [:]
         for field in type.fields {
             guard let raw = record[field.name] else { continue }
             switch field.type {
@@ -53,9 +70,7 @@ public enum SeedkeepRecordCodec {
             case .double: if let v = raw as? Double  { scalars[field.name] = .double(v) }
             case .date:   if let v = raw as? Date    { scalars[field.name] = .date(v) }
             case .bool:   if let v = raw as? Int     { scalars[field.name] = .bool(v != 0) }
-            // CKAsset has no ScalarValue representation (D1: no ScalarValue case is added).
-            // Assets are handled outside this migration-mapping codec (attachAssets, Stage B/C).
-            case .asset:  break
+            case .asset:  if let v = raw as? CKAsset { assets[field.name] = v }
             }
         }
         var refs: [String: String] = [:]
@@ -69,8 +84,9 @@ public enum SeedkeepRecordCodec {
                 }
             }
         }
-        return CloudKitRecordValue(type: type, recordName: record.recordID.recordName,
-                                   scalars: scalars, refs: refs)
+        let value = CloudKitRecordValue(type: type, recordName: record.recordID.recordName,
+                                        scalars: scalars, refs: refs)
+        return DecodedRecord(value: value, assets: assets)
     }
 
     private static func ckValue(for scalar: ScalarValue) -> CKRecordValue {

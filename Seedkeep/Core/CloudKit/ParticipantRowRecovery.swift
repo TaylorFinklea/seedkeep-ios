@@ -12,13 +12,13 @@ enum ParticipantRowRecovery {
 
     // MARK: - Pure planning
 
-    /// Already-fetched candidate rows. `locations`/`tags`/`seeds`/`beds`/`plantingEvents`/
+    /// Already-fetched candidate rows. `locations`/`tags`/`seeds`/`seedPhotos`/`beds`/`plantingEvents`/
     /// `journalEntries` are the STRANDED candidates (householdID == signed-in ID) — the caller
     /// fetches with that filter, exactly like `HouseholdMigrationPlanner.fetchInput`.
     /// `checklistItems` carries every local row (the type has no `householdID` column; it is scoped
     /// by `entryID` membership only, same as `HouseholdMigrationPlanner.fetchInput`'s journal
     /// children). `owner*IDs` are the ids already resolvable in the owner-zone garden BEFORE this
-    /// run (pre-existing peer rows) — `plan()` unions these with the five-type rows it is re-homing
+    /// run (pre-existing peer rows) — `plan()` unions these with the primary rows it is re-homing
     /// this same call to get the "after step 1" resolution set the FK-evidence rule requires.
     struct Input {
         var signedInHouseholdID: String
@@ -26,6 +26,7 @@ enum ParticipantRowRecovery {
         var locations: [LocalLocation] = []
         var tags: [LocalTag] = []
         var seeds: [LocalSeed] = []
+        var seedPhotos: [LocalSeedPhoto] = []
         var beds: [LocalBed] = []
         var plantingEvents: [LocalPlantingEvent] = []
         var journalEntries: [LocalJournalEntry] = []
@@ -44,6 +45,7 @@ enum ParticipantRowRecovery {
         var rehomeLocations: [LocalLocation] = []
         var rehomeTags: [LocalTag] = []
         var rehomeSeeds: [LocalSeed] = []
+        var rehomeSeedPhotos: [LocalSeedPhoto] = []
         var rehomeBeds: [LocalBed] = []
         var rehomePlantingEvents: [LocalPlantingEvent] = []
         var rehomeJournalEntries: [LocalJournalEntry] = []
@@ -53,10 +55,11 @@ enum ParticipantRowRecovery {
     /// Pure: candidate rows in → disposition lists out. No ModelContext, no I/O — host-testable like
     /// `HouseholdMigrationPlanner.plan()`.
     ///
-    /// The five queue-backed types always re-home (evidence rule #1 — the adopt wipe made every
+    /// The five queue-backed primary types always re-home (evidence rule #1 — the adopt wipe made every
     /// prior local row for these types disappear, and no view-driven path re-imported them under
     /// CloudKit-ON builds 47–49, so a row surviving with the signed-in ID can only be a
-    /// participant-authored garden row).
+    /// participant-authored garden row). A seed photo re-homes when its parent seed resolves in
+    /// that post-step-1 set, preserving the photo relationship without exporting an orphan.
     ///
     /// A journal entry re-homes automatically only when its `parentKind` FK resolves into the
     /// owner-zone garden AS OF AFTER STEP 1 (pre-existing owner rows ∪ the five-type rows this same
@@ -79,6 +82,7 @@ enum ParticipantRowRecovery {
         out.rehomePlantingEvents = input.plantingEvents
 
         let resolvedSeedIDs = input.ownerSeedIDs.union(input.seeds.map(\.id))
+        out.rehomeSeedPhotos = input.seedPhotos.filter { resolvedSeedIDs.contains($0.seedID) }
         let resolvedBedIDs = input.ownerBedIDs.union(input.beds.map(\.id))
         let resolvedPlantingEventIDs = input.ownerPlantingEventIDs.union(input.plantingEvents.map(\.id))
         let checklistByEntry = Dictionary(grouping: input.checklistItems, by: \.entryID)
@@ -195,6 +199,7 @@ enum ParticipantRowRecovery {
         input.locations = fetch(FetchDescriptor<LocalLocation>(predicate: #Predicate { $0.householdID == sid }))
         input.tags = fetch(FetchDescriptor<LocalTag>(predicate: #Predicate { $0.householdID == sid }))
         input.seeds = fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.householdID == sid }))
+        input.seedPhotos = fetch(FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.householdID == sid }))
         input.beds = fetch(FetchDescriptor<LocalBed>(predicate: #Predicate { $0.householdID == sid }))
         input.plantingEvents = fetch(FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.householdID == sid }))
         input.journalEntries = fetch(FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.householdID == sid }))
@@ -208,6 +213,7 @@ enum ParticipantRowRecovery {
         for row in disposition.rehomeLocations { row.householdID = oid }
         for row in disposition.rehomeTags { row.householdID = oid }
         for row in disposition.rehomeSeeds { row.householdID = oid }
+        for row in disposition.rehomeSeedPhotos { row.householdID = oid }
         for row in disposition.rehomeBeds { row.householdID = oid }
         for row in disposition.rehomePlantingEvents { row.householdID = oid }
         for row in disposition.rehomeJournalEntries { row.householdID = oid }

@@ -85,6 +85,72 @@ struct CloudKitPendingWriteRegressionTests {
         #expect(signalCount == 15)
     }
 
+    @Test("growing-info edits advance the merge clock and schedule a CloudKit save")
+    func growingInfoEditSignalsCloudKitMutation() throws {
+        let seedID = "seed-growing-info"
+        let originalUpdatedAt: Int64 = 9_000_000_000_000
+        let (container, engine) = try Self.makeSeedMutationFixture(
+            name: "growingInfoMutationSignal",
+            seedID: seedID,
+            updatedAt: originalUpdatedAt
+        )
+        var signalCount = 0
+        engine.onLocalHouseholdMutation = { signalCount += 1 }
+        let snapshot = GrowingInfoSnapshot(scientific_name: "Capsicum annuum")
+
+        try engine.setLocalGrowingInfo(seedID: seedID, snapshot: snapshot)
+
+        let context = ModelContext(container)
+        let stored = try #require(
+            context.fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == seedID })).first
+        )
+        #expect(stored.growingInfo == snapshot)
+        #expect(stored.updatedAt == originalUpdatedAt + 1)
+        #expect(signalCount == 1)
+    }
+
+    @Test("custom-type edits advance the merge clock and schedule a CloudKit save")
+    func customTypeEditSignalsCloudKitMutation() throws {
+        let seedID = "seed-custom-type"
+        let originalUpdatedAt: Int64 = 9_000_000_000_000
+        let (container, engine) = try Self.makeSeedMutationFixture(
+            name: "customTypeMutationSignal",
+            seedID: seedID,
+            updatedAt: originalUpdatedAt
+        )
+        var signalCount = 0
+        engine.onLocalHouseholdMutation = { signalCount += 1 }
+
+        try engine.setLocalCustomType(seedID: seedID, type: "  Pepper  ")
+
+        let context = ModelContext(container)
+        let stored = try #require(
+            context.fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == seedID })).first
+        )
+        #expect(stored.customType == "Pepper")
+        #expect(stored.updatedAt == originalUpdatedAt + 1)
+        #expect(signalCount == 1)
+    }
+
+    @Test("missing-seed edits do not schedule a CloudKit save")
+    func missingSeedEditsDoNotSignalCloudKitMutation() throws {
+        let (_, engine) = try Self.makeSeedMutationFixture(
+            name: "missingSeedMutationSignal",
+            seedID: "unrelated-seed",
+            updatedAt: 1
+        )
+        var signalCount = 0
+        engine.onLocalHouseholdMutation = { signalCount += 1 }
+
+        try engine.setLocalGrowingInfo(
+            seedID: "missing-growing-info",
+            snapshot: GrowingInfoSnapshot(scientific_name: "Capsicum annuum")
+        )
+        try engine.setLocalCustomType(seedID: "missing-custom-type", type: "Pepper")
+
+        #expect(signalCount == 0)
+    }
+
     @Test("CloudKit mode makes no assistant key request")
     func cloudKitModeSkipsAssistantKeyRequest() async throws {
         let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
@@ -173,71 +239,433 @@ struct CloudKitPendingWriteRegressionTests {
                 "CloudKit mode must block every coordinator and detail-refresh request")
     }
 
-    @Test("CloudKit photo capability blocks server photo operations with preservation copy")
-    func cloudKitModeBlocksServerPhotoCapability() throws {
+    @Test("CloudKit seed-photo upload stages bytes and persists locally before one save signal")
+    func cloudKitSeedPhotoUploadStagesLocalMutation() async throws {
         let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
         defer { Self.restoreCloudKitFlag(previous) }
         FeatureFlags.setCloudKitHouseholdSync(true)
 
-        #expect(PhotoFeatureGate.isRestricted)
-        #expect(FeatureFlags.cloudKitPhotoCapabilityMessage.contains("temporarily unavailable"))
-        #expect(FeatureFlags.cloudKitPhotoCapabilityMessage.contains("preserved"))
-        do {
-            try PhotoFeatureGate.requireAvailable()
-            Issue.record("CloudKit photo operation unexpectedly allowed")
-        } catch let error as SeedkeepError {
-            #expect(error.code == "cloudkit_feature_unavailable")
-            #expect(error.message == FeatureFlags.cloudKitPhotoCapabilityMessage)
-        }
-    }
-
-    @Test("CloudKit mode blocks every photo byte operation before any server request")
-    func cloudKitModeBlocksEveryPhotoByteOperationBeforeServerRequest() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
+        let householdID = "photo-upload-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
         let session = CatalogRouterMockURLProtocol.makeSession(
             fallbackBody: Data(),
             fallbackStatus: 500
         )
-        let client = SeedkeepClient(
-            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
-            bearerToken: "test"
-        )
+        let container = makeTestContainer(name: "cloudKitSeedPhotoUpload")
+        let context = ModelContext(container)
+        context.insert(LocalSeed(
+            id: "seed-photo-parent",
+            householdID: householdID,
+            state: .active,
+            packetCount: 1,
+            source: .store,
+            createdAt: 1,
+            updatedAt: 2
+        ))
+        try context.save()
         let engine = SyncEngine(
-            client: client,
-            container: makeTestContainer(name: "cloudKitPhotoOperationGate")
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var saveSignals = 0
+        engine.onLocalHouseholdMutation = { saveSignals += 1 }
+        let bytes = Data("cloudkit-seed-photo".utf8)
+
+        try await engine.uploadPhoto(
+            seedID: "seed-photo-parent",
+            role: .front,
+            jpegData: bytes,
+            householdID: householdID
         )
 
-        await Self.expectPhotoBlocked {
-            try await engine.refreshSeedPhotos(seedID: "seed", householdID: "household")
+        let stored = try #require(
+            ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>()).first
+        )
+        let recordName = SeedkeepRecordNames.seedPhoto(stored.id)
+        #expect(stored.seedID == "seed-photo-parent")
+        #expect(stored.householdID == householdID)
+        #expect(stored.role == .front)
+        #expect(stored.byteSize == bytes.count)
+        #expect(stored.capturedAt > 0)
+        #expect(PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            .data(for: recordName) == bytes)
+        #expect(saveSignals == 1)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("CloudKit journal-photo upload stages bytes and persists locally before one save signal")
+    func cloudKitJournalPhotoUploadStagesLocalMutation() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let householdID = "journal-photo-upload-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let container = makeTestContainer(name: "cloudKitJournalPhotoUpload")
+        let context = ModelContext(container)
+        context.insert(LocalJournalEntry(
+            id: "journal-photo-parent",
+            householdID: householdID,
+            occurredOn: "2026-08-20",
+            body: "Photo entry",
+            seedID: nil,
+            bedID: nil,
+            plantingEventID: nil,
+            createdAt: 1,
+            updatedAt: 2,
+            deletedAt: nil
+        ))
+        try context.save()
+        let engine = SyncEngine(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var saveSignals = 0
+        engine.onLocalHouseholdMutation = { saveSignals += 1 }
+        let bytes = Data("cloudkit-journal-photo".utf8)
+
+        _ = try await engine.uploadJournalPhoto(
+            entryId: "journal-photo-parent",
+            jpegData: bytes,
+            width: 640,
+            height: 480,
+            householdID: householdID
+        )
+
+        let stored = try #require(
+            ModelContext(container).fetch(FetchDescriptor<LocalJournalEntryPhoto>()).first
+        )
+        let recordName = SeedkeepRecordNames.journalEntryPhoto(stored.id)
+        #expect(stored.entryID == "journal-photo-parent")
+        #expect(stored.sortOrder == 0)
+        #expect(stored.width == 640)
+        #expect(stored.height == 480)
+        #expect(stored.createdAt > 0)
+        #expect(stored.updatedAt == stored.createdAt)
+        #expect(PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            .data(for: recordName) == bytes)
+        #expect(saveSignals == 1)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("CloudKit journal-photo upload rejects a parked entry before staging bytes")
+    func cloudKitJournalPhotoUploadRejectsParkedEntry() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let parkedHouseholdID = "parked-photo-\(UUID().uuidString)"
+        let activeHouseholdID = "active-photo-\(UUID().uuidString)"
+        defer {
+            try? PhotoByteStore.purgeHousehold(parkedHouseholdID)
+            try? PhotoByteStore.purgeHousehold(activeHouseholdID)
         }
-        await Self.expectPhotoBlocked {
-            try await engine.uploadPhoto(
-                seedID: "seed",
-                role: .extra,
-                jpegData: Data("jpeg".utf8),
-                householdID: "household")
-        }
-        await Self.expectPhotoBlocked {
-            _ = try await engine.fetchSeedPhotoData(photoID: "seed-photo")
-        }
-        await Self.expectPhotoBlocked {
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let container = makeTestContainer(name: "cloudKitJournalPhotoParkedEntry")
+        let context = ModelContext(container)
+        context.insert(LocalJournalEntry(
+            id: "parked-photo-entry", householdID: parkedHouseholdID,
+            occurredOn: "2026-08-20", body: "Parked",
+            seedID: nil, bedID: nil, plantingEventID: nil,
+            createdAt: 1, updatedAt: 2, deletedAt: nil))
+        try context.save()
+        let engine = SyncEngine(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var saveSignals = 0
+        engine.onLocalHouseholdMutation = { saveSignals += 1 }
+
+        do {
             _ = try await engine.uploadJournalPhoto(
-                entryId: "entry",
-                jpegData: Data("jpeg".utf8),
-                width: 10,
-                height: 20)
-        }
-        await Self.expectPhotoBlocked {
-            try await engine.deleteJournalPhoto("journal-photo")
-        }
-        await Self.expectPhotoBlocked {
-            _ = try await engine.journalPhotoData(photoId: "journal-photo")
+                entryId: "parked-photo-entry",
+                jpegData: Data("photo".utf8),
+                householdID: activeHouseholdID
+            )
+            Issue.record("Parked journal entry unexpectedly accepted a photo")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "inactive_garden_entry")
         }
 
+        #expect(try ModelContext(container)
+            .fetch(FetchDescriptor<LocalJournalEntryPhoto>()).isEmpty)
+        #expect(saveSignals == 0)
         #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("CloudKit seed-photo delete queues one scoped intent and purges local bytes")
+    func cloudKitSeedPhotoDeleteQueuesIntentAndPurgesBytes() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let householdID = "seed-photo-delete-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let scopeID = HouseholdCloudCoordinator.ownerScopeID(householdID: householdID)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let container = makeTestContainer(name: "cloudKitSeedPhotoDelete")
+        let context = ModelContext(container)
+        context.insert(LocalSeed(
+            id: "seed-delete-parent", householdID: householdID, state: .active,
+            packetCount: 1, source: .store, createdAt: 1, updatedAt: 2))
+        let photo = LocalSeedPhoto(
+            id: "seed-photo-delete", seedID: "seed-delete-parent", householdID: householdID,
+            r2Key: nil, role: .front, byteSize: 5, capturedAt: 3)
+        context.insert(photo)
+        try context.save()
+        let recordName = SeedkeepRecordNames.seedPhoto(photo.id)
+        let bytes = Data("photo".utf8)
+        try PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            .write(bytes, for: recordName)
+        try PhotoByteStore(lifetime: .cache, householdID: householdID)
+            .write(bytes, for: recordName)
+        let engine = SyncEngine(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        engine.cloudKitScopeIDProvider = { scopeID }
+        var saveSignals = 0
+        engine.onLocalHouseholdMutation = { saveSignals += 1 }
+
+        try await engine.deleteSeedPhoto(photo.id, householdID: householdID)
+
+        let verification = ModelContext(container)
+        #expect(try verification.fetch(FetchDescriptor<LocalSeedPhoto>()).isEmpty)
+        let deletion = try #require(
+            verification.fetch(FetchDescriptor<LocalCloudKitDeletion>()).first)
+        #expect(deletion.id == "\(scopeID)|\(recordName)")
+        #expect(deletion.scopeID == scopeID)
+        #expect(deletion.householdID == householdID)
+        #expect(deletion.recordName == recordName)
+        #expect(!PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            .contains(recordName))
+        #expect(!PhotoByteStore(lifetime: .cache, householdID: householdID)
+            .contains(recordName))
+        #expect(saveSignals == 1)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("CloudKit journal-photo delete queues one scoped intent and purges local bytes")
+    func cloudKitJournalPhotoDeleteQueuesIntentAndPurgesBytes() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let householdID = "journal-photo-delete-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let scopeID = HouseholdCloudCoordinator.ownerScopeID(householdID: householdID)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let container = makeTestContainer(name: "cloudKitJournalPhotoDelete")
+        let context = ModelContext(container)
+        context.insert(LocalJournalEntry(
+            id: "journal-delete-parent", householdID: householdID,
+            occurredOn: "2026-08-20", body: "Delete photo",
+            seedID: nil, bedID: nil, plantingEventID: nil,
+            createdAt: 1, updatedAt: 2, deletedAt: nil))
+        let photo = LocalJournalEntryPhoto(
+            id: "journal-photo-delete", entryID: "journal-delete-parent",
+            storageKey: nil, sortOrder: 0, width: 10, height: 20,
+            createdAt: 2, updatedAt: 2)
+        context.insert(photo)
+        try context.save()
+        let recordName = SeedkeepRecordNames.journalEntryPhoto(photo.id)
+        let bytes = Data("photo".utf8)
+        try PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            .write(bytes, for: recordName)
+        try PhotoByteStore(lifetime: .cache, householdID: householdID)
+            .write(bytes, for: recordName)
+        let engine = SyncEngine(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        engine.cloudKitScopeIDProvider = { scopeID }
+        var saveSignals = 0
+        engine.onLocalHouseholdMutation = { saveSignals += 1 }
+
+        try await engine.deleteJournalPhoto(photo.id, householdID: householdID)
+
+        let verification = ModelContext(container)
+        #expect(try verification.fetch(FetchDescriptor<LocalJournalEntryPhoto>()).isEmpty)
+        let deletion = try #require(
+            verification.fetch(FetchDescriptor<LocalCloudKitDeletion>()).first)
+        #expect(deletion.id == "\(scopeID)|\(recordName)")
+        #expect(deletion.householdID == householdID)
+        #expect(deletion.recordName == recordName)
+        #expect(!PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
+            .contains(recordName))
+        #expect(!PhotoByteStore(lifetime: .cache, householdID: householdID)
+            .contains(recordName))
+        #expect(saveSignals == 1)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("CloudKit seed-photo cache miss performs one on-demand sync retry without a mutation signal")
+    func cloudKitSeedPhotoCacheMissRetriesWithoutMutationSignal() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let householdID = "seed-photo-read-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let container = makeTestContainer(name: "cloudKitSeedPhotoCacheMiss")
+        let context = ModelContext(container)
+        let photo = LocalSeedPhoto(
+            id: "seed-photo-read", seedID: "seed-parent", householdID: householdID,
+            r2Key: nil, role: .front, byteSize: 5, capturedAt: 3)
+        context.insert(photo)
+        try context.save()
+        let recordName = SeedkeepRecordNames.seedPhoto(photo.id)
+        let expected = Data("photo".utf8)
+        let engine = SyncEngine(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var cacheMisses = 0
+        engine.onCloudKitPhotoCacheMiss = { requestedRecordName in
+            cacheMisses += 1
+            #expect(requestedRecordName == recordName)
+            return expected
+        }
+        var saveSignals = 0
+        engine.onLocalHouseholdMutation = { saveSignals += 1 }
+
+        let data = try await engine.fetchSeedPhotoData(
+            photoID: photo.id,
+            householdID: householdID
+        )
+
+        #expect(data == expected)
+        #expect(cacheMisses == 1)
+        #expect(saveSignals == 0)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("CloudKit journal-photo cache miss performs one on-demand sync retry without a mutation signal")
+    func cloudKitJournalPhotoCacheMissRetriesWithoutMutationSignal() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let householdID = "journal-photo-read-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            fallbackBody: Data(),
+            fallbackStatus: 500
+        )
+        let container = makeTestContainer(name: "cloudKitJournalPhotoCacheMiss")
+        let context = ModelContext(container)
+        context.insert(LocalJournalEntry(
+            id: "journal-photo-read-parent", householdID: householdID,
+            occurredOn: "2026-08-20", body: "Read photo",
+            seedID: nil, bedID: nil, plantingEventID: nil,
+            createdAt: 1, updatedAt: 2, deletedAt: nil))
+        let photo = LocalJournalEntryPhoto(
+            id: "journal-photo-read", entryID: "journal-photo-read-parent",
+            storageKey: nil, sortOrder: 0, width: 10, height: 20,
+            createdAt: 2, updatedAt: 2)
+        context.insert(photo)
+        try context.save()
+        let recordName = SeedkeepRecordNames.journalEntryPhoto(photo.id)
+        let expected = Data("photo".utf8)
+        let engine = SyncEngine(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        var cacheMisses = 0
+        engine.onCloudKitPhotoCacheMiss = { requestedRecordName in
+            cacheMisses += 1
+            #expect(requestedRecordName == recordName)
+            return expected
+        }
+        var saveSignals = 0
+        engine.onLocalHouseholdMutation = { saveSignals += 1 }
+
+        let data = try await engine.journalPhotoData(
+            photoId: photo.id,
+            householdID: householdID
+        )
+
+        #expect(data == expected)
+        #expect(cacheMisses == 1)
+        #expect(saveSignals == 0)
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+    }
+
+    @Test("flag OFF seed-photo upload persists the returned row without a destructive refresh")
+    func flagOffSeedPhotoUploadPersistsReturnedRowWithoutRefresh() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(false)
+
+        let response = Data(#"{"ok":true,"data":{"photo":{"id":"legacy-photo-created","seed_id":"legacy-seed","household_id":"legacy-household","r2_key":"photos/legacy.jpg","role":"extra","width":640,"height":480,"byte_size":4,"captured_at":3}}}"#.utf8)
+        let session = CatalogRouterMockURLProtocol.makeSession(
+            routes: ["POST /api/seeds/legacy-seed/photos": response],
+            fallbackBody: Data(),
+            fallbackStatus: 200
+        )
+        let container = makeTestContainer(name: "flagOffSeedPhotoUpload")
+        let engine = SyncEngine(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+
+        try await engine.uploadPhoto(
+            seedID: "legacy-seed",
+            role: .extra,
+            jpegData: Data("jpeg".utf8),
+            householdID: "legacy-household"
+        )
+
+        let photo = try #require(
+            ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>()).first)
+        #expect(photo.id == "legacy-photo-created")
+        #expect(photo.seedID == "legacy-seed")
+        #expect(photo.householdID == "legacy-household")
+        #expect(photo.r2Key == "photos/legacy.jpg")
+        #expect(CatalogRouterMockURLProtocol.capturedMethodPaths().count == 1)
+        #expect(CatalogRouterMockURLProtocol.capturedMethodPaths().first?.method == "POST")
+        #expect(CatalogRouterMockURLProtocol.capturedMethodPaths().first?.path == "/api/seeds/legacy-seed/photos")
     }
 
     @Test("flag OFF preserves the server photo byte path")
@@ -260,20 +688,18 @@ struct CloudKitPendingWriteRegressionTests {
             container: makeTestContainer(name: "flagOffPhotoBytePath")
         )
 
-        #expect(!PhotoFeatureGate.isRestricted)
-        try PhotoFeatureGate.requireAvailable()
         #expect(try await engine.fetchSeedPhotoData(photoID: "legacy-photo") == bytes)
         #expect(CatalogRouterMockURLProtocol.capturedPaths() == ["/api/photos/legacy-photo"])
     }
 
-    @Test("photo capability follows owner, participant, and rollback garden modes")
-    func photoCapabilityFollowsActiveGardenModes() {
+    @Test("photo operations resolve the active owner, participant, and rollback garden IDs")
+    func photoOperationsResolveActiveGardenIDs() {
         let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
         defer { Self.restoreCloudKitFlag(previous) }
-        let modes: [(household: String, zone: String?, cloudKit: Bool, activeID: String, restricted: Bool)] = [
-            ("owner-household", nil, true, "owner-household", true),
-            ("participant-household", "seedkeep-owner-household", true, "owner-household", true),
-            ("participant-household", "seedkeep-owner-household", false, "participant-household", false)
+        let modes: [(household: String, zone: String?, cloudKit: Bool, activeID: String)] = [
+            ("owner-household", nil, true, "owner-household"),
+            ("participant-household", "seedkeep-owner-household", true, "owner-household"),
+            ("participant-household", "seedkeep-owner-household", false, "participant-household")
         ]
 
         for mode in modes {
@@ -284,7 +710,6 @@ struct CloudKitPendingWriteRegressionTests {
                 cloudKitSyncEnabled: mode.cloudKit
             )
             #expect(activeHouseholdID == mode.activeID)
-            #expect(PhotoFeatureGate.isRestricted == mode.restricted)
         }
     }
 
@@ -367,6 +792,55 @@ struct CloudKitPendingWriteRegressionTests {
         #expect(saveSignals == 6)
         #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty,
                 "CloudKit journal/checklist mutations and refreshes must not hit the legacy server")
+    }
+
+    @Test("leap-day retrospectives span February and March while rejecting impossible dates")
+    func cloudKitRetrospectiveHandlesLeapDay() async throws {
+        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
+        defer { Self.restoreCloudKitFlag(previous) }
+        FeatureFlags.setCloudKitHouseholdSync(true)
+
+        let container = makeTestContainer(name: "cloudKitLeapDayRetrospective")
+        let store = JournalStore(
+            client: SeedkeepClient(
+                configuration: .init(baseURL: URL(string: "https://test.local")!),
+                bearerToken: "test"
+            ),
+            container: container
+        )
+        let householdID = "leap-day-garden"
+        let entries = [
+            ("2024-02-25", "Before window"),
+            ("2024-02-26", "February boundary"),
+            ("2024-02-29", "Leap day"),
+            ("2024-03-03", "March boundary"),
+            ("2024-03-04", "After window")
+        ]
+        for (occurredOn, body) in entries {
+            _ = try await store.create(
+                occurredOn: occurredOn,
+                body: body,
+                householdID: householdID
+            )
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let currentYear = calendar.component(.year, from: Date())
+        _ = try await store.create(
+            occurredOn: "\(currentYear)-03-01",
+            body: "Current year",
+            householdID: householdID
+        )
+
+        let retrospective = try await store.retrospective(on: "02-29", householdID: householdID)
+
+        #expect(retrospective.years.map(\.year) == [2024])
+        #expect(retrospective.years.first?.entries.map(\.body) == [
+            "March boundary", "Leap day", "February boundary"
+        ])
+        await #expect(throws: SeedkeepError.self) {
+            try await store.retrospective(on: "02-30", householdID: householdID)
+        }
     }
 
     @Test("journal creates use the active owner, participant, and rollback garden IDs")
@@ -577,20 +1051,6 @@ struct CloudKitPendingWriteRegressionTests {
         }
     }
 
-    private static func expectPhotoBlocked(
-        _ operation: () async throws -> Void
-    ) async {
-        do {
-            try await operation()
-            Issue.record("CloudKit-gated photo operation unexpectedly succeeded")
-        } catch let error as SeedkeepError {
-            #expect(error.code == "cloudkit_feature_unavailable")
-            #expect(error.message == FeatureFlags.cloudKitPhotoCapabilityMessage)
-        } catch {
-            Issue.record("Unexpected photo gate error: \(error)")
-        }
-    }
-
     private static func expectInactiveGarden(
         _ operation: () async throws -> Void
     ) async {
@@ -610,5 +1070,29 @@ struct CloudKitPendingWriteRegressionTests {
         } else {
             UserDefaults.standard.removeObject(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
         }
+    }
+
+    private static func makeSeedMutationFixture(
+        name: String,
+        seedID: String,
+        updatedAt: Int64
+    ) throws -> (ModelContainer, SyncEngine) {
+        let container = makeTestContainer(name: name)
+        let context = ModelContext(container)
+        context.insert(LocalSeed(
+            id: seedID,
+            householdID: "household-cloudkit",
+            state: .active,
+            packetCount: 1,
+            source: .store,
+            createdAt: 1,
+            updatedAt: updatedAt
+        ))
+        try context.save()
+        let client = SeedkeepClient(
+            configuration: .init(baseURL: URL(string: "https://test.local")!),
+            bearerToken: "test_token"
+        )
+        return (container, SyncEngine(client: client, container: container))
     }
 }

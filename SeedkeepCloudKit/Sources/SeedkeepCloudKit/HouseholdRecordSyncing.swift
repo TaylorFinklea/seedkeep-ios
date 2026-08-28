@@ -46,10 +46,20 @@ public protocol HouseholdRecordSyncing: AnyObject, Sendable {
 
     func save(_ record: CKRecord)
     func delete(_ recordID: CKRecord.ID)
+    /// Fetch one exact record independently of the incremental change cursor. Photo cache recovery
+    /// uses this after a fetched CKAsset URL expires but the surrounding batch has already checkpointed.
+    func fetchRecord(_ recordID: CKRecord.ID) async throws -> CKRecord
     /// Pull remote changes (fires `onFetchedChanges` as batches arrive).
     func fetchChanges() async throws
     /// Push staged changes, re-draining merged re-saves (G11). Throws if the drain is incomplete, if a
     /// record failed permanently, or if a sent batch's projection was refused (see `onFetchedChanges`).
     func sendUntilDrained(maxPasses: Int) async throws
+    /// Record IDs that the most recent drain permanently dropped after a save failure. Consuming
+    /// clears the list; coordinators use it to durably suppress expensive photo re-uploads.
+    func consumePermanentlyFailedSaveRecordIDs() -> [CKRecord.ID]
+}
+
+public extension HouseholdRecordSyncing {
+    func consumePermanentlyFailedSaveRecordIDs() -> [CKRecord.ID] { [] }
 }
 #endif

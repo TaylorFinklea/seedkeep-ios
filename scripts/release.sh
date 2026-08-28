@@ -6,21 +6,30 @@
 #   ./scripts/release.sh                # default: bump build only
 #   ./scripts/release.sh --patch        # also bump patch (0.1.0 → 0.1.1)
 #   ./scripts/release.sh --minor        # also bump minor (0.1.0 → 0.2.0)
+#   ./scripts/release.sh --major        # also bump major (0.4.0 → 1.0.0)
 #   ./scripts/release.sh --build        # explicit alias for default
+#   ./scripts/release.sh --major --plan-version  # print the version plan only
+#   ./scripts/release.sh --check-auth   # validate ASC auth without building/uploading
 #
 # Build-only bumps stay under the same App Store record and are right for
-# routine TestFlight iteration. --patch / --minor change the marketing version
+# routine TestFlight iteration. --patch / --minor / --major change the marketing version
 # and trigger a fresh App Store review when the next build ships to App Store
 # (not just TestFlight). Only use those when you intend to ship a release
 # review.
 #
-# App Store Connect API auth (override defaults via env):
-#   ASC_API_KEY_PATH   — path to the .p8 key (default: ~/.appstoreconnect/AuthKey_67RBQ3NP5S.p8)
-#   ASC_API_KEY_ID     — key ID matching the .p8 filename     (default: 67RBQ3NP5S)
+# App Store Connect API credentials resolve from explicit IOS_RELEASE_* env
+# overrides first, then these macOS Keychain services:
+#   IOS_RELEASE_KEY_ID      — the App Store Connect API key ID
+#   IOS_RELEASE_ISSUER_ID   — the App Store Connect issuer UUID
+# Seed or rotate them with security add-generic-password -U -a "$USER" -s
+# <service-name> -w '<value>'. Legacy ASC_API_KEY_ID/ASC_API_ISSUER_ID env
+# overrides remain accepted for compatibility; no key ID or issuer is hardcoded.
 #
-# The key must have the Admin role (or the cloud-managed-distribution grant) —
-# export/upload mints provisioning profiles via cloud signing and 403s without it.
-#   ASC_API_ISSUER_ID  — App Store Connect issuer UUID         (default: fe27785a-1413-46ff-bd82-111de0da024f)
+# IOS_RELEASE_KEY_PATH (legacy ASC_API_KEY_PATH also accepted) can override the
+# private key location. Otherwise the resolved key ID selects Apple's standard
+# ~/.appstoreconnect/private_keys/AuthKey_<ID>.p8 path. The key must have the
+# Admin role or cloud-managed-distribution permission: export/upload mints
+# provisioning profiles via cloud signing and fails with 403 without it.
 #
 # Source of truth for build/version numbers is project.yml. The script bumps
 # CURRENT_PROJECT_VERSION (and optionally MARKETING_VERSION), runs xcodegen,
@@ -42,48 +51,92 @@ fail() { echo -e "${RED}✘ $1${NC}"; exit 1; }
 BUMP_TYPE="build"
 SKIP_TESTS=false
 SKIP_CHANGELOG=false
+CHECK_AUTH=false
+PLAN_VERSION=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build) BUMP_TYPE="build"; shift ;;
         --patch) BUMP_TYPE="patch"; shift ;;
         --minor) BUMP_TYPE="minor"; shift ;;
+        --major) BUMP_TYPE="major"; shift ;;
+        --plan-version) PLAN_VERSION=true; shift ;;
         --skip-tests) SKIP_TESTS=true; shift ;;
         --skip-changelog) SKIP_CHANGELOG=true; shift ;;
-        *) fail "Unknown flag: $1. Use --build, --patch, --minor, --skip-tests, or --skip-changelog." ;;
+        --check-auth) CHECK_AUTH=true; shift ;;
+        *) fail "Unknown flag: $1. Use --build, --patch, --minor, --major, --plan-version, --skip-tests, --skip-changelog, or --check-auth." ;;
     esac
 done
+
+load_version_plan() {
+    PROJECT_YML="$REPO_ROOT/project.yml"
+    OLD_BUILD=$(awk '/^[[:space:]]*CURRENT_PROJECT_VERSION:/ {gsub(/"/, "", $2); print $2; exit}' "$PROJECT_YML")
+    [[ -n "$OLD_BUILD" ]] || fail "Could not read CURRENT_PROJECT_VERSION from project.yml"
+
+    OLD_VERSION=$(awk '/^[[:space:]]*MARKETING_VERSION:/ {gsub(/"/, "", $2); print $2; exit}' "$PROJECT_YML")
+    [[ -n "$OLD_VERSION" ]] || fail "Could not read MARKETING_VERSION from project.yml"
+
+    NEW_BUILD=$((OLD_BUILD + 1))
+    NEW_VERSION="$OLD_VERSION"
+
+    if [[ "$BUMP_TYPE" != "build" ]]; then
+        IFS='.' read -ra PARTS <<< "$OLD_VERSION"
+        MAJOR="${PARTS[0]:-0}"; MINOR="${PARTS[1]:-0}"; PATCH="${PARTS[2]:-0}"
+        case "$BUMP_TYPE" in
+            patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+            minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
+            major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+        esac
+    fi
+}
+
+if [[ "$PLAN_VERSION" == "true" ]]; then
+    load_version_plan
+    printf '[release] version plan: %s (%s) -> %s (%s)\n' \
+        "$OLD_VERSION" "$OLD_BUILD" "$NEW_VERSION" "$NEW_BUILD"
+    exit 0
+fi
+
+# ---------- App Store Connect API key ----------
+keychain_value() {
+    security find-generic-password -a "$USER" -s "$1" -w 2>/dev/null || true
+}
+
+ENV_KEY_ID="${IOS_RELEASE_KEY_ID:-${ASC_API_KEY_ID:-}}"
+ENV_ISSUER_ID="${IOS_RELEASE_ISSUER_ID:-${ASC_API_ISSUER_ID:-}}"
+ASC_KEY_ID="${ENV_KEY_ID:-$(keychain_value IOS_RELEASE_KEY_ID)}"
+ASC_ISSUER="${ENV_ISSUER_ID:-$(keychain_value IOS_RELEASE_ISSUER_ID)}"
+
+if [[ -z "$ASC_KEY_ID" || -z "$ASC_ISSUER" ]]; then
+    fail "Missing App Store Connect credentials. Set IOS_RELEASE_KEY_ID and IOS_RELEASE_ISSUER_ID, or store them in Keychain services IOS_RELEASE_KEY_ID and IOS_RELEASE_ISSUER_ID."
+fi
+
+DEFAULT_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+ASC_KEY_PATH="${IOS_RELEASE_KEY_PATH:-${ASC_API_KEY_PATH:-$DEFAULT_KEY_PATH}}"
+
+# ---------- Xcode toolchain ----------
+DEVELOPER_DIR="$(bash "$REPO_ROOT/scripts/resolve-xcode-developer-dir.sh" "${DEVELOPER_DIR:-}")"
+export DEVELOPER_DIR
+
+[[ -f "$ASC_KEY_PATH" ]] || fail "ASC API key file is missing. Set IOS_RELEASE_KEY_PATH (or ASC_API_KEY_PATH) to an existing .p8 file; the default uses AuthKey_<resolved-key-id>.p8 in Apple's standard private_keys directory."
+
+if [[ "$CHECK_AUTH" == "true" ]]; then
+    echo "[release] App Store Connect credentials and Xcode toolchain are configured"
+    exit 0
+fi
 
 # ---------- dirty tree check (before any version mutation) ----------
 if ! git diff --quiet || ! git diff --cached --quiet; then
     fail "Working tree is dirty. Commit or stash changes before releasing."
 fi
-
-# ---------- App Store Connect API key ----------
-ASC_KEY_PATH="${ASC_API_KEY_PATH:-$HOME/.appstoreconnect/AuthKey_67RBQ3NP5S.p8}"
-ASC_KEY_ID="${ASC_API_KEY_ID:-67RBQ3NP5S}"
-ASC_ISSUER="${ASC_API_ISSUER_ID:-fe27785a-1413-46ff-bd82-111de0da024f}"
-
-[[ -f "$ASC_KEY_PATH" ]] || fail "ASC API key not found at $ASC_KEY_PATH. Set ASC_API_KEY_PATH or place the .p8 there."
-
-# ---------- bump version in project.yml ----------
-PROJECT_YML="$REPO_ROOT/project.yml"
-OLD_BUILD=$(awk '/^[[:space:]]*CURRENT_PROJECT_VERSION:/ {gsub(/"/, "", $2); print $2; exit}' "$PROJECT_YML")
-[[ -n "$OLD_BUILD" ]] || fail "Could not read CURRENT_PROJECT_VERSION from project.yml"
-
-OLD_VERSION=$(awk '/^[[:space:]]*MARKETING_VERSION:/ {gsub(/"/, "", $2); print $2; exit}' "$PROJECT_YML")
-[[ -n "$OLD_VERSION" ]] || fail "Could not read MARKETING_VERSION from project.yml"
-
-NEW_BUILD=$((OLD_BUILD + 1))
-NEW_VERSION="$OLD_VERSION"
-
-if [[ "$BUMP_TYPE" != "build" ]]; then
-    IFS='.' read -ra PARTS <<< "$OLD_VERSION"
-    MAJOR="${PARTS[0]:-0}"; MINOR="${PARTS[1]:-0}"; PATCH="${PARTS[2]:-0}"
-    case "$BUMP_TYPE" in
-        patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
-        minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
-    esac
+if ! working_tree_status="$(git status --porcelain --untracked-files=all)"; then
+    fail "Could not inspect working tree. Refusing to release."
 fi
+if [[ -n "$working_tree_status" ]]; then
+    fail "Working tree is dirty. Commit or stash changes before releasing."
+fi
+
+# ---------- resolve version plan ----------
+load_version_plan
 
 # ---------- changelog authoring gate (fail-closed) ----------
 CHANGELOG_FILE="$REPO_ROOT/Seedkeep/Core/Changelog/ChangelogData.swift"
@@ -144,6 +197,9 @@ xcodebuild \
     archive 2>&1 | grep -E "Archive Succeeded|error:|\*\*" | head -5
 
 [[ -d "$ARCHIVE_PATH" ]] || fail "Archive failed — $ARCHIVE_PATH not created"
+
+step "Verifying archived app identity and entitlements"
+"$REPO_ROOT/scripts/verify-release-archive.sh" "$ARCHIVE_PATH" "$NEW_VERSION" "$NEW_BUILD"
 
 # ---------- export + upload ----------
 step "Exporting and uploading to TestFlight"

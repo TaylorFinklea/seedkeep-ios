@@ -35,6 +35,7 @@ final class HouseholdCloudCoordinator {
     private let householdCreatedAt: Int64
     private let householdUpdatedAt: Int64
     private let container: ModelContainer
+    private let photoAssets: PhotoAssetSyncBridge
     private let wipeOperation: (ModelContainer) throws -> Void
     /// Live provisioner — nil in tests AND for a participant (the owner owns the zone; a participant
     /// never provisions or runs the iCloud-availability gate against its own private DB).
@@ -61,6 +62,13 @@ final class HouseholdCloudCoordinator {
     /// True after an account-change cleanup fails; suppresses all CloudKit work until a subsequent
     /// Sync now invocation completes the wipe.
     private(set) var requiresWipeRetry = false
+    /// Photos dropped after a permanent CloudKit save failure. Durable across relaunch so a large
+    /// asset cannot be re-uploaded forever; Stage E can surface these and call `retryPhotoSync`.
+    private(set) var failedPhotoRecordNames = Set<String>()
+    /// Remote photo records whose CKAsset URL expired before its bytes reached the durable cache.
+    /// The change cursor may still advance for unrelated records, so this roster survives relaunch
+    /// and drives an exact-record refetch when the image is next requested.
+    private(set) var unavailableFetchedPhotoRecordNames = Set<String>()
     /// Records currently mirrored in the CloudKit zone (in-memory store) — a rough "data is there"
     /// signal. NOTE: the store is rehydrated from CloudKit each launch, so it reads 0 until the first
     /// fetch this session (the Settings label says "this session" so 0 isn't misread as data loss).
@@ -109,6 +117,7 @@ final class HouseholdCloudCoordinator {
         self.householdCreatedAt = householdCreatedAt
         self.householdUpdatedAt = householdUpdatedAt
         self.container = container
+        self.photoAssets = PhotoAssetSyncBridge(householdID: householdID)
         self.wipeOperation = wipeOperation ?? Self.wipeHouseholdSwiftData
         self.provisioner = provisioner
         self.stateURL = stateURL
@@ -117,6 +126,14 @@ final class HouseholdCloudCoordinator {
         self.scopeID = isParticipant
             ? Self.participantScopeID(ownerZoneID: zoneID)
             : Self.ownerScopeID(householdID: householdID)
+        self.failedPhotoRecordNames = Self.loadFailedPhotoRecordNames(
+            from: isParticipant
+                ? Self.participantFailedPhotoStateURL(ownerZoneID: zoneID)
+                : Self.ownerFailedPhotoStateURL(householdID: householdID))
+        self.unavailableFetchedPhotoRecordNames = Self.loadUnavailablePhotoRecordNames(
+            from: isParticipant
+                ? Self.participantUnavailablePhotoStateURL(ownerZoneID: zoneID)
+                : Self.ownerUnavailablePhotoStateURL(householdID: householdID))
         if let cleanupMarkerURL, FileManager.default.fileExists(atPath: cleanupMarkerURL.path) {
             requiresWipeRetry = true
             lastErrorDetail = "Pending CloudKit account cleanup from a previous launch."
@@ -294,9 +311,9 @@ final class HouseholdCloudCoordinator {
         guard isCurrent(passEpoch) else { return }
         engine.activateForCurrentAccount()
         engine.merger = SeedkeepRecordMerger()
-        engine.onFetchedChanges = { [weak self, buffer] mods, dels in
-            buffer.append(mods, dels, epoch: passEpoch)
-            try await self?.drainPendingApplies(passEpoch)
+        engine.onFetchedChanges = { [weak self] mods, dels in
+            guard let self else { throw SyncEngineError.accountInvalidated }
+            try await self.receiveFetchedChanges(mods, dels, passEpoch: passEpoch)
         }
         let cleanupMarkerURL = cleanupMarkerURL
         engine.onAccountChange = { [weak self, buffer] change in
@@ -334,6 +351,45 @@ final class HouseholdCloudCoordinator {
         }
         guard isCurrent(passEpoch) else { return }
         started = true
+    }
+
+    /// Serialize asset materialization and its durable recovery roster with account cleanup. There
+    /// is deliberately no suspension point inside this MainActor routine: either it runs before a
+    /// wipe (whose purge then removes every copied byte) or after one (and the epoch guard rejects
+    /// the retired callback before it touches disk).
+    private func receiveFetchedChanges(
+        _ mods: [CKRecord],
+        _ dels: [CKRecord.ID],
+        passEpoch: Int
+    ) throws {
+        guard isCurrent(passEpoch) else { throw SyncEngineError.accountInvalidated }
+        // CKAsset URLs are framework-owned and temporary. Copy each photo independently before the
+        // callback returns. One unreadable asset becomes a recoverable shell row and does not poison
+        // the checkpoint for unrelated records in the same batch (D7).
+        var unavailable = Set<String>()
+        var resolved = Set<String>()
+        for record in mods where Self.isPhotoRecordName(record.recordID.recordName) {
+            let recordName = record.recordID.recordName
+            let expectsAsset = record["asset"] != nil || record["assetSHA256"] != nil
+            guard expectsAsset else {
+                resolved.insert(recordName) // accepted legacy metadata-only shell
+                continue
+            }
+            do {
+                if try photoAssets.materializeFetchedAsset(record) != nil {
+                    resolved.insert(recordName)
+                } else {
+                    unavailable.insert(recordName)
+                }
+            } catch {
+                unavailable.insert(recordName)
+            }
+        }
+        let deletedPhotoNames = Set(dels.map(\.recordName).filter(Self.isPhotoRecordName))
+        try commitUnavailableFetchedPhotos(
+            adding: unavailable, removing: resolved.union(deletedPhotoNames))
+        buffer.append(mods, dels, epoch: passEpoch)
+        try drainPendingApplies(passEpoch)
     }
 
     /// Pull remote changes then project the buffered records into SwiftData.
@@ -393,6 +449,7 @@ final class HouseholdCloudCoordinator {
         }
         try projectionFaultForTesting?()
         try context.save()
+        try clearFailedPhotoRecords(removals)
         commitSyncedState(updates, removing: removals)
     }
 
@@ -427,6 +484,8 @@ final class HouseholdCloudCoordinator {
             from: context, householdID: householdID, householdName: householdName,
             householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
         var staged: [String: SyncedRecordState] = [:]
+        var stagedPhotoRecordNames: [String] = []
+        var firstPreparationError: Error?
         var pushed = 0
         for d in dirtyRecords(from: input) {
             guard !deletionRecordNames.contains(d.recordName) else { continue }
@@ -440,8 +499,17 @@ final class HouseholdCloudCoordinator {
                 }
                 // else fall through & push (never-confirmed / stale-clock / confirmed-live-now-tombstoned)
             }
-            engine.save(SeedkeepRecordCodec.encode(d.value, zoneID: zoneID))
+            let encoded = SeedkeepRecordCodec.encode(d.value, zoneID: zoneID)
+            let prepared: CKRecord
+            do {
+                prepared = try photoAssets.prepareForUpload(encoded)
+            } catch {
+                if firstPreparationError == nil { firstPreparationError = error }
+                continue   // fail closed for this photo; unrelated records still drain
+            }
+            engine.save(prepared)
             staged[d.recordName] = SyncedRecordState(clock: d.clock, tombstoned: isLocalTombstone)
+            if Self.isPhotoRecordName(d.recordName) { stagedPhotoRecordNames.append(d.recordName) }
             pushed += 1
         }
         // Drain whenever ANYTHING is pending — not only when this pass staged new records — so a
@@ -450,7 +518,12 @@ final class HouseholdCloudCoordinator {
         // incomplete drain, so the commit below is skipped → an unconfirmed record is NOT marked
         // synced; it retries next pass (invariant 3).
         if pushed > 0 || !deletionIntents.isEmpty || engine.hasPendingRecordChanges {
-            try await engine.sendUntilDrained(maxPasses: 6)
+            do {
+                try await engine.sendUntilDrained(maxPasses: 6)
+            } catch {
+                try recordPermanentPhotoFailures(engine.consumePermanentlyFailedSaveRecordIDs())
+                throw error
+            }
         }
         guard isCurrent(passEpoch) else { return }
         if !deletionIntents.isEmpty {
@@ -459,8 +532,12 @@ final class HouseholdCloudCoordinator {
                 context.delete(intent)
             }
             try context.save()
+            try clearFailedPhotoRecords(deletionRecordNames)
+            try commitUnavailableFetchedPhotos(adding: [], removing: deletionRecordNames)
         }
         commitSyncedState(staged, removing: deletionRecordNames)
+        try photoAssets.confirmUploaded(recordNames: stagedPhotoRecordNames)
+        if let firstPreparationError { throw firstPreparationError }
     }
 
     private struct Dirty { let recordName: String; let clock: Int64; let value: CloudKitRecordValue }
@@ -468,6 +545,7 @@ final class HouseholdCloudCoordinator {
     private func dirtyRecords(from input: HouseholdMigrationPlanner.Input) -> [Dirty] {
         var out: [Dirty] = []
         func add(_ clock: Int64, _ value: CloudKitRecordValue) {
+            guard !failedPhotoRecordNames.contains(value.recordName) else { return }
             out.append(Dirty(recordName: value.recordName, clock: clock, value: value))
         }
         for m in input.locations          { add(m.updatedAt, m.cloudKitValue) }
@@ -497,8 +575,18 @@ final class HouseholdCloudCoordinator {
             householdCreatedAt: householdCreatedAt, householdUpdatedAt: householdUpdatedAt)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let plan = HouseholdMigrationPlanner.plan(input, completedAt: now)
-        let result = try await HouseholdMigrationExecutor.run(
-            into: engine, zoneID: zoneID, householdID: householdID, plan: plan)
+        if let paused = plan.first(where: { failedPhotoRecordNames.contains($0.recordName) }) {
+            throw PhotoAssetSyncError.retryRequired(recordName: paused.recordName)
+        }
+        let result: HouseholdMigrationExecutor.Result
+        do {
+            result = try await HouseholdMigrationExecutor.run(
+                into: engine, zoneID: zoneID, householdID: householdID, plan: plan,
+                prepareRecord: photoAssets.prepareForUpload)
+        } catch {
+            try recordPermanentPhotoFailures(engine.consumePermanentlyFailedSaveRecordIDs())
+            throw error
+        }
         guard isCurrent(passEpoch) else { return }
         // Migrated now (or the receipt was already present from a peer) → never migrate again on this
         // device for this household. (Cleared on account change in wipeAndClear.)
@@ -506,7 +594,13 @@ final class HouseholdCloudCoordinator {
         // On .migrated, input is exactly what was just exported, so seeding is correct. On
         // .alreadyMigrated, do not reseed the fresh graph: pushDirty pushes current state and records
         // synced-state only after a clean drain, avoiding suppression of an unconfirmed local edit.
-        if !result.alreadyMigrated { seedSyncedState(from: input) }
+        if !result.alreadyMigrated {
+            let photoNames = plan.compactMap { value in
+                Self.isPhotoRecordName(value.recordName) ? value.recordName : nil
+            }
+            try photoAssets.confirmUploaded(recordNames: photoNames)
+            seedSyncedState(from: input)
+        }
     }
 
     // MARK: - Account change (AC5)
@@ -564,8 +658,12 @@ final class HouseholdCloudCoordinator {
             try PhotoByteStore.purgeHousehold(householdID)
             if let stateURL { try Self.removeItemIfPresent(at: stateURL) }
             try Self.removeItemIfPresent(at: syncedStateURL)
+            try Self.removeItemIfPresent(at: failedPhotoStateURL)
+            try Self.removeItemIfPresent(at: unavailablePhotoStateURL)
             if let cleanupMarkerURL { try Self.removeItemIfPresent(at: cleanupMarkerURL) }
             syncedStateCache = [:]
+            failedPhotoRecordNames = []
+            unavailableFetchedPhotoRecordNames = []
             hasMigratedDurable = false
             requiresWipeRetry = false
         } catch {
@@ -612,6 +710,105 @@ final class HouseholdCloudCoordinator {
     private var hasMigratedDurable: Bool {
         get { UserDefaults.standard.bool(forKey: migratedKey) }
         set { UserDefaults.standard.set(newValue, forKey: migratedKey) }
+    }
+
+    // MARK: - Durable permanent photo failures (D7)
+
+    private var failedPhotoStateURL: URL {
+        isParticipant
+            ? Self.participantFailedPhotoStateURL(ownerZoneID: zoneID)
+            : Self.ownerFailedPhotoStateURL(householdID: householdID)
+    }
+
+    func retryPhotoSync(recordName: String) async throws {
+        guard Self.isPhotoRecordName(recordName), failedPhotoRecordNames.contains(recordName) else { return }
+        var updated = failedPhotoRecordNames
+        updated.remove(recordName)
+        try Self.saveFailedPhotoRecordNames(updated, to: failedPhotoStateURL)
+        failedPhotoRecordNames = updated
+        _ = await sync()
+    }
+
+    private func recordPermanentPhotoFailures(_ recordIDs: [CKRecord.ID]) throws {
+        let newNames = Set(recordIDs.map(\.recordName).filter(Self.isPhotoRecordName))
+        guard !newNames.isEmpty else { return }
+        let updated = failedPhotoRecordNames.union(newNames)
+        try Self.saveFailedPhotoRecordNames(updated, to: failedPhotoStateURL)
+        failedPhotoRecordNames = updated
+    }
+
+    private func clearFailedPhotoRecords(_ recordNames: Set<String>) throws {
+        let clearing = recordNames.intersection(failedPhotoRecordNames)
+        guard !clearing.isEmpty else { return }
+        let updated = failedPhotoRecordNames.subtracting(clearing)
+        try Self.saveFailedPhotoRecordNames(updated, to: failedPhotoStateURL)
+        failedPhotoRecordNames = updated
+    }
+
+    nonisolated private static func isPhotoRecordName(_ recordName: String) -> Bool {
+        recordName.hasPrefix("seedPhoto:") || recordName.hasPrefix("journalEntryPhoto:")
+    }
+
+    private static func loadFailedPhotoRecordNames(from url: URL) -> Set<String> {
+        guard let data = try? Data(contentsOf: url),
+              let names = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(names.filter(isPhotoRecordName))
+    }
+
+    private static func saveFailedPhotoRecordNames(_ names: Set<String>, to url: URL) throws {
+        let data = try JSONEncoder().encode(names.sorted())
+        try data.write(to: url, options: .atomic)
+    }
+
+    // MARK: - Durable fetched-photo recovery roster
+
+    private var unavailablePhotoStateURL: URL {
+        isParticipant
+            ? Self.participantUnavailablePhotoStateURL(ownerZoneID: zoneID)
+            : Self.ownerUnavailablePhotoStateURL(householdID: householdID)
+    }
+
+    func recoverPhotoAssetData(recordName: String) async throws -> Data? {
+        guard Self.isPhotoRecordName(recordName) else { return nil }
+        guard !requiresWipeRetry else { throw CoordinatorError.accountCleanupPending }
+        let recoveryEpoch = epoch
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+        let record = try await engine.fetchRecord(recordID)
+        guard isCurrent(recoveryEpoch) else { throw SyncEngineError.accountInvalidated }
+        guard let ref = try photoAssets.materializeFetchedAsset(record) else { return nil }
+        let data = try Data(contentsOf: ref.url)
+        try commitUnavailableFetchedPhotos(adding: [], removing: [recordName])
+        return data
+    }
+
+    private func commitUnavailableFetchedPhotos(
+        adding: Set<String>,
+        removing: Set<String>
+    ) throws {
+        let additions = Set(adding.filter(Self.isPhotoRecordName))
+        let removals = Set(removing.filter(Self.isPhotoRecordName)).subtracting(additions)
+        guard !additions.isEmpty || !removals.isEmpty else { return }
+        let updated = unavailableFetchedPhotoRecordNames
+            .subtracting(removals)
+            .union(additions)
+        guard updated != unavailableFetchedPhotoRecordNames else { return }
+        try Self.saveUnavailablePhotoRecordNames(updated, to: unavailablePhotoStateURL)
+        unavailableFetchedPhotoRecordNames = updated
+    }
+
+    private static func loadUnavailablePhotoRecordNames(from url: URL) -> Set<String> {
+        guard let data = try? Data(contentsOf: url),
+              let names = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(names.filter(isPhotoRecordName))
+    }
+
+    private static func saveUnavailablePhotoRecordNames(_ names: Set<String>, to url: URL) throws {
+        guard !names.isEmpty else {
+            try removeItemIfPresent(at: url)
+            return
+        }
+        let data = try JSONEncoder().encode(names.sorted())
+        try data.write(to: url, options: .atomic)
     }
 
     // MARK: - Per-record synced-state (replaces the single global push clock ceiling)
@@ -674,7 +871,10 @@ final class HouseholdCloudCoordinator {
 
     // MARK: - Helpers
 
-    enum CoordinatorError: Error { case iCloudUnavailable(CKAccountStatus) }
+    enum CoordinatorError: Error {
+        case iCloudUnavailable(CKAccountStatus)
+        case accountCleanupPending
+    }
 
     /// MUST match `com.apple.developer.icloud-container-environment` in project.yml. All durable
     /// per-household CloudKit state (migration marker, per-record synced-state file, engine-state
@@ -717,6 +917,24 @@ final class HouseholdCloudCoordinator {
     static func participantSyncedStateURL(ownerZoneID: CKRecordZone.ID) -> URL {
         householdSyncDir().appendingPathComponent(
             "synced-state-shared-\(durableScopeComponent(participantScopeID(ownerZoneID: ownerZoneID))).json"
+        )
+    }
+    static func ownerFailedPhotoStateURL(householdID: String) -> URL {
+        householdSyncDir().appendingPathComponent(
+            "failed-photos-\(cloudKitEnvironmentTag)-\(householdID).json")
+    }
+    static func participantFailedPhotoStateURL(ownerZoneID: CKRecordZone.ID) -> URL {
+        householdSyncDir().appendingPathComponent(
+            "failed-photos-shared-\(durableScopeComponent(participantScopeID(ownerZoneID: ownerZoneID))).json"
+        )
+    }
+    static func ownerUnavailablePhotoStateURL(householdID: String) -> URL {
+        householdSyncDir().appendingPathComponent(
+            "unavailable-fetched-photos-\(cloudKitEnvironmentTag)-\(householdID).json")
+    }
+    static func participantUnavailablePhotoStateURL(ownerZoneID: CKRecordZone.ID) -> URL {
+        householdSyncDir().appendingPathComponent(
+            "unavailable-fetched-photos-shared-\(durableScopeComponent(participantScopeID(ownerZoneID: ownerZoneID))).json"
         )
     }
     static func ownerScopeID(householdID: String) -> String {
@@ -768,6 +986,9 @@ final class HouseholdCloudCoordinator {
     static func humanizeCloudError(_ error: Error) -> String {
         if case CoordinatorError.iCloudUnavailable(let status) = error {
             return "iCloud unavailable — \(describe(status))."
+        }
+        if case CoordinatorError.accountCleanupPending = error {
+            return "CloudKit account cleanup is incomplete — tap Sync now to retry."
         }
         if let ck = error as? CKError {
             switch ck.code {

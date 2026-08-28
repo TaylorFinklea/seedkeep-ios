@@ -22,10 +22,9 @@ struct ChangelogDataTests {
         }
     }
 
-    @Test("the shipping build has an entry")
-    func shippingBuildPresent() {
-        // Build 50 was the first build to ship the 27d stabilization set; its
-        // entry is the initial seed. Guards the release.sh authoring gate's premise.
-        #expect(ChangelogData.releases.contains { $0.build == 50 })
+    @Test("the planned 1.0 shipping build has an entry")
+    func shippingBuildPresent() throws {
+        let release = try #require(ChangelogData.releases.first { $0.build == 53 })
+        #expect(release.version == "1.0.0")
     }
 }

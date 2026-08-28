@@ -51,7 +51,9 @@ struct AccountDeletionFlowTests {
             Issue.record("no CloudKit work is expected for an account with no garden")
         }
         func ownedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool { true }
-        func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> [CKRecord] { [] }
+        func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> AccountDeletionRecordSnapshot {
+            AccountDeletionRecordSnapshot(records: [], assetHashes: [:])
+        }
         func saveRecords(_ records: [CKRecord],
                          policy: CKModifyRecordsOperation.RecordSavePolicy,
                          in zoneID: CKRecordZone.ID) async throws {}

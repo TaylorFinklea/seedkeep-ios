@@ -127,8 +127,7 @@ targets:
         com.apple.developer.weatherkit: true
         # Phase 4C — frost/heat/water warnings fire during DND windows.
         com.apple.developer.usernotifications.time-sensitive: true
-        # R1 serverless rearchitecture — CloudKit (household zone synced by our own CKSyncEngine).
-        aps-environment: development
+        # No APNs capability: CloudKit sync is manual and app notifications are local.
         com.apple.developer.icloud-container-identifiers:
           - iCloud.app.seedkeep
         com.apple.developer.icloud-services:

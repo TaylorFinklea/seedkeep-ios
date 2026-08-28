@@ -50,12 +50,6 @@ enum FeatureFlags {
         UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)
     }
 
-    /// Temporary R1 limit for server-backed photo bytes. CloudKit mirrors photo metadata and
-    /// preserves the existing server objects, but the server photo APIs cannot address the active
-    /// CloudKit household yet.
-    static let cloudKitPhotoCapabilityMessage =
-        "Photos are temporarily unavailable while your active garden uses CloudKit. Existing seed and journal photos are preserved; uploads, galleries, and deletes return when CloudKit photo support is ready."
-
     /// R1 retirement copy for legacy server household invitations (2026-07-13 "CKShare is the sole
     /// R1 invitation model" ADR). Unlike the CloudKit capability messages above, this is a
     /// **permanent retirement, not a temporary gate** — server invite links are not coming back;
@@ -65,11 +59,6 @@ enum FeatureFlags {
 
     /// True when server-backed household features must not be exposed.
     static var serverGardenFeaturesRestricted: Bool {
-        cloudKitHouseholdSyncEnabled
-    }
-
-    /// True when server-backed photo bytes must not be exposed.
-    static var serverPhotoFeaturesRestricted: Bool {
         cloudKitHouseholdSyncEnabled
     }
 

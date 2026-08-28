@@ -55,6 +55,13 @@ struct AccountDeletionDestination: Equatable {
     let shareURL: URL
 }
 
+/// A zone read whose CKAsset bytes have already been copied out of CloudKit's
+/// temporary URLs and hashed from the durable transfer workspace.
+struct AccountDeletionRecordSnapshot {
+    let records: [CKRecord]
+    let assetHashes: [AssetRef: String]
+}
+
 /// Every CloudKit fact the coordinator reads and every CloudKit effect it
 /// causes. Deliberately phrased in the flow's vocabulary ("leave the shared
 /// garden", "is the zone absent") rather than CloudKit's, so the state
@@ -77,10 +84,11 @@ protocol AccountDeletionCloudKitOperating {
     /// Owner: is the owned zone genuinely gone?
     func ownedZoneIsAbsent(zoneID: CKRecordZone.ID) async throws -> Bool
 
-    /// Every application record in a zone. An absent zone is an ERROR here,
-    /// not an empty garden — treating it as empty during the copy would let
-    /// the owner verify nothing against nothing.
-    func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> [CKRecord]
+    /// Every application record in a zone plus hashes observed from durable
+    /// copies of its CKAsset bytes. An absent zone is an ERROR here, not an
+    /// empty garden — treating it as empty during the copy would let the
+    /// owner verify nothing against nothing.
+    func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> AccountDeletionRecordSnapshot
     /// Save one cascade generation into the destination zone under the copy
     /// plan's required save policy.
     func saveRecords(

@@ -690,8 +690,12 @@ final class AccountDeletionCoordinator {
         // An absent source here is a failure, never a completed deletion.
         // Only the source-deletion phase is allowed to read absence as
         // success (spec § "Failure invariants").
-        let records = try await cloudKit.fetchRecords(in: source)
-        let plan = try HouseholdGraphCopier.plan(records, from: source, to: destination)
+        let snapshot = try await cloudKit.fetchRecords(in: source)
+        let plan = try HouseholdGraphCopier.plan(
+            snapshot.records,
+            from: source,
+            to: destination,
+            assetHashes: snapshot.assetHashes)
         for batch in plan.batches {
             // Batch order is a dependency order: a `.deleteSelf` child
             // cannot be saved before its parent exists. And the policy is
@@ -722,10 +726,16 @@ final class AccountDeletionCoordinator {
         // only device that can still see both. Re-reading the source is safe
         // at this phase — nothing has deleted it, and nothing may until the
         // lease is taken much later.
-        let sourceRecords = try await cloudKit.fetchRecords(in: source)
-        let sourceDigest = try HouseholdGraphDigester.digest(of: sourceRecords, in: source)
-        let copied = try await cloudKit.fetchRecords(in: destination)
-        let destinationDigest = try HouseholdGraphDigester.digest(of: copied, in: destination)
+        let sourceSnapshot = try await cloudKit.fetchRecords(in: source)
+        let sourceDigest = try HouseholdGraphDigester.digest(
+            of: sourceSnapshot.records,
+            in: source,
+            assetHashes: sourceSnapshot.assetHashes)
+        let destinationSnapshot = try await cloudKit.fetchRecords(in: destination)
+        let destinationDigest = try HouseholdGraphDigester.digest(
+            of: destinationSnapshot.records,
+            in: destination,
+            assetHashes: destinationSnapshot.assetHashes)
 
         guard sourceDigest.sha256 == destinationDigest.sha256 else {
             throw AccountDeletionCoordinatorError.copyDoesNotMatchSource(
@@ -746,7 +756,16 @@ final class AccountDeletionCoordinator {
         // is a memory of an answer; this is the answer.
         let transfer = try await server.transfer(id: transferID)
         guard transfer.phase == .verified else { return try follow(current, transfer) }
-        try assertAuthorizesSourceDeletion(transfer, current)
+        let verifiedSource = try assertAuthorizesSourceDeletion(transfer, current)
+
+        // A participant can still write to the shared source after both
+        // devices publish matching verification documents. Re-read the
+        // complete graph at the last safe point and compare it with the
+        // durable digest before asking the server to make deletion
+        // irrevocable. CloudKit has no atomic read-and-freeze operation, so
+        // a participant write can still race this check during the lease
+        // request; this narrows that residual window but cannot eliminate it.
+        try await assertSourceUnchangedSinceVerification(verifiedSource, current)
 
         // Take the lease, and do not touch CloudKit until it is granted.
         //
@@ -787,7 +806,7 @@ final class AccountDeletionCoordinator {
     private func assertAuthorizesSourceDeletion(
         _ transfer: AccountDeletionTransferDTO,
         _ current: AccountDeletionCheckpoint
-    ) throws {
+    ) throws -> AccountDeletionDigestDTO {
         guard let ownerDigest = transfer.owner_digest, let successorDigest = transfer.successor_digest else {
             throw AccountDeletionCoordinatorError.verificationIncomplete(transferID: transfer.id)
         }
@@ -811,6 +830,23 @@ final class AccountDeletionCoordinator {
               recorded == accepted else {
             throw AccountDeletionCoordinatorError.destinationOwnershipMismatch(
                 expected: recorded, found: accepted)
+        }
+        return ownerDigest
+    }
+
+    private func assertSourceUnchangedSinceVerification(
+        _ verified: AccountDeletionDigestDTO,
+        _ current: AccountDeletionCheckpoint
+    ) async throws {
+        let source = try sourceZoneID(current)
+        let snapshot = try await cloudKit.fetchRecords(in: source)
+        let currentDigest = try HouseholdGraphDigester.digest(
+            of: snapshot.records,
+            in: source,
+            assetHashes: snapshot.assetHashes)
+        guard currentDigest.sha256 == verified.digest,
+              currentDigest.counts == verified.record_counts else {
+            throw AccountDeletionCoordinatorError.sourceChangedAfterVerification
         }
     }
 
@@ -869,8 +905,11 @@ final class AccountDeletionCoordinator {
             throw AccountDeletionCoordinatorError.destinationUnavailable
         }
         let destination = try destinationZoneID(current)
-        let records = try await cloudKit.fetchRecords(in: destination)
-        let digest = try HouseholdGraphDigester.digest(of: records, in: destination)
+        let snapshot = try await cloudKit.fetchRecords(in: destination)
+        let digest = try HouseholdGraphDigester.digest(
+            of: snapshot.records,
+            in: destination,
+            assetHashes: snapshot.assetHashes)
         let transfer = try await server.putSuccessorVerification(
             id: transferID, digest: digest,
             destinationZoneName: zoneName,
@@ -1280,6 +1319,8 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
     case recordCountMismatch(owner: [String: Int], successor: [String: Int])
     /// The copied destination is not equal to the source it came from.
     case copyDoesNotMatchSource(source: String, destination: String)
+    /// The shared source changed after both devices verified the copy.
+    case sourceChangedAfterVerification
     /// The deletion nonce could not be established, so a lost response
     /// would be unrecoverable. Refuse rather than delete blind.
     case deletionReceiptUnavailable
@@ -1336,6 +1377,8 @@ enum AccountDeletionCoordinatorError: Error, Equatable, CustomStringConvertible,
             return "The copied garden has a different number of records, so the original was kept."
         case .copyDoesNotMatchSource:
             return "The copy does not match your garden yet, so nothing was deleted."
+        case .sourceChangedAfterVerification:
+            return "Your shared garden changed after verification, so the original was kept. Try the handoff again."
         case .deletionReceiptUnavailable:
             return "Could not prepare a safe deletion. Nothing was changed."
         case .destinationOwnershipMismatch(let expected, let found):

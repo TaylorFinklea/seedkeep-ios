@@ -22,6 +22,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+DEVELOPER_DIR="$(bash "$REPO_ROOT/scripts/resolve-xcode-developer-dir.sh" "${DEVELOPER_DIR:-}")"
+export DEVELOPER_DIR
+
 cd "$REPO_ROOT"
 command -v xcodegen >/dev/null 2>&1 || fail "xcodegen is required to generate Seedkeep.xcodeproj"
 echo "[test-gate] Generating Xcode project"
@@ -38,29 +41,11 @@ if ! grep -Fq "$SIM_UDID" <<< "$DEVICE_LIST"; then
 fi
 xcrun simctl boot "$SIM_UDID" >/dev/null 2>&1 || true
 
-run_counted() {
-    local label="$1"
-    shift
-    local log
-    log="$(mktemp "${TMPDIR:-/tmp}/seedkeep-test-gate.XXXXXX")"
-    echo "[test-gate] $label"
-    set +e
-    "$@" 2>&1 | tee "$log"
-    local status="${PIPESTATUS[0]}"
-    set -e
-    if [[ "$status" -ne 0 ]]; then
-        rm -f "$log"
-        fail "$label failed with exit status $status"
-    fi
-    if ! grep -Eq 'Executed [1-9][0-9]* tests?|with [1-9][0-9]* tests?' "$log"; then
-        rm -f "$log"
-        fail "$label executed zero tests or did not report a test count"
-    fi
-    rm -f "$log"
-}
+COUNT_GATE="$REPO_ROOT/scripts/require-nonzero-tests.sh"
+[[ -f "$COUNT_GATE" ]] || fail "missing nonzero-test count gate at $COUNT_GATE"
 
-run_counted "SeedkeepKit package tests" swift test --package-path "$REPO_ROOT/SeedkeepKit"
-run_counted "SeedkeepCloudKit package tests" swift test --package-path "$REPO_ROOT/SeedkeepCloudKit"
+bash "$COUNT_GATE" "SeedkeepKit package tests" swift test --package-path "$REPO_ROOT/SeedkeepKit"
+bash "$COUNT_GATE" "SeedkeepCloudKit package tests" swift test --package-path "$REPO_ROOT/SeedkeepCloudKit"
 
 XCODEBUILD_ARGS=(
     -project "$REPO_ROOT/Seedkeep.xcodeproj"
@@ -71,11 +56,11 @@ XCODEBUILD_ARGS=(
     CODE_SIGNING_REQUIRED=NO
 )
 
-run_counted "legacy CloudKit-OFF app tests" xcodebuild "${XCODEBUILD_ARGS[@]}" \
+bash "$COUNT_GATE" "legacy CloudKit-OFF app tests" xcodebuild "${XCODEBUILD_ARGS[@]}" \
     -skip-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
     test
 
-run_counted "production-default CloudKit-ON contract" xcodebuild "${XCODEBUILD_ARGS[@]}" \
+bash "$COUNT_GATE" "production-default CloudKit-ON contract" xcodebuild "${XCODEBUILD_ARGS[@]}" \
     'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG SEEDKEEP_TEST_CLOUDKIT_ON' \
     -only-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
     test

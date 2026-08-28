@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 import SeedkeepKit
+import SeedkeepCloudKit
 
 /// Detail + edit view. The view loads the matching `LocalSeed` via id so
 /// it stays in sync with the local store; edits go through the SyncEngine
@@ -97,12 +98,6 @@ struct SeedDetailView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .publishesAssistantContext(pageType: "seed", entityID: seed.id, label: seed.customName)
                 .task(id: seed.id) {
-                    // Refresh photos on first appearance so the grid is
-                    // current even if the local store predates new uploads.
-                    if !PhotoFeatureGate.isRestricted,
-                       case .signedIn(_, let household) = appEnv.auth.state {
-                        try? await appEnv.sync.refreshSeedPhotos(seedID: seed.id, householdID: household.id)
-                    }
                     // Fetch the catalog entry for the growing-info section.
                     // Used both as a display fallback and to backfill the
                     // local snapshot for seeds saved before snapshots
@@ -221,11 +216,7 @@ struct SeedDetailView: View {
     @ViewBuilder
     private func photosSection(_ seed: LocalSeed) -> some View {
         Section {
-            if PhotoFeatureGate.isRestricted {
-                Text(FeatureFlags.cloudKitPhotoCapabilityMessage)
-                    .font(.footnote)
-                    .foregroundStyle(HerbColor.inkSoft)
-            } else if photoQuery.isEmpty {
+            if photoQuery.isEmpty {
                 Text("No photos yet")
                     .font(HerbFont.bodyItalic(size: 12))
                     .foregroundStyle(HerbColor.inkSoft)
@@ -246,24 +237,52 @@ struct SeedDetailView: View {
                                         .foregroundStyle(.white)
                                         .padding(4)
                                 }
+                                .overlay(alignment: .topTrailing) {
+                                    if isFailedPhoto(photo) {
+                                        Button {
+                                            Task { await retryPhoto(photo) }
+                                        } label: {
+                                            Image(systemName: "arrow.clockwise.circle.fill")
+                                                .symbolRenderingMode(.palette)
+                                                .foregroundStyle(.white, HerbColor.rose)
+                                                .padding(4)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Retry photo sync")
+                                    }
+                                }
+                                .contextMenu {
+                                    if isFailedPhoto(photo) {
+                                        Button {
+                                            Task { await retryPhoto(photo) }
+                                        } label: {
+                                            Label("Retry sync", systemImage: "arrow.clockwise")
+                                        }
+                                    }
+                                    if FeatureFlags.cloudKitHouseholdSyncEnabled {
+                                        Button(role: .destructive) {
+                                            Task { await deletePhoto(photo) }
+                                        } label: {
+                                            Label("Delete photo", systemImage: "trash")
+                                        }
+                                    }
+                                }
                         }
                     }
                     .padding(.vertical, 4)
                 }
             }
-            if !PhotoFeatureGate.isRestricted {
-                HStack {
-                    PhotosPicker(
-                        selection: $pickedPhoto,
-                        matching: .images,
-                        photoLibrary: .shared()
-                    ) {
-                        Label(uploadingPhoto ? "Uploading…" : "Add photo", systemImage: "photo.badge.plus")
-                    }
-                    .disabled(uploadingPhoto)
-                    if uploadingPhoto {
-                        ProgressView().controlSize(.small).herbProgressStyle()
-                    }
+            HStack {
+                PhotosPicker(
+                    selection: $pickedPhoto,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Label(uploadingPhoto ? "Uploading…" : "Add photo", systemImage: "photo.badge.plus")
+                }
+                .disabled(uploadingPhoto)
+                if uploadingPhoto {
+                    ProgressView().controlSize(.small).herbProgressStyle()
                 }
             }
             if let uploadError {
@@ -282,17 +301,11 @@ struct SeedDetailView: View {
 
     private func uploadPicked(_ item: PhotosPickerItem, seedID: String) async {
         uploadingPhoto = true
-        guard !PhotoFeatureGate.isRestricted else {
-            uploadError = FeatureFlags.cloudKitPhotoCapabilityMessage
-            uploadingPhoto = false
-            pickedPhoto = nil
-            return
-        }
         uploadError = nil
         defer { uploadingPhoto = false; pickedPhoto = nil }
 
-        guard case .signedIn(_, let household) = appEnv.auth.state else {
-            uploadError = "Not signed in."
+        guard let householdID = appEnv.activeGardenHouseholdID, !householdID.isEmpty else {
+            uploadError = "The active garden is unavailable. Sync or reopen the garden and try again."
             return
         }
         do {
@@ -300,12 +313,14 @@ struct SeedDetailView: View {
                 uploadError = "Couldn't read the selected photo."
                 return
             }
-            let jpeg = jpegEncode(originalData: data) ?? data
+            let jpeg = try await Task.detached(priority: .userInitiated) {
+                try PhotoResizer.resizedPhotoJPEG(data)
+            }.value
             try await appEnv.sync.uploadPhoto(
                 seedID: seedID,
                 role: .extra,
                 jpegData: jpeg,
-                householdID: household.id
+                householdID: householdID
             )
         } catch let err as SeedkeepError {
             uploadError = "\(err.code): \(err.message)"
@@ -314,12 +329,32 @@ struct SeedDetailView: View {
         }
     }
 
-    /// Convert HEIC/PNG bytes from the photo picker into a reasonably-sized
-    /// JPEG so the upload body stays manageable. ~75% quality balances
-    /// quality vs. wire size for packet photos.
-    private func jpegEncode(originalData: Data) -> Data? {
-        guard let image = UIImage(data: originalData) else { return nil }
-        return image.jpegData(compressionQuality: 0.75)
+    private func isFailedPhoto(_ photo: LocalSeedPhoto) -> Bool {
+        appEnv.cloudKit?.failedPhotoRecordNames.contains(
+            SeedkeepRecordNames.seedPhoto(photo.id)
+        ) == true
+    }
+
+    private func retryPhoto(_ photo: LocalSeedPhoto) async {
+        guard let coordinator = appEnv.cloudKit else { return }
+        do {
+            try await coordinator.retryPhotoSync(
+                recordName: SeedkeepRecordNames.seedPhoto(photo.id))
+        } catch {
+            uploadError = error.localizedDescription
+        }
+    }
+
+    private func deletePhoto(_ photo: LocalSeedPhoto) async {
+        guard let householdID = appEnv.activeGardenHouseholdID, !householdID.isEmpty else {
+            uploadError = "The active garden is unavailable. Sync or reopen the garden and try again."
+            return
+        }
+        do {
+            try await appEnv.sync.deleteSeedPhoto(photo.id, householdID: householdID)
+        } catch {
+            uploadError = error.localizedDescription
+        }
     }
 
     /// Growing information for the seed. Reads from the local snapshot
@@ -515,9 +550,8 @@ struct SeedDetailView: View {
                 .textInputAutocapitalization(.words)
                 .onChange(of: typeDraft) { _, new in
                     guard identityHydrated else { return }
-                    // Local-only field — write straight through the sync
-                    // engine's local helper rather than the server patch
-                    // queue. Server sync lands in a Phase 2 follow-up.
+                    // Persist through the local model; SyncEngine schedules the
+                    // household record for CloudKit synchronization.
                     do {
                         try appEnv.sync.setLocalCustomType(seedID: seed.id, type: new)
                     } catch {

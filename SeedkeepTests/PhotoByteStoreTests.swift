@@ -1,7 +1,9 @@
 import Testing
 import Foundation
 import CryptoKit
+import CloudKit
 @testable import Seedkeep
+import SeedkeepCloudKit
 
 // Photos-on-CloudKit Stage B — the three-lifetime byte store (see
 // seedkeep/.docs/ai/phases/2026-07-28-photos-on-cloudkit-spec.md D2/D6). Every test uses a
@@ -151,6 +153,188 @@ struct PhotoByteStoreTests {
         try s2.removeAll()
     }
 
+    // MARK: - Stage C CloudKit asset bridge
+
+    @Test("upload preparation attaches pending bytes and their exact on-disk SHA256")
+    func uploadPreparationAttachesPendingBytes() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("p1")
+        let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: hid)
+        let bytes = Data("pending-photo".utf8)
+        let ref = try pending.write(bytes, for: recordName)
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+
+        let record = photoRecord(recordName: recordName, householdID: hid)
+        let prepared = try PhotoAssetSyncBridge(householdID: hid).prepareForUpload(record)
+
+        #expect((prepared["asset"] as? CKAsset)?.fileURL == ref.url)
+        #expect(prepared["assetSHA256"] as? String == ref.sha256)
+        #expect(try Data(contentsOf: #require((prepared["asset"] as? CKAsset)?.fileURL)) == bytes)
+    }
+
+    @Test("upload preparation falls back to durable cache when no pending copy exists")
+    func uploadPreparationUsesCacheFallback() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.journalEntryPhoto("p1")
+        let cache = PhotoByteStore(lifetime: .cache, householdID: hid)
+        let ref = try cache.write(Data("cached-photo".utf8), for: recordName)
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+
+        let record = photoRecord(recordName: recordName, householdID: hid, type: .journalEntryPhoto)
+        let prepared = try PhotoAssetSyncBridge(householdID: hid).prepareForUpload(record)
+
+        #expect((prepared["asset"] as? CKAsset)?.fileURL == ref.url)
+        #expect(prepared["assetSHA256"] as? String == ref.sha256)
+    }
+
+    @Test("a photo with no durable bytes fails closed before it can be staged")
+    func uploadPreparationFailsClosedWithoutBytes() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+        let record = photoRecord(recordName: SeedkeepRecordNames.seedPhoto("missing"), householdID: hid)
+
+        #expect(throws: PhotoAssetSyncError.self) {
+            try PhotoAssetSyncBridge(householdID: hid).prepareForUpload(record)
+        }
+        #expect(record["asset"] == nil)
+        #expect(record["assetSHA256"] == nil)
+    }
+
+    @Test("a fetched CKAsset is copied durably before its framework URL disappears")
+    func fetchedAssetMaterializesDurably() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("remote")
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seedkeep-stage-c-\(UUID().uuidString).jpg")
+        let bytes = Data("remote-photo-bytes".utf8)
+        try bytes.write(to: sourceURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+        }
+        let record = photoRecord(recordName: recordName, householdID: hid)
+        record["asset"] = CKAsset(fileURL: sourceURL)
+
+        let ref = try PhotoAssetSyncBridge(householdID: hid).materializeFetchedAsset(record)
+        try FileManager.default.removeItem(at: sourceURL)
+
+        #expect(ref != nil)
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == bytes)
+    }
+
+    @Test(
+        "a post-cutover photo marker requires a delivered transfer asset",
+        arguments: [SeedkeepRecordType.seedPhoto, .journalEntryPhoto]
+    )
+    func transferSnapshotRequiresMarkedAsset(_ type: SeedkeepRecordType) throws {
+        let hid = "hh-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+        let recordName = type == .seedPhoto
+            ? SeedkeepRecordNames.seedPhoto("missing-transfer-asset")
+            : SeedkeepRecordNames.journalEntryPhoto("missing-transfer-asset")
+        let photo = photoRecord(recordName: recordName, householdID: hid, type: type)
+        photo["assetSHA256"] = "declared-but-not-delivered" as CKRecordValue
+
+        #expect(throws: PhotoAssetSyncError.self) {
+            try AccountDeletionTransferAssetStager(householdID: hid).snapshot([photo])
+        }
+    }
+
+    @Test("an asset without its roster marker fails closed")
+    func transferSnapshotRejectsUnmarkedAsset() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("unmarked-asset")
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("account-deletion-unmarked-\(UUID().uuidString).jpg")
+        try Data("unmarked".utf8).write(to: sourceURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+        }
+        let photo = photoRecord(recordName: recordName, householdID: hid)
+        photo["asset"] = CKAsset(fileURL: sourceURL)
+
+        #expect(throws: PhotoAssetSyncError.self) {
+            try AccountDeletionTransferAssetStager(householdID: hid).snapshot([photo])
+        }
+    }
+
+    @Test(
+        "an unmarked legacy photo remains an accepted metadata-only shell",
+        arguments: [SeedkeepRecordType.seedPhoto, .journalEntryPhoto]
+    )
+    func transferSnapshotAllowsUnmarkedLegacyShell(_ type: SeedkeepRecordType) throws {
+        let hid = "hh-\(UUID().uuidString)"
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+        let recordName = type == .seedPhoto
+            ? SeedkeepRecordNames.seedPhoto("legacy-shell")
+            : SeedkeepRecordNames.journalEntryPhoto("legacy-shell")
+        let photo = photoRecord(recordName: recordName, householdID: hid, type: type)
+
+        let snapshot = try AccountDeletionTransferAssetStager(householdID: hid).snapshot([photo])
+
+        #expect(snapshot.records.map(\.recordID.recordName) == [recordName])
+        #expect(snapshot.assetHashes.isEmpty)
+    }
+
+    @Test("the declared hash marks roster membership but observed bytes remain the verifier")
+    func transferSnapshotHashesObservedBytes() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("observed-hash")
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("account-deletion-observed-\(UUID().uuidString).jpg")
+        let bytes = Data("observed-transfer-bytes".utf8)
+        try bytes.write(to: sourceURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+        }
+        let photo = photoRecord(recordName: recordName, householdID: hid)
+        photo["asset"] = CKAsset(fileURL: sourceURL)
+        photo["assetSHA256"] = "deliberately-wrong" as CKRecordValue
+        let expectedHash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+
+        let snapshot = try AccountDeletionTransferAssetStager(householdID: hid).snapshot([photo])
+        let observedHash = snapshot.assetHashes[
+            AssetRef(recordName: recordName, field: "asset")]
+
+        #expect(observedHash == expectedHash)
+        #expect(observedHash != photo["assetSHA256"] as? String)
+    }
+
+    @Test("a marked transfer asset whose file disappeared fails closed")
+    func transferSnapshotRejectsUnreadableMarkedAsset() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("unreadable-transfer-asset")
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("account-deletion-unreadable-roster-\(UUID().uuidString).jpg")
+        try Data("gone".utf8).write(to: sourceURL, options: .atomic)
+        let photo = photoRecord(recordName: recordName, householdID: hid)
+        photo["asset"] = CKAsset(fileURL: sourceURL)
+        photo["assetSHA256"] = "declared" as CKRecordValue
+        try FileManager.default.removeItem(at: sourceURL)
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+
+        #expect(throws: PhotoAssetSyncError.self) {
+            try AccountDeletionTransferAssetStager(householdID: hid).snapshot([photo])
+        }
+    }
+
+    @Test("confirmed upload promotion copies pending bytes to cache before removing the only copy")
+    func confirmedUploadPromotesPendingBytes() throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("confirmed")
+        let bytes = Data("confirmed-photo".utf8)
+        let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: hid)
+        try pending.write(bytes, for: recordName)
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+
+        try PhotoAssetSyncBridge(householdID: hid).confirmUploaded(recordNames: [recordName])
+
+        #expect(!pending.contains(recordName))
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == bytes)
+    }
+
     // MARK: - Basic read/remove semantics
 
     @Test("a missing record reads as absent, not an error")
@@ -168,5 +352,18 @@ struct PhotoByteStoreTests {
         let store = PhotoByteStore(lifetime: .pendingUploads, householdID: hid)
         store.remove("seedPhoto:never-existed")   // must not throw / crash
         try store.removeAll()
+    }
+
+    private func photoRecord(
+        recordName: String,
+        householdID: String,
+        type: SeedkeepRecordType = .seedPhoto
+    ) -> CKRecord {
+        let zoneID = CKRecordZone.ID(
+            zoneName: SeedkeepRecordNames.zoneName(householdID: householdID),
+            ownerName: CKCurrentUserDefaultName)
+        return CKRecord(
+            recordType: type.recordTypeName,
+            recordID: CKRecord.ID(recordName: recordName, zoneID: zoneID))
     }
 }

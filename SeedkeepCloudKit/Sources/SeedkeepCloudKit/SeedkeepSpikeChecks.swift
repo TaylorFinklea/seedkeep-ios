@@ -1,5 +1,6 @@
 #if canImport(CloudKit)
 import CloudKit
+import CryptoKit
 import Foundation
 
 // R1 Phase-0 spike — LIVE CloudKit checks (require a signed build + an iCloud account; G6).
@@ -11,6 +12,8 @@ import Foundation
 //                                 assert min() converges live (the thing a blanket LWW would lose).
 // Gate 2  (two sims): share     — owner publishes a CKShare URL; a participant on a DIFFERENT
 //                                 iCloud account fetches + accepts it + reads the owner's data.
+// Gate 0c (one sim):  asset-engine — write a CKAsset directly, fetch it through CKSyncEngine,
+//                                 and prove its bytes survive callback handoff + materialization.
 
 public struct SpikeFailure: Error, CustomStringConvertible {
     public let description: String
@@ -119,6 +122,145 @@ public func runSeedkeepMergeCheck(containerID: String = "iCloud.app.seedkeep") a
     }
 }
 
+// MARK: - Gate 0c: CKSyncEngine asset delivery + lifetime
+
+private struct SpikeAssetObservation: Sendable {
+    let sourceURL: URL
+    let callbackBytes: Data
+    let materializedURL: URL
+    let declaredHash: String
+}
+
+private actor SpikeAssetCapture {
+    private var observation: SpikeAssetObservation?
+
+    func store(_ value: SpikeAssetObservation) {
+        guard observation == nil else { return }
+        observation = value
+    }
+
+    func value() -> SpikeAssetObservation? { observation }
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+public func runSeedkeepCKSyncEngineAssetCheck(containerID: String = "iCloud.app.seedkeep") async -> String {
+    let container = CKContainer(identifier: containerID)
+    let database = container.privateCloudDatabase
+    let householdID = "spike-asset-engine"
+    let zoneID = CKRecordZone.ID(
+        zoneName: SeedkeepRecordNames.zoneName(householdID: householdID),
+        ownerName: CKCurrentUserDefaultName)
+    let suffix = String(UUID().uuidString.prefix(8))
+    let seedID = "asset-parent-\(suffix)"
+    let photoID = "asset-photo-\(suffix)"
+    let seedRecordID = CKRecord.ID(recordName: SeedkeepRecordNames.seed(seedID), zoneID: zoneID)
+    let photoRecordID = CKRecord.ID(recordName: SeedkeepRecordNames.seedPhoto(photoID), zoneID: zoneID)
+    let temporary = FileManager.default.temporaryDirectory
+    let sourceURL = temporary.appendingPathComponent("seedkeep-gate0c-source-\(suffix).bin")
+    let materializedURL = temporary.appendingPathComponent("seedkeep-gate0c-materialized-\(suffix).bin")
+    let stateURL = temporary.appendingPathComponent("seedkeep-gate0c-state-\(suffix).json")
+    let writerStateURL = temporary.appendingPathComponent("seedkeep-gate0c-writer-state-\(suffix).json")
+    defer {
+        try? FileManager.default.removeItem(at: sourceURL)
+        try? FileManager.default.removeItem(at: materializedURL)
+        try? FileManager.default.removeItem(at: stateURL)
+        try? FileManager.default.removeItem(at: writerStateURL)
+    }
+
+    do {
+        _ = try await SeedkeepZoneProvisioner(containerIdentifier: containerID)
+            .ensureZone(householdID: householdID)
+
+        let expectedBytes = Data("seedkeep-gate-0c-\(UUID().uuidString)".utf8)
+        try expectedBytes.write(to: sourceURL, options: .atomic)
+        let expectedHash = sha256Hex(expectedBytes)
+
+        // Create and prime the engine BEFORE the remote mutation. The first explicit fetch on a
+        // state-less CKSyncEngine establishes its database baseline; Gate 0c then observes a change
+        // delivered to the long-lived production engine rather than relying on historical import.
+        let capture = SpikeAssetCapture()
+        let engine = HouseholdSyncEngine(
+            database: database,
+            zoneID: zoneID,
+            store: HouseholdLocalStore(),
+            stateURL: stateURL)
+        engine.onFetchedChanges = { records, _ in
+            guard let fetched = records.first(where: { $0.recordID == photoRecordID }) else { return }
+            guard let asset = fetched["asset"] as? CKAsset,
+                  let fetchedURL = asset.fileURL else {
+                throw SpikeFailure("CKSyncEngine delivered the photo record without an asset fileURL")
+            }
+            let callbackBytes = try Data(contentsOf: fetchedURL)
+            try callbackBytes.write(to: materializedURL, options: .atomic)
+            let declaredHash = fetched["assetSHA256"] as? String ?? ""
+            await capture.store(SpikeAssetObservation(
+                sourceURL: fetchedURL,
+                callbackBytes: callbackBytes,
+                materializedURL: materializedURL,
+                declaredHash: declaredHash))
+        }
+
+        try await engine.fetchChanges()
+
+        let seed = SeedkeepRecordCodec.encode(
+            freshSeed(id: seedID, packetCount: 1, updatedAt: 1),
+            zoneID: zoneID)
+        let photoValue = SeedkeepRecordValues.seedPhoto(
+            id: photoID,
+            seedID: seedID,
+            r2Key: "gate0c/\(photoID)",
+            roleRaw: "front",
+            width: 1,
+            height: 1,
+            byteSize: expectedBytes.count,
+            capturedAt: 1)
+        let photo = SeedkeepRecordCodec.encode(photoValue, zoneID: zoneID)
+        photo["asset"] = CKAsset(fileURL: sourceURL)
+        photo["assetSHA256"] = expectedHash as CKRecordValue
+
+        // Enroll the zone through the same engine lifecycle production uses, then author the photo
+        // from a second production engine so the receiver observes a real cross-engine change.
+        engine.save(seed)
+        try await engine.sendUntilDrained()
+        let writer = HouseholdSyncEngine(
+            database: database,
+            zoneID: zoneID,
+            store: HouseholdLocalStore(),
+            stateURL: writerStateURL)
+        writer.save(photo)
+        try await writer.sendUntilDrained()
+
+        for attempt in 0..<5 {
+            try await engine.fetchChanges()
+            if await capture.value() != nil { break }
+            if attempt < 4 { try? await Task.sleep(nanoseconds: 800_000_000) }
+        }
+        guard let observation = await capture.value() else {
+            throw SpikeFailure("CKSyncEngine completed fetchChanges without delivering the photo record")
+        }
+        try expect(observation.callbackBytes == expectedBytes, "asset bytes differed inside the CKSyncEngine callback")
+        try expect(observation.declaredHash == expectedHash, "assetSHA256 was omitted or changed")
+
+        let materializedBytes = try Data(contentsOf: observation.materializedURL)
+        try expect(materializedBytes == expectedBytes, "durably materialized bytes differed after callback return")
+
+        // `fetchChanges()` returns only after our delegate callback completes. Reading the original
+        // CKAsset URL here proves the framework-owned file outlives callback handoff as well as being
+        // available long enough for Stage C's immediate durable materialization.
+        let postCallbackBytes = try Data(contentsOf: observation.sourceURL)
+        try expect(postCallbackBytes == expectedBytes, "CKAsset fileURL stopped being readable after callback return")
+
+        _ = try? await database.modifyRecords(saving: [], deleting: [photoRecordID, seedRecordID])
+        return "✅ Gate 0c CKSyncEngine asset: exact bytes + sha256 delivered; immediate durable materialization succeeded; framework fileURL remained readable after callback return"
+    } catch {
+        _ = try? await database.modifyRecords(saving: [], deleting: [photoRecordID, seedRecordID])
+        return "❌ Gate 0c CKSyncEngine asset failed: \(error)"
+    }
+}
+
 // MARK: - Gate 2: cross-account CKShare
 
 public func runSeedkeepShareOwnerCheck(containerID: String = "iCloud.app.seedkeep") async -> String {
@@ -197,11 +339,12 @@ public func runSeedkeepSpike(mode: String, containerID: String = "iCloud.app.see
         }
         let result: String
         switch mode {
+        case "asset-engine": result = await runSeedkeepCKSyncEngineAssetCheck(containerID: containerID)
         case "roundtrip":   result = await runSeedkeepRoundtripCheck(containerID: containerID)
         case "merge":       result = await runSeedkeepMergeCheck(containerID: containerID)
         case "owner":       result = await runSeedkeepShareOwnerCheck(containerID: containerID)
         case "participant": result = await runSeedkeepShareParticipantCheck(containerID: containerID)
-        default:            return "❌ unknown spike mode: \(mode) (expected roundtrip|merge|owner|participant)"
+        default:            return "❌ unknown spike mode: \(mode) (expected asset-engine|roundtrip|merge|owner|participant)"
         }
         return result + "\n(accountStatus = available)"
     }

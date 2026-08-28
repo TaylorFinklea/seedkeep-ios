@@ -477,7 +477,7 @@ final class JournalStore {
               parts.count == 2,
               (1...12).contains(parts[0]),
               (1...31).contains(parts[1]),
-              let base = parser.date(from: "2023-\(anchor)") else {
+              let base = parser.date(from: "2000-\(anchor)") else {
             throw SeedkeepError(code: "bad_request", message: "A valid MM-DD retrospective date is required")
         }
         let formatter = DateFormatter()

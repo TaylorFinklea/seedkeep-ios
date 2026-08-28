@@ -136,6 +136,15 @@ public final class AppEnvironment {
         self.weatherWarnings = weatherWarnings
         sync.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
         journal.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
+        sync.cloudKitScopeIDProvider = { [weak self] in
+            guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
+            return self.ensureCloudCoordinator(household: household).scopeID
+        }
+        sync.onCloudKitPhotoCacheMiss = { [weak self] recordName in
+            guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
+            return try await self.ensureCloudCoordinator(household: household)
+                .recoverPhotoAssetData(recordName: recordName)
+        }
         journal.cloudKitScopeIDProvider = { [weak self] in
             guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
             return self.ensureCloudCoordinator(household: household).scopeID

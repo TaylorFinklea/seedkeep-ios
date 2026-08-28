@@ -20,19 +20,17 @@ public final class LocalSeed {
     public var customCompany: String?
     /// User-assigned high-level category (e.g. "Pepper", "Tomato", "Herb")
     /// used to group/filter the Library. Defaults to the extraction or
-    /// catalog `common_name` at save time. Local-only for now — Phase 2
-    /// will add a corresponding server column so the value syncs across
-    /// devices in the same household.
+    /// catalog `common_name` at save time and syncs through the CloudKit
+    /// household record.
     public var customType: String?
     public var notes: String?
     /// Tag IDs as a JSON-encoded array. SwiftData supports `[String]` natively
     /// but JSON keeps the schema flat for cross-version migrations.
     public var tagIDsJSON: String
     /// Snapshot of horticultural fields captured at save time (from a catalog
-    /// match or AI extraction). Local-only — the catalog is still the shared
-    /// source of truth, but this guarantees the user can always see depth /
-    /// temp / spacing for *their* seed even offline, for manual entries, or
-    /// when the catalog row hasn't been populated yet.
+    /// match or AI extraction). The catalog remains the source of truth, while
+    /// this household snapshot syncs through CloudKit so the user can see depth,
+    /// temperature, and spacing offline or before the catalog row is populated.
     public var growingInfoJSON: String?
     public var createdAt: Int64
     public var updatedAt: Int64

@@ -42,6 +42,19 @@ func optionalsDropped() {
     #expect(Set(r.keys) == ["x"])
 }
 
+@Test("CloudKit-born photo builders omit legacy server storage pointers")
+func cloudKitBornPhotoBuildersOmitLegacyPointers() {
+    let seedPhoto = SeedkeepRecordValues.seedPhoto(
+        id: "sp-local", seedID: "seed-1", r2Key: nil, roleRaw: "front",
+        width: 640, height: 480, byteSize: 12, capturedAt: 7)
+    let journalPhoto = SeedkeepRecordValues.journalEntryPhoto(
+        id: "jp-local", entryID: "entry-1", storageKey: nil, sortOrder: 0,
+        width: 640, height: 480, createdAt: 7, updatedAt: 7)
+
+    #expect(seedPhoto.scalars["r2Key"] == nil)
+    #expect(journalPhoto.scalars["storageKey"] == nil)
+}
+
 @Test("inZoneRecordName resolves every in-zone target type to its slug")
 func inZoneTargetResolution() {
     #expect(SeedkeepRecordValues.inZoneRecordName(targetType: "Location", id: "l1") == "location:l1")

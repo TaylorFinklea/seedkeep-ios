@@ -52,6 +52,20 @@ struct ChangelogRelease: Identifiable {
 enum ChangelogData {
     static let releases: [ChangelogRelease] = [
         ChangelogRelease(
+            version: "1.0.0",
+            build: 53,
+            date: nil,
+            headline: "Photos and faster garden sync",
+            changes: [
+                ChangelogChange(category: .improved,
+                    text: "Seed and journal photos are back in iCloud gardens, including shared gardens. If a photo needs attention, you can retry it directly."),
+                ChangelogChange(category: .improved,
+                    text: "Journal entries and checklist changes now sync sooner between your devices."),
+                ChangelogChange(category: .fixed,
+                    text: "Today in your garden now handles leap-day dates correctly."),
+            ]
+        ),
+        ChangelogRelease(
             version: "0.4.0",
             build: 52,
             date: nil,

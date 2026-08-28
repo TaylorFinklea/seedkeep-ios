@@ -31,20 +31,23 @@ enum HouseholdMigrationExecutor {
         zoneID: CKRecordZone.ID,
         householdID: String,
         plan: [CloudKitRecordValue],
-        drain: Bool = true
+        drain: Bool = true,
+        prepareRecord: (CKRecord) throws -> CKRecord = { $0 }
     ) async throws -> Result {
         let receiptID = CKRecord.ID(
             recordName: SeedkeepRecordNames.migrationReceipt(householdID), zoneID: zoneID)
         if engine.store.record(for: receiptID) != nil {
             return Result(alreadyMigrated: true, written: 0)
         }
-        var written = 0
-        for value in plan {
-            engine.save(SeedkeepRecordCodec.encode(value, zoneID: zoneID))
-            written += 1
+        // Preflight the WHOLE graph before staging anything. A metadata-only photo is a valid
+        // CloudKit save, so discovering missing bytes after earlier records reached engine.save
+        // would leave a partial migration queued behind an invalid receipt-less graph.
+        let prepared = try plan.map {
+            try prepareRecord(SeedkeepRecordCodec.encode($0, zoneID: zoneID))
         }
+        for record in prepared { engine.save(record) }
         if drain { try await engine.sendUntilDrained(maxPasses: 6) }
-        return Result(alreadyMigrated: false, written: written)
+        return Result(alreadyMigrated: false, written: prepared.count)
     }
 }
 #endif

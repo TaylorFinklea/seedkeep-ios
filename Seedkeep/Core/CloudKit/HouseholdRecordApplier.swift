@@ -92,9 +92,9 @@ enum HouseholdRecordApplier {
     private static func applySeedPhoto(_ v: CloudKitRecordValue, householdID: String, into context: ModelContext) {
         let id = SeedkeepRecordNames.rawID(v.recordName)
         let m = first(context, FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id }))
-            ?? { let s = LocalSeedPhoto(id: id, seedID: "", householdID: householdID, r2Key: "", role: .extra, capturedAt: 0); context.insert(s); return s }()
+            ?? { let s = LocalSeedPhoto(id: id, seedID: "", householdID: householdID, r2Key: nil, role: .extra, capturedAt: 0); context.insert(s); return s }()
         m.seedID     = deref(v.refs, "seedID") ?? m.seedID
-        m.r2Key      = v.scalars["r2Key"]?.asString ?? m.r2Key
+        m.r2Key      = v.scalars["r2Key"]?.asString
         m.roleRaw    = v.scalars["roleRaw"]?.asString ?? m.roleRaw
         m.width      = v.scalars["width"]?.asInt
         m.height     = v.scalars["height"]?.asInt
@@ -158,9 +158,9 @@ enum HouseholdRecordApplier {
     private static func applyJournalEntryPhoto(_ v: CloudKitRecordValue, into context: ModelContext) {
         let id = SeedkeepRecordNames.rawID(v.recordName)
         let m = first(context, FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.id == id }))
-            ?? { let s = LocalJournalEntryPhoto(id: id, entryID: "", storageKey: "", sortOrder: 0, width: nil, height: nil, createdAt: 0, updatedAt: 0); context.insert(s); return s }()
+            ?? { let s = LocalJournalEntryPhoto(id: id, entryID: "", storageKey: nil, sortOrder: 0, width: nil, height: nil, createdAt: 0, updatedAt: 0); context.insert(s); return s }()
         m.entryID    = deref(v.refs, "entryID") ?? m.entryID
-        m.storageKey = v.scalars["storageKey"]?.asString ?? m.storageKey
+        m.storageKey = v.scalars["storageKey"]?.asString
         m.sortOrder  = v.scalars["sortOrder"]?.asInt ?? m.sortOrder
         m.width      = v.scalars["width"]?.asInt
         m.height     = v.scalars["height"]?.asInt

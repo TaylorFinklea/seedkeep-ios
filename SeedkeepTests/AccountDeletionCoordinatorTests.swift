@@ -83,6 +83,17 @@ private func gardenGraph(in zone: CKRecordZone.ID = ownerZone) -> [CKRecord] {
     ]
 }
 
+private func gardenGraphWithPhotoAsset(
+    in zone: CKRecordZone.ID = ownerZone,
+    fileURL: URL
+) throws -> [CKRecord] {
+    let graph = gardenGraph(in: zone)
+    let photo = try #require(graph.first { $0.recordID.recordName == "seedPhoto:p1" })
+    photo["asset"] = CKAsset(fileURL: fileURL)
+    photo["assetSHA256"] = "untrusted-fixture-value" as CKRecordValue
+    return graph
+}
+
 private func gardenDigest(in zone: CKRecordZone.ID = ownerZone) throws -> HouseholdGraphDigest {
     try HouseholdGraphDigester.digest(of: gardenGraph(in: zone), in: zone)
 }
@@ -131,6 +142,9 @@ private final class FakeCloudKit: AccountDeletionCloudKitOperating {
     /// reports success, which is exactly the shape of regression the
     /// source-vs-destination comparison exists to catch.
     var dropRecordNamedOnSave: String?
+    /// Preserves a photo's scalar marker while dropping only its bytes.
+    /// This models the silent omission the independent roster must catch.
+    var dropPhotoAssetOnSave = false
     var destinationOwnerRecordName = successorRecordName
 
     func seed(zone: CKRecordZone.ID, records: [CKRecord] = []) {
@@ -178,13 +192,15 @@ private final class FakeCloudKit: AccountDeletionCloudKitOperating {
         return !presentZones.contains(zoneKey(zoneID))
     }
 
-    func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> [CKRecord] {
+    func fetchRecords(in zoneID: CKRecordZone.ID) async throws -> AccountDeletionRecordSnapshot {
         calls.append(.fetchRecords(zoneKey(zoneID)))
         try check(.fetchRecords)
         guard presentZones.contains(zoneKey(zoneID)) else {
             throw CKError(.zoneNotFound)
         }
-        return recordsByZone[zoneKey(zoneID)] ?? []
+        let records = recordsByZone[zoneKey(zoneID)] ?? []
+        let householdID = SeedkeepRecordNames.householdID(fromZoneName: zoneID.zoneName)
+        return try AccountDeletionTransferAssetStager(householdID: householdID).snapshot(records)
     }
 
     func saveRecords(
@@ -200,6 +216,11 @@ private final class FakeCloudKit: AccountDeletionCloudKitOperating {
         var stored = recordsByZone[zoneKey(zoneID)] ?? []
         for record in records {
             if record.recordID.recordName == dropRecordNamedOnSave { continue }
+            if dropPhotoAssetOnSave,
+               record.recordType == SeedkeepRecordType.seedPhoto.recordTypeName
+                    || record.recordType == SeedkeepRecordType.journalEntryPhoto.recordTypeName {
+                record["asset"] = nil
+            }
             if let index = stored.firstIndex(where: { $0.recordID.recordName == record.recordID.recordName }) {
                 // CloudKit's optimistic concurrency: a record built from
                 // scratch carries no change tag, so replacing an existing
@@ -964,6 +985,7 @@ struct AccountDeletionCoordinatorTests {
                          names: ["seedPhoto:p1"], policy: .allKeys),
             .fetchRecords(zoneKey(ownerZone)),
             .fetchRecords(zoneKey(destinationZoneFromOwner)),
+            .fetchRecords(zoneKey(ownerZone)),
             .deleteOwnedZone(zoneKey(ownerZone)),
             .ownedZoneIsAbsent(zoneKey(ownerZone)),
         ])
@@ -972,6 +994,75 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.server.calls.dropLast().contains(.markSourceDeleted("tr_1")))
         #expect(harness.signOut.count == 1)
         #expect(harness.stored == nil)
+    }
+
+    @Test("asset-bearing shared-owner transfer observes bytes through copy, both verifiers, and the pre-lease fence")
+    func assetBearingSharedOwnerTransferCompletes() async throws {
+        let bytes = Data("asset-bearing-transfer-bytes".utf8)
+        let frameworkURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AccountDeletionCoordinatorAsset-\(UUID().uuidString).jpg")
+        try bytes.write(to: frameworkURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: frameworkURL)
+            try? PhotoByteStore.purgeHousehold(ownerHouseholdID)
+        }
+
+        let owner = Harness()
+        try owner.stageSharedOwner(serverPhase: .destinationReady, checkpointPhase: .destinationReady)
+        owner.cloudKit.seed(
+            zone: ownerZone,
+            records: try gardenGraphWithPhotoAsset(fileURL: frameworkURL))
+
+        let ownerOutcome = try await owner.coordinator.resume()
+        #expect(ownerOutcome == .waiting(.ownerVerified))
+
+        let copiedPhoto = try #require(owner.cloudKit.records(in: destinationZoneFromOwner).first {
+            $0.recordID.recordName == "seedPhoto:p1"
+        })
+        let copiedAsset = try #require(copiedPhoto["asset"] as? CKAsset)
+        let copiedURL = try #require(copiedAsset.fileURL)
+        #expect(try Data(contentsOf: copiedURL) == bytes)
+
+        let ownerDigestDTO = try #require(owner.server.row?.owner_digest)
+        let ownerDigest = HouseholdGraphDigest(
+            sha256: ownerDigestDTO.digest,
+            counts: ownerDigestDTO.record_counts)
+
+        let successor = Harness(userID: "u_succ", householdID: "hh_succ")
+        successor.cloudKit.seed(
+            zone: destinationZoneFromSuccessor,
+            records: try gardenGraphWithPhotoAsset(
+                in: destinationZoneFromSuccessor,
+                fileURL: frameworkURL))
+        successor.server.seedRow(phase: .ownerVerified, ownerDigest: ownerDigest)
+        try successor.seedCheckpoint(
+            role: .successor,
+            phase: .destinationReady,
+            sourceZone: ownerZone,
+            destinationZone: destinationZoneFromSuccessor,
+            destinationOwnerRecordName: successorRecordName)
+
+        let successorOutcome = try await successor.coordinator.resume()
+        #expect(successorOutcome == .waiting(.verified))
+        let successorDigestDTO = try #require(successor.server.row?.successor_digest)
+        #expect(successorDigestDTO.digest == ownerDigestDTO.digest)
+        #expect(successorDigestDTO.record_counts == ownerDigestDTO.record_counts)
+
+        let successorDigest = HouseholdGraphDigest(
+            sha256: successorDigestDTO.digest,
+            counts: successorDigestDTO.record_counts)
+        _ = try await owner.server.putSuccessorVerification(
+            id: "tr_1",
+            digest: successorDigest,
+            destinationZoneName: destinationZoneFromOwner.zoneName,
+            destinationZoneOwnerName: successorRecordName)
+
+        try FileManager.default.removeItem(at: frameworkURL)
+        let finalOutcome = try await owner.coordinator.resume()
+
+        #expect(finalOutcome == .deleted)
+        #expect(!owner.cloudKit.presentZones.contains(zoneKey(ownerZone)))
+        #expect(owner.signOut.count == 1)
     }
 
     @Test("copy batches are saved parents-first and always with the all-keys policy")
@@ -1804,6 +1895,33 @@ struct AccountDeletionCoordinatorTests {
         #expect(harness.server.row?.phase == .sourceDeleted)
     }
 
+    @Test("a source change after verification stops before the deletion lease")
+    func sourceChangeAfterVerificationKeepsSource() async throws {
+        let harness = Harness()
+        let verifiedDigest = try gardenDigest()
+        try harness.stageSharedOwner(serverPhase: .verified,
+                                     ownerDigest: verifiedDigest,
+                                     successorDigest: verifiedDigest)
+
+        var changedGraph = gardenGraph()
+        changedGraph.append(record(.seed, "seed:participant-late", in: ownerZone,
+                                   scalars: ["customName": "Late participant seed" as CKRecordValue]))
+        harness.cloudKit.seed(zone: ownerZone, records: changedGraph)
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .verified,
+                                   destinationZone: destinationZoneFromOwner,
+                                   destinationOwnerRecordName: successorRecordName)
+
+        await #expect(throws: AccountDeletionCoordinatorError.sourceChangedAfterVerification) {
+            try await harness.coordinator.resume()
+        }
+
+        #expect(!harness.server.calls.contains(.acquireSourceDeletionLease("tr_1")))
+        #expect(!harness.cloudKit.calls.contains(.deleteOwnedZone(zoneKey(ownerZone))))
+        #expect(harness.cloudKit.presentZones.contains(zoneKey(ownerZone)))
+        #expect(harness.stored?.phase == .verified)
+        #expect(harness.signOut.count == 0)
+    }
+
     @Test("a lease refused because the successor is gone leaves the garden alone")
     func leaseRefusedKeepsSource() async throws {
         let harness = Harness()
@@ -1878,6 +1996,43 @@ struct AccountDeletionCoordinatorTests {
             if case .putOwnerVerification = $0 { return true }
             return false
         }), "a copy that does not equal the source must never be advertised as verified")
+        #expect(harness.cloudKit.presentZones.contains(zoneKey(ownerZone)))
+        #expect(harness.signOut.count == 0)
+        #expect(harness.stored?.phase == .copyComplete)
+    }
+
+    @Test("a copy that drops only an expected photo asset keeps the source and posts nothing")
+    func assetOmittedFromCopyIsRefusedByRoster() async throws {
+        let bytes = Data("roster-protected-transfer-bytes".utf8)
+        let frameworkURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AccountDeletionRosterAsset-\(UUID().uuidString).jpg")
+        try bytes.write(to: frameworkURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: frameworkURL)
+            try? PhotoByteStore.purgeHousehold(ownerHouseholdID)
+        }
+        let harness = Harness()
+        try harness.stageSharedOwner(serverPhase: .destinationReady)
+        harness.cloudKit.seed(
+            zone: ownerZone,
+            records: try gardenGraphWithPhotoAsset(fileURL: frameworkURL))
+        harness.cloudKit.dropPhotoAssetOnSave = true
+        try harness.seedCheckpoint(role: .sharedOwner, phase: .destinationReady)
+
+        await #expect(throws: PhotoAssetSyncError.self) {
+            try await harness.coordinator.resume()
+        }
+
+        let destinationPhoto = try #require(
+            harness.cloudKit.records(in: destinationZoneFromOwner).first {
+                $0.recordID.recordName == "seedPhoto:p1"
+            })
+        #expect(destinationPhoto["asset"] == nil)
+        #expect(destinationPhoto["assetSHA256"] != nil)
+        #expect(!harness.server.calls.contains(where: {
+            if case .putOwnerVerification = $0 { return true }
+            return false
+        }))
         #expect(harness.cloudKit.presentZones.contains(zoneKey(ownerZone)))
         #expect(harness.signOut.count == 0)
         #expect(harness.stored?.phase == .copyComplete)

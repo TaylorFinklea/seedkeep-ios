@@ -39,10 +39,15 @@ struct HouseholdCloudCoordinatorTests {
         var drainGate: DrainGate?
         var fetchGate: FetchGate?
         var drainFailuresRemaining = 0
+        var permanentlyFailedSaveRecordIDsOnNextDrain: [CKRecord.ID] = []
+        private var permanentlyFailedSaveRecordIDs: [CKRecord.ID] = []
         /// Number of leading fetchChanges() calls that should throw `fetchError` (simulating a
         /// transient hiccup that clears on retry). Decrements per throw.
         var fetchFailuresRemaining = 0
         var fetchError: Error = URLError(.timedOut)
+        var directlyFetchedRecords: [CKRecord.ID: CKRecord] = [:]
+        private(set) var directlyFetchedRecordIDs: [CKRecord.ID] = []
+        var directFetchGate: FetchGate?
 
         /// The real fetch/send checkpoint policy + pass driver (production types, not stand-ins).
         private let checkpoint = ProjectionCheckpointGate()
@@ -90,8 +95,8 @@ struct HouseholdCloudCoordinatorTests {
         func fetchChanges() async throws {
             fetchChangesCallCount += 1
             if fetchFailuresRemaining > 0 { fetchFailuresRemaining -= 1; throw fetchError }
-            if let fetchGate { await fetchGate.waitForFetch() }
             guard let batch = nextFetchBatch() else { return }
+            if let fetchGate { await fetchGate.waitForFetch() }
             let operationError = try await checkpoint.runPass(
                 operation: {
                     for m in batch.mods { self.store.applyRemoteModification(m) }
@@ -106,13 +111,29 @@ struct HouseholdCloudCoordinatorTests {
                 rollback: {
                     // The engine rewinds to its last durable serialization; with a scripted feed the
                     // unadvanced cursor already re-delivers, so only the ad-hoc mode needs a restore.
-                    if self.remoteZone == nil { self.pendingFetch = (batch.mods, batch.dels) }
+                    // A retired account generation is never restored into the replacement account.
+                    if self.remoteZone == nil, self.acceptsChanges {
+                        self.pendingFetch = (batch.mods, batch.dels)
+                    }
                 })
             if let operationError { throw operationError }
         }
 
+        func fetchRecord(_ recordID: CKRecord.ID) async throws -> CKRecord {
+            directlyFetchedRecordIDs.append(recordID)
+            if let directFetchGate { await directFetchGate.waitForFetch() }
+            guard let record = directlyFetchedRecords[recordID] else { throw CKError(.unknownItem) }
+            return record
+        }
+
         func sendUntilDrained(maxPasses: Int) async throws {
             sendUntilDrainedCallCount += 1
+            if !permanentlyFailedSaveRecordIDsOnNextDrain.isEmpty {
+                permanentlyFailedSaveRecordIDs = permanentlyFailedSaveRecordIDsOnNextDrain
+                permanentlyFailedSaveRecordIDsOnNextDrain = []
+                hasPendingRecordChanges = false
+                throw CKError(.quotaExceeded)
+            }
             if drainFailuresRemaining > 0 {
                 drainFailuresRemaining -= 1
                 throw fetchError
@@ -133,6 +154,11 @@ struct HouseholdCloudCoordinatorTests {
                 // the coordinator's pending-apply buffer.
                 rollback: {})
             if let operationError { throw operationError }
+        }
+
+        func consumePermanentlyFailedSaveRecordIDs() -> [CKRecord.ID] {
+            defer { permanentlyFailedSaveRecordIDs = [] }
+            return permanentlyFailedSaveRecordIDs
         }
 
         private struct FetchBatch {
@@ -283,8 +309,26 @@ struct HouseholdCloudCoordinatorTests {
         return SeedkeepRecordCodec.encode(local.cloudKitValue, zoneID: zoneID(householdID))
     }
 
+    private func remoteSeedPhoto(
+        id: String,
+        seedID: String,
+        householdID: String,
+        assetURL: URL? = nil
+    ) -> CKRecord {
+        let local = LocalSeedPhoto(
+            id: id, seedID: seedID, householdID: householdID, r2Key: "", role: .front,
+            width: 1, height: 1, byteSize: 16, capturedAt: 1)
+        let record = SeedkeepRecordCodec.encode(local.cloudKitValue, zoneID: zoneID(householdID))
+        if let assetURL { record["asset"] = CKAsset(fileURL: assetURL) }
+        return record
+    }
+
     private func fetchSeed(_ c: ModelContext, _ id: String) -> LocalSeed? {
         try? c.fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == id })).first
+    }
+
+    private func fetchSeedPhoto(_ c: ModelContext, _ id: String) -> LocalSeedPhoto? {
+        try? c.fetch(FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id })).first
     }
 
     // MARK: - Migration executor (AC3)
@@ -312,6 +356,54 @@ struct HouseholdCloudCoordinatorTests {
         #expect(r2.alreadyMigrated == true)
         #expect(r2.written == 0)
         #expect(engine.savedRecords.count == before, "skip must write nothing")
+    }
+
+    @Test("migration preflights and attaches photo assets before any record is staged")
+    func migrationPreflightsPhotoAssets() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let engine = FakeEngine()
+        let z = zoneID(hid)
+        let recordName = SeedkeepRecordNames.seedPhoto("p1")
+        let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: hid)
+        let ref = try pending.write(Data("migration-photo".utf8), for: recordName)
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+        let plan = [SeedkeepRecordValues.seedPhoto(
+            id: "p1", seedID: "s1", r2Key: "", roleRaw: "front",
+            width: 1, height: 1, byteSize: 15, capturedAt: 1)]
+        let bridge = PhotoAssetSyncBridge(householdID: hid)
+
+        _ = try await HouseholdMigrationExecutor.run(
+            into: engine, zoneID: z, householdID: hid, plan: plan,
+            prepareRecord: bridge.prepareForUpload)
+
+        let saved = try #require(engine.savedRecords.first)
+        #expect((saved["asset"] as? CKAsset)?.fileURL == ref.url)
+        #expect(saved["assetSHA256"] as? String == ref.sha256)
+    }
+
+    @Test("migration missing one photo preflights fail-closed and stages nothing")
+    func migrationMissingPhotoStagesNothing() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let engine = FakeEngine()
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+        let input = HouseholdMigrationPlanner.Input(
+            householdID: hid, householdName: "H", householdCreatedAt: 1, householdUpdatedAt: 1,
+            seeds: [LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1,
+                              source: .store, createdAt: 1, updatedAt: 1)],
+            seedPhotos: [LocalSeedPhoto(
+                id: "missing", seedID: "s1", householdID: hid, r2Key: "", role: .front,
+                capturedAt: 1)])
+        let plan = HouseholdMigrationPlanner.plan(input, completedAt: 2)
+        let bridge = PhotoAssetSyncBridge(householdID: hid)
+
+        await #expect(throws: PhotoAssetSyncError.self) {
+            try await HouseholdMigrationExecutor.run(
+                into: engine, zoneID: self.zoneID(hid), householdID: hid, plan: plan,
+                prepareRecord: bridge.prepareForUpload)
+        }
+
+        #expect(engine.savedRecords.isEmpty,
+                "preflight must reject the graph before even scalar records reach engine.save")
     }
 
     @Test("coordinator skips migration when a receipt is already synced from another device")
@@ -608,6 +700,410 @@ struct HouseholdCloudCoordinatorTests {
         #expect((try? ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>()))?.isEmpty == true)
         #expect(!FileManager.default.fileExists(atPath: ref.url.path),
                 "a remote photo delete must purge the cached bytes, not just the SwiftData row")
+    }
+
+    // MARK: - Photos-on-CloudKit Stage C sync seams
+
+    @Test("fetched photo bytes are durable before the CKSyncEngine callback returns")
+    func fetchedPhotoMaterializesIntoCache() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-fetch-\(UUID().uuidString).jpg")
+        let bytes = Data("fetched-photo-bytes".utf8)
+        try bytes.write(to: sourceURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+        }
+        let container = makeContainer()
+        let engine = FakeEngine()
+        engine.pendingFetch = ([
+            remoteSeed(id: "s1", householdID: hid, name: "Peer", updatedAt: 1),
+            remoteSeedPhoto(id: "p1", seedID: "s1", householdID: hid, assetURL: sourceURL),
+        ], [])
+
+        await makeCoordinator(engine: engine, container: container, householdID: hid).sync()
+        try FileManager.default.removeItem(at: sourceURL)
+
+        #expect(fetchSeedPhoto(ModelContext(container), "p1") != nil)
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid)
+            .data(for: SeedkeepRecordNames.seedPhoto("p1")) == bytes)
+    }
+
+    @Test("one unavailable photo applies as a shell while unrelated records and assets still project")
+    func unavailablePhotoDoesNotWedgeFetchedBatch() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-good-\(UUID().uuidString).jpg")
+        let goodBytes = Data("good-photo".utf8)
+        try goodBytes.write(to: sourceURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+        }
+        let container = makeContainer()
+        let engine = FakeEngine()
+        engine.pendingFetch = ([
+            remoteSeed(id: "s1", householdID: hid, name: "Still converged", updatedAt: 2),
+            remoteSeedPhoto(id: "bad", seedID: "s1", householdID: hid),
+            remoteSeedPhoto(id: "good", seedID: "s1", householdID: hid, assetURL: sourceURL),
+        ], [])
+
+        await makeCoordinator(engine: engine, container: container, householdID: hid).sync()
+
+        #expect(fetchSeed(ModelContext(container), "s1")?.customName == "Still converged")
+        #expect(fetchSeedPhoto(ModelContext(container), "bad") != nil,
+                "the unavailable photo metadata must still apply as a shell")
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid)
+            .data(for: SeedkeepRecordNames.seedPhoto("good")) == goodBytes,
+                "one bad photo must not stop another photo in the same batch from materializing")
+    }
+
+    @Test("an unreadable fetched asset remains directly recoverable after the cursor advances and relaunches")
+    func unreadableFetchedAssetRecoversAfterCursorAdvance() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("recoverable")
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID(hid))
+        let cursorURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-recovery-cursor-\(UUID().uuidString)")
+        let recoveryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-recovery-\(UUID().uuidString).jpg")
+        let expected = Data("recovered-after-cursor".utf8)
+        try expected.write(to: recoveryURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: cursorURL)
+            try? FileManager.default.removeItem(at: recoveryURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+            try? FileManager.default.removeItem(
+                at: HouseholdCloudCoordinator.ownerUnavailablePhotoStateURL(householdID: hid))
+        }
+
+        let unavailableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-already-gone-\(UUID().uuidString).jpg")
+        let unavailable = remoteSeedPhoto(
+            id: "recoverable", seedID: "s1", householdID: hid, assetURL: unavailableURL)
+        unavailable["assetSHA256"] = "asset-was-promised" as CKRecordValue
+
+        let recovered = remoteSeedPhoto(
+            id: "recoverable", seedID: "s1", householdID: hid, assetURL: recoveryURL)
+        recovered["assetSHA256"] = "asset-was-promised" as CKRecordValue
+
+        let container = makeContainer()
+        let remoteZone = FakeRemoteZone([(
+            mods: [
+                remoteSeed(id: "s1", householdID: hid, name: "Parent", updatedAt: 1),
+                unavailable,
+            ],
+            dels: []
+        )])
+        let firstEngine = FakeEngine()
+        firstEngine.cursorURL = cursorURL
+        firstEngine.remoteZone = remoteZone
+        let firstCoordinator = makeCoordinator(
+            engine: firstEngine, container: container, householdID: hid)
+
+        await firstCoordinator.sync()
+
+        #expect(firstEngine.persistedCursor == 1,
+                "the unrelated batch may checkpoint after the failed asset ID is persisted")
+        #expect(firstCoordinator.unavailableFetchedPhotoRecordNames.contains(recordName))
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == nil)
+
+        let recoveryEngine = FakeEngine()
+        recoveryEngine.cursorURL = cursorURL
+        recoveryEngine.remoteZone = remoteZone
+        recoveryEngine.directlyFetchedRecords[recordID] = recovered
+        let relaunchedCoordinator = makeCoordinator(
+            engine: recoveryEngine, container: container, householdID: hid)
+        #expect(relaunchedCoordinator.unavailableFetchedPhotoRecordNames.contains(recordName),
+                "the recovery roster must survive a coordinator relaunch")
+
+        await relaunchedCoordinator.sync()
+
+        #expect(recoveryEngine.fetchDeliveryCount == 0,
+                "the advanced cursor must not redeliver the unchanged photo after relaunch")
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == nil)
+
+        let data = try await relaunchedCoordinator.recoverPhotoAssetData(recordName: recordName)
+
+        #expect(data == expected)
+        #expect(recoveryEngine.directlyFetchedRecordIDs == [recordID],
+                "recovery must refetch the unchanged record instead of asking for incremental changes")
+        #expect(!relaunchedCoordinator.unavailableFetchedPhotoRecordNames.contains(recordName))
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == expected)
+    }
+
+    @Test("a failed exact-record recovery keeps the durable retry roster")
+    func failedDirectPhotoRecoveryKeepsRoster() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("still-unavailable")
+        let stateURL = HouseholdCloudCoordinator.ownerUnavailablePhotoStateURL(householdID: hid)
+        defer {
+            try? PhotoByteStore.purgeHousehold(hid)
+            try? FileManager.default.removeItem(at: stateURL)
+        }
+        let unavailableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-still-gone-\(UUID().uuidString).jpg")
+        let unavailable = remoteSeedPhoto(
+            id: "still-unavailable", seedID: "s1", householdID: hid, assetURL: unavailableURL)
+        unavailable["assetSHA256"] = "asset-was-promised" as CKRecordValue
+        let container = makeContainer()
+        let firstEngine = FakeEngine()
+        firstEngine.pendingFetch = ([
+            remoteSeed(id: "s1", householdID: hid, name: "Parent", updatedAt: 1),
+            unavailable,
+        ], [])
+        let firstCoordinator = makeCoordinator(
+            engine: firstEngine, container: container, householdID: hid)
+
+        await firstCoordinator.sync()
+
+        let recoveryEngine = FakeEngine()
+        let relaunchedCoordinator = makeCoordinator(
+            engine: recoveryEngine, container: container, householdID: hid)
+        await #expect(throws: CKError.self) {
+            try await relaunchedCoordinator.recoverPhotoAssetData(recordName: recordName)
+        }
+
+        #expect(relaunchedCoordinator.unavailableFetchedPhotoRecordNames.contains(recordName))
+        #expect(FileManager.default.fileExists(atPath: stateURL.path))
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == nil)
+    }
+
+    @Test("an account switch during exact-record recovery leaves no old-account bytes")
+    func accountSwitchDuringDirectPhotoRecoveryLeavesNoBytes() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("direct-old-account")
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID(hid))
+        let stateURL = HouseholdCloudCoordinator.ownerUnavailablePhotoStateURL(householdID: hid)
+        let recoveryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-direct-old-account-\(UUID().uuidString).jpg")
+        try Data("direct-old-account-bytes".utf8).write(to: recoveryURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: recoveryURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+            try? FileManager.default.removeItem(at: stateURL)
+        }
+        let unavailableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-direct-already-gone-\(UUID().uuidString).jpg")
+        let unavailable = remoteSeedPhoto(
+            id: "direct-old-account", seedID: "s1", householdID: hid, assetURL: unavailableURL)
+        unavailable["assetSHA256"] = "asset-was-promised" as CKRecordValue
+        let recovered = remoteSeedPhoto(
+            id: "direct-old-account", seedID: "s1", householdID: hid, assetURL: recoveryURL)
+        recovered["assetSHA256"] = "asset-was-promised" as CKRecordValue
+        let container = makeContainer()
+        let firstEngine = FakeEngine()
+        firstEngine.pendingFetch = ([
+            remoteSeed(id: "s1", householdID: hid, name: "Parent", updatedAt: 1),
+            unavailable,
+        ], [])
+        await makeCoordinator(engine: firstEngine, container: container, householdID: hid).sync()
+
+        let recoveryEngine = FakeEngine()
+        recoveryEngine.directlyFetchedRecords[recordID] = recovered
+        let gate = FetchGate()
+        recoveryEngine.directFetchGate = gate
+        let coordinator = makeCoordinator(
+            engine: recoveryEngine, container: container, householdID: hid)
+        let recoveryTask = Task {
+            try await coordinator.recoverPhotoAssetData(recordName: recordName)
+        }
+        await gate.waitUntilStarted()
+
+        coordinator.handleAccountChange(.switchAccounts)
+        await gate.release()
+        await #expect(throws: SyncEngineError.self) {
+            try await recoveryTask.value
+        }
+
+        #expect(recoveryEngine.directlyFetchedRecordIDs == [recordID])
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == nil)
+        #expect(coordinator.unavailableFetchedPhotoRecordNames.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: stateURL.path) == false)
+    }
+
+    @Test("an account switch while a photo fetch is blocked cannot restore old-account bytes")
+    func accountSwitchDuringFetchedPhotoDoesNotRestoreBytes() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("old-account")
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-old-account-\(UUID().uuidString).jpg")
+        try Data("old-account-bytes".utf8).write(to: sourceURL, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? PhotoByteStore.purgeHousehold(hid)
+            try? FileManager.default.removeItem(
+                at: HouseholdCloudCoordinator.ownerUnavailablePhotoStateURL(householdID: hid))
+        }
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        engine.pendingFetch = ([
+            remoteSeed(id: "old-parent", householdID: hid, name: "Old", updatedAt: 1),
+            remoteSeedPhoto(
+                id: "old-account", seedID: "old-parent", householdID: hid, assetURL: sourceURL),
+        ], [])
+        let gate = FetchGate()
+        engine.fetchGate = gate
+        let syncTask = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+
+        coordinator.handleAccountChange(.switchAccounts)
+        await gate.release()
+        _ = await syncTask.value
+
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == nil,
+                "a stale callback must not recreate bytes after account cleanup")
+        #expect(fetchSeedPhoto(ModelContext(container), "old-account") == nil)
+        #expect(coordinator.unavailableFetchedPhotoRecordNames.isEmpty)
+    }
+
+    @Test("a confirmed local photo deletion clears its fetched-asset recovery roster entry")
+    func localPhotoDeleteClearsFetchedRecoveryRoster() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("delete-me")
+        let stateURL = HouseholdCloudCoordinator.ownerUnavailablePhotoStateURL(householdID: hid)
+        defer {
+            try? PhotoByteStore.purgeHousehold(hid)
+            try? FileManager.default.removeItem(at: stateURL)
+        }
+        let unavailableURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stage-c-delete-gone-\(UUID().uuidString).jpg")
+        let unavailable = remoteSeedPhoto(
+            id: "delete-me", seedID: "s1", householdID: hid, assetURL: unavailableURL)
+        unavailable["assetSHA256"] = "asset-was-promised" as CKRecordValue
+        let container = makeContainer()
+        let engine = FakeEngine()
+        engine.pendingFetch = ([
+            remoteSeed(id: "s1", householdID: hid, name: "Parent", updatedAt: 1),
+            unavailable,
+        ], [])
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+
+        await coordinator.sync()
+        #expect(coordinator.unavailableFetchedPhotoRecordNames.contains(recordName))
+
+        let context = ModelContext(container)
+        let photoID = "delete-me"
+        let photo = try #require(context.fetch(
+            FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == photoID })
+        ).first)
+        context.insert(LocalCloudKitDeletion(
+            scopeID: HouseholdCloudCoordinator.ownerScopeID(householdID: hid),
+            householdID: hid, recordName: recordName, createdAt: 2
+        ))
+        context.delete(photo)
+        try context.save()
+
+        await coordinator.sync()
+
+        #expect(engine.deletedIDs.map(\.recordName).contains(recordName))
+        #expect(!coordinator.unavailableFetchedPhotoRecordNames.contains(recordName),
+                "a confirmed delete must not leave an exact-fetch retry for a record that no longer exists")
+        #expect(FileManager.default.fileExists(atPath: stateURL.path) == false)
+    }
+
+    @Test("normal push attaches exact bytes and only removes PendingUploads after a clean drain")
+    func pushAttachesPhotoAndPromotesPendingBytes() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        let context = ModelContext(container)
+        context.insert(LocalSeed(
+            id: "s1", householdID: hid, state: .active, packetCount: 1,
+            source: .store, createdAt: 1, updatedAt: 2))
+        context.insert(LocalSeedPhoto(
+            id: "p1", seedID: "s1", householdID: hid, r2Key: "", role: .front,
+            width: 1, height: 1, byteSize: 11, capturedAt: 2))
+        try context.save()
+        let recordName = SeedkeepRecordNames.seedPhoto("p1")
+        let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: hid)
+        let bytes = Data("local-photo".utf8)
+        let ref = try pending.write(bytes, for: recordName)
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+
+        await coordinator.sync()
+
+        let saved = try #require(engine.savedRecords.last { $0.recordID.recordName == recordName })
+        #expect((saved["asset"] as? CKAsset)?.fileURL == ref.url)
+        #expect(saved["assetSHA256"] as? String == ref.sha256)
+        #expect(!pending.contains(recordName))
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == bytes)
+    }
+
+    @Test("normal push with missing photo bytes never stages metadata-only photo")
+    func pushMissingPhotoBytesFailsClosed() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        await coordinator.sync()
+        let context = ModelContext(container)
+        context.insert(LocalSeed(
+            id: "s1", householdID: hid, state: .active, packetCount: 1,
+            source: .store, createdAt: 1, updatedAt: 2))
+        context.insert(LocalSeedPhoto(
+            id: "missing", seedID: "s1", householdID: hid, r2Key: "", role: .front,
+            capturedAt: 2))
+        try context.save()
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+
+        await coordinator.sync()
+
+        let recordName = SeedkeepRecordNames.seedPhoto("missing")
+        #expect(!engine.savedRecords.contains { $0.recordID.recordName == recordName },
+                "metadata-only photo must never reach engine.save")
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == SeedkeepRecordNames.seed("s1") },
+                "the bad photo must not stop unrelated valid records from draining")
+        #expect(coordinator.lastHumanizedError != nil)
+    }
+
+    @Test("permanent photo failure is durable across relaunch and resumes only after explicit retry")
+    func permanentPhotoFailureRequiresExplicitRetry() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine1 = FakeEngine()
+        let coordinator1 = makeCoordinator(engine: engine1, container: container, householdID: hid)
+        await coordinator1.sync()
+        let context = ModelContext(container)
+        context.insert(LocalSeed(
+            id: "s1", householdID: hid, state: .active, packetCount: 1,
+            source: .store, createdAt: 1, updatedAt: 2))
+        context.insert(LocalSeedPhoto(
+            id: "p1", seedID: "s1", householdID: hid, r2Key: "", role: .front,
+            capturedAt: 2))
+        try context.save()
+        let recordName = SeedkeepRecordNames.seedPhoto("p1")
+        try PhotoByteStore(lifetime: .pendingUploads, householdID: hid)
+            .write(Data("retry-photo".utf8), for: recordName)
+        defer { try? PhotoByteStore.purgeHousehold(hid) }
+        engine1.permanentlyFailedSaveRecordIDsOnNextDrain = [
+            CKRecord.ID(recordName: recordName, zoneID: zoneID(hid)),
+        ]
+
+        await coordinator1.sync()
+
+        #expect(coordinator1.failedPhotoRecordNames.contains(recordName))
+        let firstAttempts = engine1.savedRecords.filter { $0.recordID.recordName == recordName }.count
+        await coordinator1.sync()
+        #expect(engine1.savedRecords.filter { $0.recordID.recordName == recordName }.count == firstAttempts,
+                "a permanently failed photo must not re-upload on every pass")
+
+        let engine2 = FakeEngine()
+        let coordinator2 = makeCoordinator(engine: engine2, container: container, householdID: hid)
+        #expect(coordinator2.failedPhotoRecordNames.contains(recordName),
+                "suppression must survive coordinator relaunch")
+        await coordinator2.sync()
+        #expect(!engine2.savedRecords.contains { $0.recordID.recordName == recordName })
+
+        try await coordinator2.retryPhotoSync(recordName: recordName)
+        #expect(!coordinator2.failedPhotoRecordNames.contains(recordName))
+        #expect(engine2.savedRecords.contains { $0.recordID.recordName == recordName },
+                "explicit retry must re-enable the photo")
     }
 
     // MARK: - Watermark push + echo exclusion
@@ -1349,6 +1845,54 @@ struct HouseholdCloudCoordinatorTests {
         #expect(engine.fetchChangesCallCount > 0)
         #expect(FileManager.default.fileExists(atPath: cleanupMarkerURL.path) == false,
                 "the durable latch clears only after cleanup succeeds")
+    }
+
+    @Test("a pending account cleanup blocks exact photo recovery until cleanup succeeds")
+    func pendingAccountCleanupBlocksDirectPhotoRecovery() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let recordName = SeedkeepRecordNames.seedPhoto("cleanup-latched")
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID(hid))
+        let expected = Data("replacement-account-photo".utf8)
+        let assetURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seedkeep-cleanup-latched-\(UUID().uuidString).jpg")
+        try expected.write(to: assetURL, options: .atomic)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seedkeep-account-cleanup-photo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: assetURL)
+            try? FileManager.default.removeItem(at: directory)
+            try? PhotoByteStore.purgeHousehold(hid)
+        }
+        let stateURL = directory.appendingPathComponent("engine-state.json")
+        let cleanupMarkerURL = stateURL.appendingPathExtension("cleanup-pending")
+        try Data().write(to: cleanupMarkerURL, options: .atomic)
+
+        let engine = FakeEngine()
+        engine.directlyFetchedRecords[recordID] = remoteSeedPhoto(
+            id: "cleanup-latched", seedID: "s1", householdID: hid, assetURL: assetURL)
+        let fault = WipeFault()
+        fault.failure = .fetch
+        let coordinator = makeCoordinator(
+            engine: engine, container: makeContainer(), householdID: hid,
+            stateURL: stateURL, wipeOperation: fault.wipe)
+
+        await #expect(throws: HouseholdCloudCoordinator.CoordinatorError.self) {
+            try await coordinator.recoverPhotoAssetData(recordName: recordName)
+        }
+        #expect(engine.directlyFetchedRecordIDs.isEmpty,
+                "cleanup-pending must fail closed before an old-account exact-record fetch")
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == nil)
+        #expect(FileManager.default.fileExists(atPath: cleanupMarkerURL.path))
+
+        fault.failure = nil
+        #expect(await coordinator.sync() == true)
+        let recovered = try await coordinator.recoverPhotoAssetData(recordName: recordName)
+
+        #expect(recovered == expected)
+        #expect(engine.directlyFetchedRecordIDs == [recordID])
+        #expect(PhotoByteStore(lifetime: .cache, householdID: hid).data(for: recordName) == expected)
+        #expect(FileManager.default.fileExists(atPath: cleanupMarkerURL.path) == false)
     }
 
     @Test("account cleanup discards queued engine changes before a replacement participant sync")

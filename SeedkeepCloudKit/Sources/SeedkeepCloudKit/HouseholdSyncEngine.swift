@@ -129,6 +129,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
 
     // MARK: - Public mutation API
 
+    public func fetchRecord(_ recordID: CKRecord.ID) async throws -> CKRecord {
+        let engine = try currentActiveEngine()
+        let record = try await database.record(for: recordID)
+        try ensureCurrent(engine)
+        return record
+    }
+
     private func makeSyncEngine(stateSerialization: CKSyncEngine.State.Serialization?) -> CKSyncEngine {
         var configuration = CKSyncEngine.Configuration(
             database: database,
@@ -236,6 +243,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         failLock.lock()
         attemptCounts.removeAll()
         surfacedFailure = nil
+        permanentlyFailedSaveRecordIDs.removeAll()
         failLock.unlock()
         return true
     }
@@ -247,7 +255,10 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     /// or advance its watermark past records CloudKit never confirmed.
     public func sendUntilDrained(maxPasses: Int = 6) async throws {
         let engine = try currentActiveEngine()
-        failLock.withLock { surfacedFailure = nil }
+        failLock.withLock {
+            surfacedFailure = nil
+            permanentlyFailedSaveRecordIDs.removeAll()
+        }
         var lastError: Error?
         for pass in 0..<maxPasses {
             // A SENT batch's SwiftData projection is the LAST place a merged serverRecordChanged
@@ -436,6 +447,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private let failLock = NSLock()
     private var attemptCounts: [String: Int] = [:]
     private var surfacedFailure: CKError?
+    private var permanentlyFailedSaveRecordIDs = Set<CKRecord.ID>()
     /// Cap on per-record re-enqueues, so a persistently-failing record can't poison every future sync
     /// (it's surfaced + dropped instead). Reset on a confirmed save / account change / relaunch.
     private static let maxReEnqueues = 5
@@ -454,7 +466,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         } else {
             log.error("giving up on \(recordID.recordName, privacy: .public) after \(n, privacy: .public) re-enqueues: \(error, privacy: .public)")
-            surface(error)
+            surfacePermanentSave(recordID, error: error)
             clearAttempts(recordID)
         }
     }
@@ -479,6 +491,18 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private func takeSurfacedFailure() -> CKError? {
         failLock.lock(); defer { surfacedFailure = nil; failLock.unlock() }
         return surfacedFailure
+    }
+
+    public func consumePermanentlyFailedSaveRecordIDs() -> [CKRecord.ID] {
+        failLock.lock(); defer { permanentlyFailedSaveRecordIDs.removeAll(); failLock.unlock() }
+        return Array(permanentlyFailedSaveRecordIDs)
+    }
+
+    private func surfacePermanentSave(_ recordID: CKRecord.ID, error: CKError) {
+        failLock.lock()
+        permanentlyFailedSaveRecordIDs.insert(recordID)
+        if surfacedFailure == nil { surfacedFailure = error }
+        failLock.unlock()
     }
 
     private func handleFailedSave(
@@ -535,7 +559,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             // quotaExceeded / …) — re-enqueueing would loop. Drop + SURFACE so the drain reports it as a
             // real error instead of a false success, and the watermark doesn't advance past it.
             log.error("save permanently failed for \(recordID.recordName, privacy: .public): \(failure.error, privacy: .public)")
-            surface(failure.error)
+            surfacePermanentSave(recordID, error: failure.error)
             clearAttempts(recordID)
         }
     }

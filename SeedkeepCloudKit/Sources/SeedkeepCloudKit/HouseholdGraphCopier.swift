@@ -224,7 +224,11 @@ public enum HouseholdGraphCopier {
                 throw HouseholdGraphCopyError.unsupportedValue(
                     recordType: type.recordTypeName, recordName: recordName, field: field.name)
             }
-            destination[field.name] = value.ckValue
+            guard let copiedValue = value.copiedCKValue else {
+                throw HouseholdGraphCopyError.unsupportedValue(
+                    recordType: type.recordTypeName, recordName: recordName, field: field.name)
+            }
+            destination[field.name] = copiedValue
             encoded.append((field.name, value.canonicalEncoding))
         }
 

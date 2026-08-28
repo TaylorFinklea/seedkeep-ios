@@ -112,12 +112,21 @@ public struct SeedkeepRecordMerger: RecordMerger {
 
     // MARK: - Photo merge (create + delete only; "replace" is delete-then-create)
 
-    /// Photos are immutable once created (D5): `mergePhoto` always adopts remote verbatim, never
-    /// marks the asset key changed (nothing here ever touches it), never resaves, and never writes
-    /// `deletedAt` — hard delete via the parent cascade is the only removal path for either photo
-    /// type.
+    /// Photos are immutable once created (D5): remote scalar metadata wins and the result is never
+    /// resaved. If CloudKit supplies an unavailable asset during conflict resolution, preserve the
+    /// known-good local bytes and their companion hash so the local cache is not erased.
     private func mergePhoto(local: CKRecord, remote: CKRecord) -> MergeResult {
-        MergeResult(record: remote.copy() as! CKRecord, needsResave: false)
+        let result = remote.copy() as! CKRecord
+        for assetKey in Self.assetFieldNames(for: remote.recordType) {
+            let remoteAsset = remote[assetKey] as? CKAsset
+            guard remoteAsset?.fileURL == nil,
+                  let localAsset = local[assetKey] as? CKAsset,
+                  localAsset.fileURL != nil else { continue }
+            result[assetKey] = localAsset
+            let hashKey = "\(assetKey)SHA256"
+            if let localHash = local[hashKey] { result[hashKey] = localHash }
+        }
+        return MergeResult(record: result, needsResave: false)
     }
 
     /// Manifest asset field names for a CloudKit record type name — used to keep bulk field copies

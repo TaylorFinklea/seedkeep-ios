@@ -219,3 +219,43 @@
 **Alternatives considered**: Bundled JSON in `Seedkeep/Resources/` — rejected: the app has no runtime JSON-loading path (its one JSON resource, `fieldBounds.canonical.json`, is test-only), so JSON would introduce a decode + malformed-file error path the codebase otherwise doesn't have, for the marginal benefit of editing notes without a rebuild — which a per-build changelog never needs (the notes ship with the build). Server-fetched changelog — rejected: cuts against the serverless R1–R5 direction, needs network + caching, and can advertise a build the user doesn't have.
 
 **Rationale**: The Swift constant ships in the binary, works offline, versions with the build, is compile-time checked, and matches an existing repo pattern — zero new infrastructure. Follow-up (roadmap, Minor): the Settings marker paths mark the newest *authored* build while auto-present clamps to `currentBuild`; they agree in every shipped binary but should be clamped to `AppInfo.currentBuild` to remove a dev-workflow footgun. Report: `phases/2026-07-18-whats-new-changelog-report.md`. Bead `seedkeep-rdd`.
+
+## 2026-08-13 — Re-digest the shared source before taking the account-deletion lease (seedkeep-ld2)
+
+**Context**: A CKShare participant can modify the source garden after the owner and successor publish matching verification documents but before the owner deletes the source zone. The server's deletion lease fences transfer state and cancellation, not CloudKit writes. CloudKit provides no operation that atomically reads, freezes, and deletes a shared zone.
+
+**Decision**: At the last safe point before requesting the irreversible server lease, the owner re-fetches the complete source graph, recomputes its canonical hash and per-type census, and compares both with the durable owner verification document. Any difference throws `sourceChangedAfterVerification` while the checkpoint remains `.verified`; no lease is requested and no CloudKit or account deletion runs. The user must retry the handoff. A participant write can still race after this read while the lease request is in flight, so this is explicitly a narrowing fence, not an atomic closure.
+
+**Alternatives considered**: Persisting and comparing a CloudKit change token — rejected for this fix because the canonical verified digest is already the durable content oracle and catches creates, edits, and deletes without a second persistence protocol. Taking the lease first and re-reading immediately before zone deletion — rejected because a mismatch would leave the transfer irrevocably in `source_deleting` with an intentionally preserved source and no cancellation path. Treating the server lease as sufficient — rejected because it has no authority over participant writes.
+
+**Rationale**: The full-graph comparison converts the widest known silent-loss window into a safe retry while preserving the state machine's rule that every fallible content check happens before the point of no return. Stage D must provide asset observations to this new fifth digest site before CKAssets ship.
+
+## 2026-08-18 — Pin every external CI action before granting cross-repo read access (seedkeep-27d.23.1)
+
+**Context**: CloudKit schema parity CI adds a read-only SSH deploy key for the private umbrella repository. The workflow still referenced `actions/checkout@v5` and `maxim-lobanov/setup-xcode@v1`; either major tag can move, so a compromised upstream tag could run changed code in the job that receives the key. GitHub documents a full commit SHA as the only immutable external-action reference.
+
+**Decision**: Pin all five external action uses to their verified current upstream commits while preserving behavior: `actions/checkout` v5.1.0 at `fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09`, and `maxim-lobanov/setup-xcode` v1.7.0 at `ed7a3b1fda3918c0306d1b724322adc0b8cc0a90`. Keep version comments beside the SHAs. `scripts/check-ci-action-pins.sh` rejects mutable or abbreviated external refs, and its regression suite validates safe, mutable-tag, short-SHA, quoted, local-action, and actual-workflow cases.
+
+**Alternatives considered**: Keep trusted major tags (rejected because trust does not make a movable tag immutable); upgrade checkout to another major while pinning (rejected as unrelated behavior change); use release-specific tags (rejected because repository tags can still move unless the upstream release is explicitly immutable).
+
+**Rationale**: The workflow should not grant a private-repository credential to code selected by a mutable name. Full upstream SHAs make the executed action content reviewable and reproducible; the local policy check prevents an accidental regression while version comments keep updates discoverable.
+
+## 2026-08-21 — Omit the APNs entitlement until push-driven synchronization exists (seedkeep-alm)
+
+**Context**: The V1 App Store target still declared `aps-environment: development`. Seedkeep uses local notifications, including the time-sensitive entitlement, but has no `registerForRemoteNotifications` path. Both production `HouseholdCloudCoordinator` factories configure `CKSyncEngine` with `automaticSync: false`, so the app does not rely on silent push delivery. Leaving a development APNs declaration in an App Store archive advertises an unused capability and can conflict with distribution provisioning.
+
+**Decision**: Remove `aps-environment` from canonical `project.yml` and the generated `Seedkeep.entitlements`. Preserve `com.apple.developer.usernotifications.time-sensitive: true` and `com.apple.developer.icloud-container-environment: Production`. Reintroduce `aps-environment: production` only in the same change that adds a real remote-notification registration or push-driven CloudKit synchronization path, with provisioning and physical-device verification.
+
+**Alternatives considered**: Change the value directly to `production` now — rejected because there is no runtime consumer and it expands the declared capability surface. Keep `development` because the entitlement is inert — rejected because an unused development capability does not belong in the release archive. Remove time-sensitive notifications too — rejected because that independent entitlement is actively used by local frost, heat, and watering alerts.
+
+**Rationale**: Minimum release entitlements are easier to audit and sign. Omitting APNs accurately describes current behavior while retaining every capability Seedkeep actually uses; the focused release-entitlement regression makes a future push implementation revisit this decision deliberately.
+
+## 2026-08-28 — Recover unreadable fetched CKAssets by exact record identity (seedkeep-27d.32)
+
+**Context**: A fetched `CKAsset` URL is temporary and can become unreadable before its bytes reach Seedkeep's durable cache. The surrounding record batch may still project and advance the CloudKit cursor; a later incremental sync then cannot redeliver that unchanged photo. The former cache-miss callback only requested another incremental sync, and its regression fixture hid the gap by writing cache bytes inside the callback.
+
+**Decision**: Materialize every fetched photo asset inside one non-suspending MainActor receive step before the engine callback returns. If one asset is unreadable, persist its scope-specific record name, still project its metadata shell and unrelated records, and permit the batch checkpoint. On a later cache miss, fetch that exact `CKRecord.ID` through a generation-fenced `HouseholdRecordSyncing.fetchRecord`, materialize its asset, and clear the recovery roster only after durable success. Keep failures queued; clear names on confirmed local or remote deletion and purge the roster with account cleanup. Fence both receive and direct-recovery paths against account-generation changes, and fail exact recovery closed while the durable account-cleanup latch is set, so old-account bytes cannot reappear after a wipe or failed cleanup.
+
+**Alternatives considered**: Reject and rewind the whole fetched batch (rejected because one persistently unreadable asset would wedge unrelated household changes); retry incremental fetch (rejected because an advanced cursor does not redeliver an unchanged record); treat the shell as permanently complete (rejected because the photo becomes unrecoverable on that installation); let the cache-miss callback populate test bytes directly (rejected because it does not exercise the production path).
+
+**Rationale**: Record identity survives cursor advancement, while temporary asset URLs do not. A small durable retry roster preserves forward progress for the batch without silently abandoning photo bytes, and the generation/epoch fences preserve the existing account-switch privacy boundary.
