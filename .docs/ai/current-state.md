@@ -11,8 +11,10 @@
 - [x] Native Sol/max pre-upload review ready; exact 1.0.0/53→54 plan proved.
 - [x] Freeze/commit/push repair: `0a0ab0b` on `origin/main`; child `27d.32.1` closed.
 - [x] Build 54 uploaded once + VALID; archive verified; release `7e7db9b` pushed.
-- [?] Production QA/screenshots awaiting local Apple Account auth on the approved iPhone + iPad.
-- [ ] Final native + roster different-family review; publish M2 evidence and stop before M3.
+- [~] Production: iPad QA passes; iPhone auth/cold launch and same-account seed/journal/photo convergence pass.
+- [x] `27d.32.2`: TDD/full gates + review pass; signed-in Garden and Bed Detail prove `Sep 3`→`Sep 4`; repair `b11195f` is remote-reachable; no build 55.
+- [x] Phone 6.9 + iPad 13 screenshot sets and SHA-256 manifests validated.
+- [!] Build 54 remains rejected; no build 55 authorized, and retry/recommendation remain unverified.
 
 ## Blockers
-- iPad authenticated; iPhone password prompt open. Complete locally, then resume Production QA.
+- Build 54 cannot be accepted; repair `b11195f` is remote-reachable but unreleased, and the remaining evidence gates are open.
