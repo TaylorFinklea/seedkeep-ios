@@ -248,6 +248,33 @@ struct JournalDatePresentationTests {
     }
 }
 
+// MARK: - Planting-event date-only display
+
+@Suite("Planting event — date-only display")
+struct PlantingEventDatePresentationTests {
+    @Test(
+        "medium date keeps the stored day across time zones",
+        arguments: ["America/Chicago", "UTC"]
+    )
+    func mediumDateKeepsStoredDay(timeZoneIdentifier: String) throws {
+        let timeZone = try #require(TimeZone(identifier: timeZoneIdentifier))
+
+        #expect(
+            humanDate("2026-09-04", timeZone: timeZone) == "Sep 4, 2026"
+        )
+    }
+
+    @Test(
+        "invalid wire date falls back to the stored value",
+        arguments: ["not-a-date", "2026-9-4"]
+    )
+    func invalidWireDateFallsBackToStoredValue(storedValue: String) {
+        #expect(
+            humanDate(storedValue, timeZone: TimeZone(secondsFromGMT: 0)!) == storedValue
+        )
+    }
+}
+
 // MARK: - [3] UTC-midnight off-by-one (AddPlantingEventView)
 
 /// Verifies that `AddPlantingEventView.parseYYYYMMDD` (now using `.current`)

@@ -232,14 +232,20 @@ private struct BedRow: View {
     }
 }
 
-func humanDate(_ ymd: String) -> String {
+func humanDate(_ ymd: String, timeZone: TimeZone = .current) -> String {
+    guard ymd.range(
+        of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#,
+        options: .regularExpression
+    ) != nil else { return ymd }
+
     let parser = DateFormatter()
     parser.dateFormat = "yyyy-MM-dd"
     parser.locale = Locale(identifier: "en_US_POSIX")
-    parser.timeZone = TimeZone(secondsFromGMT: 0)
+    parser.timeZone = timeZone
     guard let date = parser.date(from: ymd) else { return ymd }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = timeZone
     formatter.dateStyle = .medium
     formatter.timeStyle = .none
     return formatter.string(from: date)
