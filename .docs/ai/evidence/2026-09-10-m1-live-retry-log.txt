@@ -1,0 +1,69 @@
+Seedkeep M1 controlled retry QA — iPad B84C7F39-7F0C-425E-B17B-033259EB83A8
+
+The existing authenticated Production household was inspected before mutation. Its
+durable failure roster was absent/empty, and the existing cache held one seed photo
+and one journal photo at 87,110 bytes each. For the bounded retry exercise, the
+roster was temporarily populated with exactly these existing record names:
+
+  seedPhoto:seed_photo_local_F311E54A-149E-4C16-A62B-C0E4BF2156F0
+  journalEntryPhoto:journal_photo_local_460D4156-2516-4601-B03E-621BFF6C52B2
+
+Their two synced-state entries were temporarily removed so the real retry path
+would attempt a Production send. Seed Detail showed and accepted the real “Retry
+photo sync” control; Journal Entry showed and accepted the same control. The app
+cleared the roster after the retry action, but the forced re-send received
+CloudKit “Server Record Changed” for both already-existing records. The matching
+CloudKit MMCS metrics prove asset transfer was attempted (seed: fixed 87,110
+bytes; journal: fixed 174,220 bytes for two assets), not that a new save was
+accepted. No upload pass is claimed from this attempt.
+
+After the attempt, the original synced-state entries were restored atomically and
+the failure roster was left empty. Existing Journal Daybook and Garden records
+remained reachable. A fresh supported Add Photo check from Seed Detail did reach
+the native PhotosPicker: XcodeBuildMCP runtime snapshot sequence 25 exposed
+`e160|tap|button|Cancel` and `Loading...`, and the simulator log showed the
+photo-picker scene launch and readiness. The remote picker scene was not exposed to the XcodeBuildMCP accessibility tree.
+A final native CUA Simulator screenshot did show the picker visually, including
+the known synthetic barcode as the first grid tile, but the native click API
+requires an accessibility `elementIndex`; its coordinate call was rejected
+before interaction. No known synthetic item was selected and no fresh photo
+upload acknowledgment was obtained. This is a tooling/session visibility
+boundary, not a diagnosed app defect.
+The source wiring is
+`Seedkeep/Features/SeedDetail/SeedDetailView.swift:276-299` (PhotosPicker and
+change handler) followed by `:302-324` (transfer, resize, and `uploadPhoto`).
+
+As the unrelated scalar check, the supported Add Seed form created
+`M1 Retry Scalar QA 2` and runtime snapshot sequence 57 showed Active count 2. Production
+CloudKit operation `173E89E24AD7137B` acknowledged a new `Seed` record
+(`seed_local_CE6250CB-7EC8-4A5E-82E9-56E39D624A82`) with
+`savedRecords=[...]` and `failedRecordSaves=[]`; this proves sender/server save
+only, with no second receiver available for convergence proof. A known synthetic
+barcode PNG was present in the simulator Photos library via `simctl addmedia`,
+but it was not selected.
+
+No app reinstall, reset, delete, credential access, source change, or production
+fault switch was used.
+
+Command used for the sanitized CloudKit evidence:
+
+  xcrun simctl spawn B84C7F39-7F0C-425E-B17B-033259EB83A8 log show --last 5m --style compact --predicate 'process CONTAINS[c] "Seedkeep"'
+
+Relevant operations were 2D455214F17E9E27 (SeedPhoto, MMCS fixed 87,110;
+Server Record Changed) and 2AF8B1CD0BCF3CE6 (JournalEntryPhoto, MMCS fixed
+174,220; Server Record Changed). The app was stopped before restoration.
+
+Installed binary provenance at the live check: `app.seedkeep.ios`, version
+`1.0.0 (54)`, bundle binary mtime `2026-09-08 16:06:15 -0500`, size
+23,590,592 bytes, SHA-256
+`bb54d5bcaac50b8eaa21e8894a2eaa2a9945f75e1c5ba662540b1330f8bb51a0`.
+The binary-to-source SHA mapping is unknown; this is the installed build-54
+binary, not a claim about source checkpoint `ad31fc0` or future build 55.
+
+The scalar acknowledgement log was captured with:
+
+  xcrun simctl spawn B84C7F39-7F0C-425E-B17B-033259EB83A8 log show --last 5m --style compact --predicate 'process CONTAINS[c] "Seedkeep"'
+
+and filtered to `SentRecordZoneChanges`, `savedRecords`,
+`failedRecordSaves`, and the synthetic record identifier. A compact copy is at
+`/private/tmp/seedkeep-m1-scalar-save.log`.
