@@ -1,6 +1,35 @@
 # Current State
 
-## Active M1 — `seedkeep-27d.33` — 2026-09-10
+## Seasonal-care source handoff — 2026-09-24
+
+The isolated `codex/seasonal-care` worktree contains the approved seasonal-care
+foundation and CloudKit source integration: annual-window evaluation with
+creation-day first eligibility, SwiftData task/completion models, local mutation
+store, additive CloudKit manifest/values/merger/migration/applier/cascade paths,
+and full-household reminder reconciliation on `AppEnvironment`.
+
+Focused Swift Testing files were added for evaluator boundaries, store mutation
+semantics, CloudKit round trips, deterministic completion identity, parent
+arrival/orphan export filtering, tombstone cascade scope, and reminder behavior.
+The package/Xcode gates are blocked at launch because the host reports the
+unaccepted Xcode license (exit 69); no license acceptance, simulator run, device QA, live
+schema import, production action, or archive was performed. The companion
+schema artifact worktree could not regenerate `seedkeep-schema.ckdb` for the
+same license blocker.
+
+Seed Detail and Today include manual/template tasks, editing, annual completion
+history and optional reminders. The starter pack contains three clearly labeled
+Minnesota templates; manual tasks remain available for other crops/regions.
+Independent Terra review found no unresolved material source findings after
+the repairs. This is source-only review; the qualification gates above remain
+unrun. This checkpoint does not claim feature acceptance or close `seedkeep-p49.1`. See
+`seasonal-care-source-handoff.md` for qualification limits.
+
+## Deferred V1 M1 — `seedkeep-27d.33` — 2026-09-10
+
+The user deferred hands-on V1 QA until after the next feature. Keep it for one
+later combined session; it is not waived. The canonical V1 checkout remains at
+`f3e3c59`; this feature is isolated on `codex/seasonal-care`.
 
 Build `1.0.0 (54)` remains rejected; its archive is retained, counter 54 is unchanged, and repair `b11195f` remains the source input.
 RecommendationStore source tests and the newest-first build-55 changelog entry are ready; the existing URLSession injection is used with a suite-local URLProtocol fixture.

@@ -1,0 +1,50 @@
+[
+  {
+    "id": "umn.strawberry.check-spring-mulch",
+    "version": 1,
+    "crop_key": "strawberry",
+    "region_codes": ["US-MN"],
+    "applicability_label": "Minnesota June-bearing strawberries; confirm local conditions.",
+    "title": "Check spring strawberry mulch",
+    "instructions": "From early April, check June-bearing strawberries and remove or reduce straw when growth, soil conditions, and the forecast support spring growth.",
+    "start_month": 4,
+    "start_day": 1,
+    "end_month": 5,
+    "end_day": 15,
+    "authority_name": "University of Minnesota Extension",
+    "source_title": "Adding and removing straw mulch for strawberries",
+    "source_url": "https://extension.umn.edu/agriculture/specialty-crops/commercial-fruit-production/strawberry-farming/adding-and-removing-straw-mulch-for-strawberries"
+  },
+  {
+    "id": "umn.strawberry.mulch-dormant",
+    "version": 1,
+    "crop_key": "strawberry",
+    "region_codes": ["US-MN"],
+    "applicability_label": "Minnesota June-bearing strawberries; wait for dormancy.",
+    "title": "Mulch dormant strawberries",
+    "instructions": "In late fall, wait until June-bearing strawberries are dormant before applying protective straw mulch; Minnesota guidance places this check in November through December.",
+    "start_month": 11,
+    "start_day": 1,
+    "end_month": 12,
+    "end_day": 31,
+    "authority_name": "University of Minnesota Extension",
+    "source_title": "Adding and removing straw mulch for strawberries",
+    "source_url": "https://extension.umn.edu/agriculture/specialty-crops/commercial-fruit-production/strawberry-farming/adding-and-removing-straw-mulch-for-strawberries"
+  },
+  {
+    "id": "umn.asparagus.let-ferns-grow",
+    "version": 1,
+    "crop_key": "asparagus",
+    "region_codes": ["US-MN"],
+    "applicability_label": "Minnesota established asparagus; confirm plant age locally.",
+    "title": "Let asparagus ferns grow",
+    "instructions": "After the June 30 harvest stop, let established asparagus plants grow their ferns to support the next season; follow local guidance for plants grown from crowns or seed.",
+    "start_month": 6,
+    "start_day": 30,
+    "end_month": 7,
+    "end_day": 7,
+    "authority_name": "University of Minnesota Extension",
+    "source_title": "Growing asparagus in home gardens",
+    "source_url": "https://extension.umn.edu/garden-and-home/yard-and-garden/gardening-in-minnesota/growing-asparagus"
+  }
+]

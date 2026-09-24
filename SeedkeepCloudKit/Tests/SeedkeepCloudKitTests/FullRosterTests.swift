@@ -220,7 +220,7 @@ func cascadeDetection() {
 
 // MARK: - recordName builders (full roster)
 
-@Test("recordName builders cover all 11 types and match recordName(for:id:)")
+@Test("recordName builders cover all 13 types and match recordName(for:id:)")
 func recordNameBuildersFullRoster() {
     #expect(SeedkeepRecordNames.location("l1") == "location:l1")
     #expect(SeedkeepRecordNames.tag("t1") == "tag:t1")
@@ -310,7 +310,7 @@ func recordNamePolicies() {
         #expect(t.namePolicy == .pk, "\(t.recordTypeName) must preserve its id")
     }
     #expect(SeedkeepRecordType.migrationReceipt.namePolicy == .det)
-    #expect(SeedkeepRecordType.allCases.count == 12)   // 11 garden types + MigrationReceipt
+    #expect(SeedkeepRecordType.allCases.count == 14)   // 13 garden types + MigrationReceipt
 }
 
 @Test("recordName(for:id:) agrees with the type-slug for every garden type, and migrated:<id> for the receipt")

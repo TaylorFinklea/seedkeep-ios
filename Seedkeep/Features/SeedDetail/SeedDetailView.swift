@@ -87,6 +87,7 @@ struct SeedDetailView: View {
                     provenanceSection(seed)
                     notesSection(seed)
                     plantSection(seed)
+                    SeasonalCareSection(seed: seed)
                     EntityScopedJournalSection(parent: .seed(seed.id))
                     deleteSection(seed)
                 }

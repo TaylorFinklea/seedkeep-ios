@@ -72,6 +72,10 @@ enum HouseholdApplyGate {
                 predicate: #Predicate { $0.plantingEventID == id })) {
                 context.delete(m)
             }
+        case .seasonalCareTask:
+            delete(LocalSeasonalCareTask.self, id, context)
+        case .seasonalCareCompletion:
+            delete(LocalSeasonalCareCompletion.self, id, context)
         case .household, .migrationReceipt:
             break   // infrastructure — never mirrored as a SwiftData row
         }
@@ -101,6 +105,8 @@ enum HouseholdApplyGate {
         case .journalEntryPhoto:    return first(context, FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.id == id }))?.updatedAt
         case .journalChecklistItem: return first(context, FetchDescriptor<LocalJournalChecklistItem>(predicate: #Predicate { $0.id == id }))?.updatedAt
         case .petDeparture:         return first(context, FetchDescriptor<LocalPetDeparture>(predicate: #Predicate { $0.plantingEventID == id }))?.updatedAt
+        case .seasonalCareTask:     return first(context, FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == id }))?.updatedAt
+        case .seasonalCareCompletion: return first(context, FetchDescriptor<LocalSeasonalCareCompletion>(predicate: #Predicate { $0.id == id }))?.updatedAt
         case .seedPhoto, .household, .migrationReceipt:
             return nil   // no merge clock → always apply
         }
@@ -119,7 +125,8 @@ enum HouseholdApplyGate {
         case .plantingEvent: return first(context, FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id }))?.deletedAt
         case .journalEntry:  return first(context, FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == id }))?.deletedAt
         case .petDeparture:  return first(context, FetchDescriptor<LocalPetDeparture>(predicate: #Predicate { $0.plantingEventID == id }))?.deletedAt
-        case .seedPhoto, .journalEntryPhoto, .journalChecklistItem, .household, .migrationReceipt:
+        case .seasonalCareTask: return first(context, FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == id }))?.deletedAt
+        case .seasonalCareCompletion, .seedPhoto, .journalEntryPhoto, .journalChecklistItem, .household, .migrationReceipt:
             return nil   // no tombstone column
         }
     }
@@ -139,4 +146,6 @@ extension LocalPlantingEvent: HouseholdDeletable { static func idPredicate(_ id:
 extension LocalJournalEntry: HouseholdDeletable { static func idPredicate(_ id: String) -> Predicate<LocalJournalEntry> { #Predicate { $0.id == id } } }
 extension LocalJournalEntryPhoto: HouseholdDeletable { static func idPredicate(_ id: String) -> Predicate<LocalJournalEntryPhoto> { #Predicate { $0.id == id } } }
 extension LocalJournalChecklistItem: HouseholdDeletable { static func idPredicate(_ id: String) -> Predicate<LocalJournalChecklistItem> { #Predicate { $0.id == id } } }
+extension LocalSeasonalCareTask: HouseholdDeletable { static func idPredicate(_ id: String) -> Predicate<LocalSeasonalCareTask> { #Predicate { $0.id == id } } }
+extension LocalSeasonalCareCompletion: HouseholdDeletable { static func idPredicate(_ id: String) -> Predicate<LocalSeasonalCareCompletion> { #Predicate { $0.id == id } } }
 #endif

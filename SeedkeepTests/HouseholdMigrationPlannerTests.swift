@@ -34,6 +34,14 @@ private func sampleInput() -> HouseholdMigrationPlanner.Input {
     input.journalEntryPhotos = [LocalJournalEntryPhoto(id: "jp1", entryID: "je1", storageKey: "k/1", sortOrder: 0, width: 800, height: nil, createdAt: 1, updatedAt: 2)]
     input.checklistItems = [LocalJournalChecklistItem(id: "ci1", entryID: "je1", text: "Water", completed: true, sortOrder: 0, updatedAt: 7)]
     input.petDepartures = [LocalPetDeparture(plantingEventID: "pe1", goodbyeNoteJSON: nil, reason: "wilted_too_long", fallback: true, createdAt: 1, updatedAt: 2, departedAt: 3, deletedAt: nil)]
+    input.seasonalCareTasks = [LocalSeasonalCareTask(
+        id: "care1", householdID: "hh1", seedID: "s1", title: "Mulch",
+        instructions: "Add mulch", startMonth: 4, startDay: 1, endMonth: 4,
+        endDay: 30, authorityName: "Extension", sourceTitle: "Guide",
+        sourceURL: "https://example.com", applicabilityLabel: "All regions",
+        templateID: "ext.mulch", templateVersion: 1, createdAt: 1, updatedAt: 2)]
+    input.seasonalCareCompletions = [LocalSeasonalCareCompletion(
+        householdID: "hh1", taskID: "care1", gardenYear: 2026, completedAt: 3, updatedAt: 3)]
     return input
 }
 
@@ -48,12 +56,12 @@ struct HouseholdMigrationPlannerTests {
 
 @Test("plan: Household first, receipt last, and every type present (independent oracle)")
 func planShape() {
-    let input = sampleInput()   // exactly one record of each of the 11 garden types
+    let input = sampleInput()   // exactly one record of each of the 13 garden types
     let plan = HouseholdMigrationPlanner.plan(input, completedAt: 999)
-    // Independent oracle (NOT expectedCount, which derives from plan): 10 collection types each
-    // appear once + Household + receipt = 12. Assert each manifest type is present so an
+    // Independent oracle (NOT expectedCount, which derives from plan): 13 collection types each
+    // appear once + Household + receipt = 14. Assert each manifest type is present so an
     // omitted-type bug can't pass.
-    #expect(plan.count == 12)
+    #expect(plan.count == 14)
     let types = Set(plan.map(\.type))
     #expect(types == Set(SeedkeepRecordType.allCases), "every record type must appear in the plan")
     #expect(plan.first?.type == .household)
@@ -132,6 +140,8 @@ func fetchInputCrossHouseholdIsolation() throws {
 func planOrdering() {
     let plan = HouseholdMigrationPlanner.plan(sampleInput(), completedAt: 1)
     #expect(index(plan, .seed)! < index(plan, .seedPhoto)!)
+    #expect(index(plan, .seed)! < index(plan, .seasonalCareTask)!)
+    #expect(index(plan, .seasonalCareTask)! < index(plan, .seasonalCareCompletion)!)
     #expect(index(plan, .bed)! < index(plan, .plantingEvent)!)
     #expect(index(plan, .seed)! < index(plan, .plantingEvent)!)
     #expect(index(plan, .journalEntry)! < index(plan, .journalEntryPhoto)!)

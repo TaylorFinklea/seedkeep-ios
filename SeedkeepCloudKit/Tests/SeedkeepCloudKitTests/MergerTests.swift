@@ -449,7 +449,7 @@ func ckdslAllCases() {
     for type_ in SeedkeepRecordType.allCases {
         #expect(all.contains("RECORD TYPE \(type_.recordTypeName) ("))
     }
-    #expect(SeedkeepRecordType.allCases.count == 12)   // 11 garden types + MigrationReceipt
+    #expect(SeedkeepRecordType.allCases.count == 14)   // 13 garden types + MigrationReceipt
     #expect(all.contains("RECORD TYPE MigrationReceipt ("), "G12 receipt must be schema-deployable")
 }
 

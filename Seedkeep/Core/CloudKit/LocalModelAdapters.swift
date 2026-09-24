@@ -95,3 +95,26 @@ extension LocalPetDeparture {
             departedAt: departedAt, deletedAt: deletedAt)
     }
 }
+
+extension LocalSeasonalCareTask {
+    var cloudKitValue: CloudKitRecordValue {
+        SeedkeepRecordValues.seasonalCareTask(
+            id: id, title: title, instructions: instructions,
+            startMonth: startMonth, startDay: startDay,
+            endMonth: endMonth, endDay: endDay,
+            notificationEnabled: notificationEnabled,
+            authorityName: authorityName, sourceTitle: sourceTitle,
+            sourceURL: sourceURL, applicabilityLabel: applicabilityLabel,
+            templateID: templateID, templateVersion: templateVersion,
+            seedID: seedID,
+            createdAt: createdAt, updatedAt: updatedAt, deletedAt: deletedAt)
+    }
+}
+
+extension LocalSeasonalCareCompletion {
+    var cloudKitValue: CloudKitRecordValue {
+        SeedkeepRecordValues.seasonalCareCompletion(
+            taskID: taskID, gardenYear: gardenYear,
+            completedAt: completedAt, updatedAt: updatedAt)
+    }
+}

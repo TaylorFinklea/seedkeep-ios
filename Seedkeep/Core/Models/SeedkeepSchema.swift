@@ -39,5 +39,7 @@ enum SeedkeepSchema {
         LocalPetDeparture.self,
         LocalCatalogCorrection.self,
         LocalForecastSnapshot.self,
+        LocalSeasonalCareTask.self,
+        LocalSeasonalCareCompletion.self,
     ]
 }

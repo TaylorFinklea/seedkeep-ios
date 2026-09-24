@@ -27,11 +27,57 @@ enum HouseholdCascade {
     /// coordinator surfaces it (mirrors the other coordinator stages) rather than silently dropping
     /// the pass's tombstones.
     @discardableResult
-    static func apply(in context: ModelContext, now: Int64) throws -> Bool {
+    static func apply(
+        in context: ModelContext,
+        now: Int64,
+        scopeID: String? = nil,
+        householdID: String? = nil
+    ) throws -> Bool {
         let deletedSeedIDs = Set(fetch(context, FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.deletedAt != nil })).map(\.id))
+        let deletedSeasonalSeedIDs = Set(fetch(context, FetchDescriptor<LocalSeed>())
+            .filter { $0.deletedAt != nil && (householdID == nil || $0.householdID == householdID) }
+            .map(\.id))
         let deletedBedIDs  = Set(fetch(context, FetchDescriptor<LocalBed>(predicate: #Predicate { $0.deletedAt != nil })).map(\.id))
         var deletedPEIDs   = Set(fetch(context, FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.deletedAt != nil })).map(\.id))
         var changed = false
+
+        // Seasonal care belongs to the seed. Keep a seed tombstone authoritative
+        // locally so an orphaned task cannot surface in Today or be pushed as live.
+        let seasonalTasks = fetch(context, FetchDescriptor<LocalSeasonalCareTask>())
+            .filter { householdID == nil || $0.householdID == householdID }
+        for task in seasonalTasks where task.deletedAt == nil {
+            if deletedSeasonalSeedIDs.contains(task.seedID) {
+                task.deletedAt = now
+                task.updatedAt = now
+                changed = true
+            }
+        }
+
+        // Completion rows have no tombstone field: remove them locally and
+        // retain a durable hard-delete intent for CloudKit. A missing scope is
+        // the legacy/offline path; the row is still unreachable locally and
+        // will not be exported by the migration planner.
+        let deletedTaskIDs = Set(seasonalTasks.filter { $0.deletedAt != nil }.map(\.id))
+        if !deletedTaskIDs.isEmpty {
+            for completion in fetch(context, FetchDescriptor<LocalSeasonalCareCompletion>())
+                where deletedTaskIDs.contains(completion.taskID)
+                    && (householdID == nil || completion.householdID == householdID) {
+                if let scopeID, let householdID {
+                    let recordName = completion.cloudKitValue.recordName
+                    let intentID = "\(scopeID)|\(recordName)"
+                    let existing = fetch(context, FetchDescriptor<LocalCloudKitDeletion>(
+                        predicate: #Predicate { $0.id == intentID }
+                    )).first
+                    if existing == nil {
+                        context.insert(LocalCloudKitDeletion(
+                            scopeID: scopeID, householdID: householdID,
+                            recordName: recordName, createdAt: now))
+                    }
+                }
+                context.delete(completion)
+                changed = true
+            }
+        }
 
         for pe in fetch(context, FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.deletedAt == nil })) {
             let bySeed = pe.seedID.map(deletedSeedIDs.contains) ?? false

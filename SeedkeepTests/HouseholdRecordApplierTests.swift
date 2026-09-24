@@ -232,4 +232,91 @@ struct HouseholdRecordApplierTests {
         #expect(all.first?.name == "Shed")
         #expect(all.first?.updatedAt == 99)
     }
+
+    @Test("Seasonal care task and completion round-trip with attribution and deterministic child id")
+    func seasonalCareRoundTrip() throws {
+        let c = ctx("seasonal-care")
+        let task = LocalSeasonalCareTask(
+            id: "care1", householdID: "hh1", seedID: "s1", title: "Mulch",
+            instructions: "Add mulch", startMonth: 11, startDay: 1,
+            endMonth: 2, endDay: 15, notificationEnabled: true,
+            authorityName: "Extension", sourceTitle: "Guide",
+            sourceURL: "https://example.com", applicabilityLabel: "All regions",
+            templateID: "ext.mulch", templateVersion: 1,
+            createdAt: 10, updatedAt: 20)
+        let completion = LocalSeasonalCareCompletion(
+            householdID: "hh1", taskID: "care1", gardenYear: 2026,
+            completedAt: 30, updatedAt: 30)
+        HouseholdRecordApplier.apply(task.cloudKitValue, householdID: "hh1", into: c)
+        HouseholdRecordApplier.apply(completion.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let savedTask = try fetchOne(c, FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == "care1" }))
+        let savedCompletion = try fetchOne(c, FetchDescriptor<LocalSeasonalCareCompletion>(predicate: #Predicate { $0.id == "care1:2026" }))
+        #expect(savedTask.seedID == "s1")
+        #expect(savedTask.notificationEnabled)
+        #expect(savedTask.applicabilityLabel == "All regions")
+        #expect(savedTask.templateID == "ext.mulch")
+        #expect(savedCompletion.taskID == "care1")
+        #expect(savedCompletion.gardenYear == 2026)
+        #expect(LocalSeasonalCareCompletion.id(taskID: "care1", gardenYear: 2026) == "care1:2026")
+
+        let stale = completion.cloudKitValue
+        var staleValue = stale
+        staleValue.scalars["updatedAt"] = .int(20)
+        #expect(!HouseholdApplyGate.shouldApply(staleValue, into: c), "a stale peer completion must not overwrite the local clock")
+        HouseholdApplyGate.deleteLocal(
+            recordName: stale.recordName, householdID: "hh1", into: c)
+        try c.save()
+        #expect(try c.fetch(FetchDescriptor<LocalSeasonalCareCompletion>(predicate: #Predicate { $0.id == "care1:2026" })).isEmpty)
+    }
+
+    @Test("seasonal refs quarantine out-of-order children and cascade seed tombstones")
+    func seasonalCareParentSafety() throws {
+        let c = ctx("seasonal-parent-safety")
+        let task = LocalSeasonalCareTask(
+            id: "care-orphan", householdID: "hh1", seedID: "s1", title: "Mulch",
+            instructions: "Add mulch", startMonth: 4, startDay: 1, endMonth: 4,
+            endDay: 30, createdAt: 10, updatedAt: 20)
+        let completion = LocalSeasonalCareCompletion(
+            householdID: "hh1", taskID: task.id, gardenYear: 2026,
+            completedAt: 30, updatedAt: 30)
+
+        // Children may arrive before their parents. Retain valid refs locally, but do
+        // not export them until the active parent exists in this household.
+        HouseholdRecordApplier.apply(completion.cloudKitValue, householdID: "hh1", into: c)
+        HouseholdRecordApplier.apply(task.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let beforeParent = HouseholdMigrationPlanner.fetchInput(
+            from: c, householdID: "hh1", householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 1)
+        #expect(beforeParent.seasonalCareTasks.isEmpty)
+        #expect(beforeParent.seasonalCareCompletions.isEmpty)
+
+        let seed = LocalSeed(id: "s1", householdID: "hh1", state: .active, packetCount: 1,
+                             source: .store, createdAt: 1, updatedAt: 2)
+        HouseholdRecordApplier.apply(seed.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let afterParent = HouseholdMigrationPlanner.fetchInput(
+            from: c, householdID: "hh1", householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 1)
+        #expect(afterParent.seasonalCareTasks.map(\.id) == [task.id])
+        #expect(afterParent.seasonalCareCompletions.map(\.id) == [completion.id])
+
+        var deletedSeed = seed.cloudKitValue
+        deletedSeed.scalars["deletedAt"] = .int(99)
+        deletedSeed.scalars["updatedAt"] = .int(99)
+        HouseholdRecordApplier.apply(deletedSeed, householdID: "hh1", into: c)
+        HouseholdRecordApplier.apply(task.cloudKitValue, householdID: "hh1", into: c)
+        try c.save()
+        let savedTask = try fetchOne(c, FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == task.id }))
+        #expect(savedTask.deletedAt == 99)
+        let afterTombstone = HouseholdMigrationPlanner.fetchInput(
+            from: c, householdID: "hh1", householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 1)
+        #expect(afterTombstone.seasonalCareTasks.map(\.id) == [task.id])
+        #expect(afterTombstone.seasonalCareCompletions.isEmpty)
+
+        var malformed = task.cloudKitValue
+        malformed.refs["seedID"] = "location:s1"
+        HouseholdRecordApplier.apply(malformed, householdID: "hh1", into: c)
+        try c.save()
+        #expect(try c.fetch(FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == task.id })).count == 1)
+    }
 }

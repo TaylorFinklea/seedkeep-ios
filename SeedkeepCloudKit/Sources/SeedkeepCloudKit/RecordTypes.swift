@@ -114,9 +114,9 @@ public struct CloudKitRecordValue: Equatable, Sendable {
     }
 }
 
-// MARK: - Seedkeep record type manifest (full R1 roster: 11 garden types + 1 infra record)
+// MARK: - Seedkeep record type manifest (full roster: 13 garden types + 1 infra record)
 
-/// Seedkeep's CloudKit shared-zone record types: the full household garden graph (11 types)
+/// Seedkeep's CloudKit shared-zone record types: the full household garden graph (13 types)
 /// plus `migrationReceipt`, the one-time idempotency record the upgrade migration writes (G12).
 public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
     case household
@@ -130,6 +130,8 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
     case journalEntryPhoto
     case journalChecklistItem
     case petDeparture
+    case seasonalCareTask
+    case seasonalCareCompletion
     /// Infrastructure record (NOT garden data): the per-household migration idempotency receipt
     /// (G12 / AC3). Included so `allCKDSL()` emits its schema and the deployed container can store it.
     case migrationReceipt
@@ -148,6 +150,8 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
         case .journalEntryPhoto:    return "JournalEntryPhoto"
         case .journalChecklistItem: return "JournalChecklistItem"
         case .petDeparture:         return "PetDeparture"
+        case .seasonalCareTask:     return "SeasonalCareTask"
+        case .seasonalCareCompletion: return "SeasonalCareCompletion"
         case .migrationReceipt:     return "MigrationReceipt"
         }
     }
@@ -325,6 +329,33 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
                 F("deletedAt", .int),
             ]
 
+        case .seasonalCareTask:
+            return [
+                F("title", .string, queryable: true),
+                F("instructions", .string),
+                F("startMonth", .int),
+                F("startDay", .int),
+                F("endMonth", .int),
+                F("endDay", .int),
+                F("notificationEnabled", .bool),
+                F("authorityName", .string),
+                F("sourceTitle", .string),
+                F("sourceURL", .string),
+                F("applicabilityLabel", .string),
+                F("templateID", .string),
+                F("templateVersion", .int),
+                F("createdAt", .int),
+                F("updatedAt", .int),
+                F("deletedAt", .int),
+            ]
+
+        case .seasonalCareCompletion:
+            return [
+                F("gardenYear", .int, queryable: true),
+                F("completedAt", .int),
+                F("updatedAt", .int),
+            ]
+
         case .migrationReceipt:
             // Written once when a household's Postgres data finishes importing (G12). Presence
             // (by recordName `migrated:<householdID>`) is the idempotency signal; fields are detail.
@@ -384,6 +415,16 @@ public enum SeedkeepRecordType: String, CaseIterable, Equatable, Sendable {
             return [
                 R("plantingEventID", .cascadeParent, target: "PlantingEvent"),
             ]
+
+        case .seasonalCareTask:
+            return [
+                R("seedID", .setNullInZone, target: "Seed"),
+            ]
+
+        case .seasonalCareCompletion:
+            return [
+                R("taskID", .cascadeParent, target: "SeasonalCareTask"),
+            ]
         }
     }
 
@@ -414,6 +455,10 @@ public enum SeedkeepRecordNames {
     public static func journalChecklistItem(_ id: String) -> String { "journalChecklistItem:\(id)" }
     /// 1:1 with the parent planting — keyed on the planting_event_id (spec §recordName policy).
     public static func petDeparture(_ plantingEventID: String) -> String { "petDeparture:\(plantingEventID)" }
+    public static func seasonalCareTask(_ id: String) -> String { "seasonalCareTask:\(id)" }
+    public static func seasonalCareCompletion(taskID: String, gardenYear: Int) -> String {
+        "seasonalCareCompletion:\(taskID):\(gardenYear)"
+    }
 
     /// recordName for any type given its raw legacy id — the migration's single entry point.
     /// The migration receipt uses its own deterministic `migrated:<householdID>` name (G12).

@@ -206,6 +206,10 @@ private struct TodayQueryView: View {
                 .padding(.horizontal, HerbSpace.gutter)
                 .padding(.top, 16)
 
+            SeasonalCareTodaySection()
+                .padding(.horizontal, HerbSpace.gutter)
+                .padding(.top, 16)
+
             if let marginEntry {
                 marginNoteBlock(entry: marginEntry)
                     .padding(.horizontal, HerbSpace.titleGutter)

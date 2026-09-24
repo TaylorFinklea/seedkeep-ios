@@ -224,6 +224,69 @@ public enum SeedkeepRecordValues {
             ]))
     }
 
+    /// LocalSeasonalCareTask → SeasonalCareTask. The task is soft-deletable;
+    /// its seed reference is client-cascaded with `.none` semantics.
+    public static func seasonalCareTask(
+        id: String,
+        title: String,
+        instructions: String,
+        startMonth: Int,
+        startDay: Int,
+        endMonth: Int,
+        endDay: Int,
+        notificationEnabled: Bool,
+        authorityName: String?,
+        sourceTitle: String?,
+        sourceURL: String?,
+        applicabilityLabel: String?,
+        templateID: String?,
+        templateVersion: Int?,
+        seedID: String,
+        createdAt: Int64,
+        updatedAt: Int64,
+        deletedAt: Int64?
+    ) -> CloudKitRecordValue {
+        recordValue(type: .seasonalCareTask, id: id,
+            scalars: scalars([
+                "title": .string(title),
+                "instructions": .string(instructions),
+                "startMonth": .int(startMonth),
+                "startDay": .int(startDay),
+                "endMonth": .int(endMonth),
+                "endDay": .int(endDay),
+                "notificationEnabled": .bool(notificationEnabled),
+                "authorityName": authorityName.map(ScalarValue.string),
+                "sourceTitle": sourceTitle.map(ScalarValue.string),
+                "sourceURL": sourceURL.map(ScalarValue.string),
+                "applicabilityLabel": applicabilityLabel.map(ScalarValue.string),
+                "templateID": templateID.map(ScalarValue.string),
+                "templateVersion": templateVersion.map(ScalarValue.int),
+                "createdAt": .int(Int(createdAt)),
+                "updatedAt": .int(Int(updatedAt)),
+                "deletedAt": deletedAt.map { .int(Int($0)) },
+            ]),
+            refIDs: refIDs(["seedID": seedID]))
+    }
+
+    /// LocalSeasonalCareCompletion → SeasonalCareCompletion. Identity is the
+    /// task/year pair, so same-year concurrent completion is one record.
+    public static func seasonalCareCompletion(
+        taskID: String,
+        gardenYear: Int,
+        completedAt: Int64,
+        updatedAt: Int64
+    ) -> CloudKitRecordValue {
+        recordValue(
+            type: .seasonalCareCompletion,
+            id: "\(taskID):\(gardenYear)",
+            scalars: [
+                "gardenYear": .int(gardenYear),
+                "completedAt": .int(Int(completedAt)),
+                "updatedAt": .int(Int(updatedAt)),
+            ],
+            refIDs: ["taskID": taskID])
+    }
+
     /// LocalJournalEntry → JournalEntry. At-most-one parent; all three FKs are in-zone setNull refs.
     public static func journalEntry(id: String, occurredOn: String, body: String, seedID: String?, bedID: String?, plantingEventID: String?, createdAt: Int64, updatedAt: Int64, deletedAt: Int64?) -> CloudKitRecordValue {
         recordValue(type: .journalEntry, id: id,

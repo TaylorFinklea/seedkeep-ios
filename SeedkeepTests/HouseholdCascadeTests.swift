@@ -83,6 +83,36 @@ struct HouseholdCascadeTests {
         #expect(fetchPE(c, "pe1")?.deletedAt == 10_000, "the tombstone clock is not re-stamped")
     }
 
+    @Test("seasonal cascade is scoped to the active household")
+    func seasonalCascadeHouseholdScope() throws {
+        let c = ctx()
+        let seed = LocalSeed(id: "s1", householdID: "hh1", state: .active, packetCount: 1,
+                             source: .store, createdAt: 1, updatedAt: 1)
+        seed.deletedAt = 9_000
+        c.insert(seed)
+        c.insert(LocalSeasonalCareTask(
+            id: "care-hh1", householdID: "hh1", seedID: "s1", title: "Local",
+            instructions: "x", startMonth: 4, startDay: 1, endMonth: 4, endDay: 30,
+            createdAt: 1, updatedAt: 1))
+        c.insert(LocalSeasonalCareTask(
+            id: "care-hh2", householdID: "hh2", seedID: "s1", title: "Parked",
+            instructions: "x", startMonth: 4, startDay: 1, endMonth: 4, endDay: 30,
+            createdAt: 1, updatedAt: 1))
+        c.insert(LocalSeasonalCareCompletion(
+            householdID: "hh2", taskID: "care-hh2", gardenYear: 2026,
+            completedAt: 1, updatedAt: 1))
+        try c.save()
+
+        #expect(try HouseholdCascade.apply(
+            in: c, now: 10_000, scopeID: "scope-hh1", householdID: "hh1") == true)
+        let local = try c.fetch(FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == "care-hh1" })).first
+        let foreign = try c.fetch(FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == "care-hh2" })).first
+        #expect(local?.deletedAt == 10_000)
+        #expect(foreign?.deletedAt == nil)
+        #expect(try c.fetch(FetchDescriptor<LocalSeasonalCareCompletion>(predicate: #Predicate { $0.taskID == "care-hh2" })).count == 1)
+        #expect(try c.fetch(FetchDescriptor<LocalCloudKitDeletion>()).isEmpty)
+    }
+
     private func fetchPE(_ c: ModelContext, _ id: String) -> LocalPlantingEvent? {
         try? c.fetch(FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id })).first
     }

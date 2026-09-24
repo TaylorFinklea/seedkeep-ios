@@ -79,6 +79,27 @@ func petDepartureBuilder() {
     #expect(roundTrips(v, as: .petDeparture))
 }
 
+@Test("seasonal care builders: task seed ref and deterministic completion identity")
+func seasonalCareBuilders() {
+    let task = SeedkeepRecordValues.seasonalCareTask(
+        id: "care1", title: "Mulch", instructions: "Add mulch",
+        startMonth: 4, startDay: 1, endMonth: 4, endDay: 30,
+        notificationEnabled: false, authorityName: "Extension",
+        sourceTitle: "Guide", sourceURL: "https://example.com",
+        applicabilityLabel: "All regions", templateID: "ext.mulch",
+        templateVersion: 1, seedID: "s1", createdAt: 1, updatedAt: 2, deletedAt: nil)
+    #expect(task.recordName == "seasonalCareTask:care1")
+    #expect(task.refs["seedID"] == "seed:s1")
+    #expect(task.scalars["applicabilityLabel"] == .string("All regions"))
+    #expect(roundTrips(task, as: .seasonalCareTask))
+
+    let completion = SeedkeepRecordValues.seasonalCareCompletion(
+        taskID: "care1", gardenYear: 2026, completedAt: 5, updatedAt: 5)
+    #expect(completion.recordName == "seasonalCareCompletion:care1:2026")
+    #expect(completion.refs["taskID"] == "seasonalCareTask:care1")
+    #expect(roundTrips(completion, as: .seasonalCareCompletion))
+}
+
 @Test("journalEntry builder: present parent prefixed, absent parents omitted, round-trip")
 func journalEntryBuilder() {
     let v = SeedkeepRecordValues.journalEntry(

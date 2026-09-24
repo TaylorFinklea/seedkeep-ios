@@ -284,7 +284,11 @@ final class HouseholdCloudCoordinator {
         guard isCurrent(passEpoch) else { return }
         // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
         // children locally so pushDirty propagates the tombstones (no server to cascade for us).
-        try HouseholdCascade.apply(in: ModelContext(container), now: Int64(Date().timeIntervalSince1970 * 1000))
+        try HouseholdCascade.apply(
+            in: ModelContext(container),
+            now: Int64(Date().timeIntervalSince1970 * 1000),
+            scopeID: scopeID,
+            householdID: householdID)
         try await pushDirty(passEpoch)
         guard isCurrent(passEpoch) else { return }
         // Project any send-path merge results (serverRecordChanged → merged re-save) buffered during
@@ -558,6 +562,8 @@ final class HouseholdCloudCoordinator {
         for m in input.journalEntryPhotos { add(m.updatedAt, m.cloudKitValue) }
         for m in input.checklistItems     { add(m.updatedAt, m.cloudKitValue) }
         for m in input.petDepartures      { add(m.updatedAt, m.cloudKitValue) }
+        for m in input.seasonalCareTasks { add(m.updatedAt, m.cloudKitValue) }
+        for m in input.seasonalCareCompletions { add(m.updatedAt, m.cloudKitValue) }
         return out
     }
 
@@ -692,6 +698,8 @@ final class HouseholdCloudCoordinator {
         try wipeAll(LocalJournalEntryPhoto.self, context)
         try wipeAll(LocalJournalChecklistItem.self, context)
         try wipeAll(LocalPetDeparture.self, context)
+        try wipeAll(LocalSeasonalCareTask.self, context)
+        try wipeAll(LocalSeasonalCareCompletion.self, context)
         try context.save()
     }
 

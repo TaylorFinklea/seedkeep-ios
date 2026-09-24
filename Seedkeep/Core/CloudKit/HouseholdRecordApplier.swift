@@ -31,6 +31,8 @@ enum HouseholdRecordApplier {
         case .journalEntryPhoto:    applyJournalEntryPhoto(value, into: context)
         case .journalChecklistItem: applyChecklistItem(value, into: context)
         case .petDeparture:         applyPetDeparture(value, into: context)
+        case .seasonalCareTask:     applySeasonalCareTask(value, householdID: householdID, into: context)
+        case .seasonalCareCompletion: applySeasonalCareCompletion(value, householdID: householdID, into: context)
         case .household, .migrationReceipt:
             break   // infrastructure records — not mirrored into SwiftData models
         }
@@ -41,6 +43,15 @@ enum HouseholdRecordApplier {
     }
     private static func deref(_ refs: [String: String], _ name: String) -> String? {
         refs[name].map(SeedkeepRecordNames.rawID)
+    }
+
+    /// Seasonal-care refs are household-zone references. Keep malformed or cross-type
+    /// values out of SwiftData; a valid ref whose parent has not arrived yet is retained
+    /// as an orphan row and becomes eligible once its parent lands in a later batch.
+    private static func seasonalRef(_ refs: [String: String], _ name: String, type: String) -> String? {
+        guard let value = refs[name], value.hasPrefix("\(type):") else { return nil }
+        let id = SeedkeepRecordNames.rawID(value)
+        return id.isEmpty ? nil : id
     }
 
     // MARK: - Per-type appliers
@@ -191,5 +202,75 @@ enum HouseholdRecordApplier {
         m.updatedAt       = v.scalars["updatedAt"]?.asInt64 ?? m.updatedAt
         m.departedAt      = v.scalars["departedAt"]?.asInt64 ?? m.departedAt
         m.deletedAt       = v.scalars["deletedAt"]?.asInt64
+    }
+
+    private static func applySeasonalCareTask(_ v: CloudKitRecordValue, householdID: String, into context: ModelContext) {
+        let id = SeedkeepRecordNames.rawID(v.recordName)
+        guard let seedID = seasonalRef(v.refs, "seedID", type: "seed") else { return }
+        let existing = first(context, FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == id }))
+        guard existing?.householdID == nil || existing?.householdID == householdID else { return }
+        let m = existing
+            ?? {
+                let task = LocalSeasonalCareTask(
+                    id: id, householdID: householdID, seedID: "", title: "",
+                    instructions: "", startMonth: 1, startDay: 1,
+                    endMonth: 1, endDay: 1, createdAt: 0, updatedAt: 0)
+                context.insert(task)
+                return task
+            }()
+        m.householdID = householdID
+        m.seedID = seedID
+        m.title = v.scalars["title"]?.asString ?? m.title
+        m.instructions = v.scalars["instructions"]?.asString ?? m.instructions
+        m.startMonth = v.scalars["startMonth"]?.asInt ?? m.startMonth
+        m.startDay = v.scalars["startDay"]?.asInt ?? m.startDay
+        m.endMonth = v.scalars["endMonth"]?.asInt ?? m.endMonth
+        m.endDay = v.scalars["endDay"]?.asInt ?? m.endDay
+        m.notificationEnabled = v.scalars["notificationEnabled"]?.asBool ?? m.notificationEnabled
+        m.authorityName = v.scalars["authorityName"]?.asString
+        m.sourceTitle = v.scalars["sourceTitle"]?.asString
+        m.sourceURL = v.scalars["sourceURL"]?.asString
+        m.applicabilityLabel = v.scalars["applicabilityLabel"]?.asString
+        m.templateID = v.scalars["templateID"]?.asString
+        m.templateVersion = v.scalars["templateVersion"]?.asInt
+        m.createdAt = v.scalars["createdAt"]?.asInt64 ?? m.createdAt
+        m.updatedAt = v.scalars["updatedAt"]?.asInt64 ?? m.updatedAt
+        let incomingDeletedAt = v.scalars["deletedAt"]?.asInt64
+        // A seed tombstone cascades to its care tasks. If the seed is not local yet,
+        // retain this task as an orphan so a later parent batch can repair it; migration
+        // filtering below prevents the orphan from being re-exported in the meantime.
+        if let seed = first(context, FetchDescriptor<LocalSeed>(predicate: #Predicate {
+            $0.id == seedID && $0.householdID == householdID
+        })), let seedDeletedAt = seed.deletedAt {
+            m.deletedAt = max(incomingDeletedAt ?? 0, seedDeletedAt)
+        } else {
+            m.deletedAt = incomingDeletedAt
+        }
+    }
+
+    private static func applySeasonalCareCompletion(_ v: CloudKitRecordValue, householdID: String, into context: ModelContext) {
+        let id = SeedkeepRecordNames.rawID(v.recordName)
+        guard let taskID = seasonalRef(v.refs, "taskID", type: "seasonalCareTask") else { return }
+        let gardenYear = v.scalars["gardenYear"]?.asInt ?? parseGardenYear(from: id) ?? 0
+        let existing = first(context, FetchDescriptor<LocalSeasonalCareCompletion>(predicate: #Predicate { $0.id == id }))
+        guard existing?.householdID == nil || existing?.householdID == householdID else { return }
+        let m = existing
+            ?? {
+                let completion = LocalSeasonalCareCompletion(
+                    id: id, householdID: householdID, taskID: taskID,
+                    gardenYear: gardenYear, completedAt: 0, updatedAt: 0)
+                context.insert(completion)
+                return completion
+            }()
+        m.householdID = householdID
+        m.taskID = taskID
+        m.gardenYear = gardenYear
+        m.completedAt = v.scalars["completedAt"]?.asInt64 ?? m.completedAt
+        m.updatedAt = v.scalars["updatedAt"]?.asInt64 ?? m.updatedAt
+    }
+
+    private static func parseGardenYear(from recordName: String) -> Int? {
+        guard let suffix = recordName.split(separator: ":").last else { return nil }
+        return Int(suffix)
     }
 }

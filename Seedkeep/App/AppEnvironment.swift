@@ -5,6 +5,14 @@ import SeedkeepKit
 import SeedkeepCloudKit
 import CloudKit
 
+private struct UnavailableSeasonalCareTemplateRepository: SeasonalCareTemplateRepository {
+    let error: BundledSeasonalCareTemplateRepositoryError
+
+    func templates(cropKey: String, regionCode: String?) throws -> [SeasonalCareTemplate] {
+        throw error
+    }
+}
+
 /// Reads launch-time configuration from `Info.plist`, wires the
 /// `SeedkeepClient`, the SwiftData `ModelContainer`, the `SyncEngine`,
 /// and the `AuthController`. SwiftUI views read this as an `@Environment`.
@@ -26,6 +34,14 @@ public final class AppEnvironment {
     public let preferences: AppPreferences
     public let apiKeys: APIKeyStore
     public let subscriptions: SubscriptionManager
+    public let seasonalCare: SeasonalCareStore
+    public let seasonalCareTemplates: any SeasonalCareTemplateRepository
+    public let seasonalCareReminders: SeasonalCareReminderReconciler
+    /// Shared observable clock for date-based seasonal-care projections.
+    /// Views observe the revision so an in-place day/time-zone transition
+    /// invalidates their `Date()`-derived state.
+    public private(set) var seasonalCareEvaluationDate = Date()
+    public private(set) var seasonalCareEvaluationRevision: UInt64 = 0
     /// Phase 4C — orchestrator for frost / heat / water weather warnings.
     /// Replaces the old `NotificationsCenter.refreshFrostWarnings` path.
     let weatherWarnings: WeatherWarningsService
@@ -45,6 +61,8 @@ public final class AppEnvironment {
     /// `SyncEngine` don't strobe the banner.
     @ObservationIgnored private var lastBannerString: String?
     @ObservationIgnored private var lastBannerTime: Date?
+    @ObservationIgnored private var seasonalCareDayObserver: NSObjectProtocol?
+    @ObservationIgnored private var seasonalCareTimeZoneObserver: NSObjectProtocol?
 
     public enum AppTab: Hashable {
         case today, library, garden, journal, you
@@ -69,6 +87,24 @@ public final class AppEnvironment {
         let assistant = AIAssistantCoordinator(client: client, container: container)
         assistant.wireSync(sync)
         let subscriptions = SubscriptionManager(client: client)
+        let seasonalCare = SeasonalCareStore(
+            container: container,
+            householdIDProvider: { @MainActor [weak auth] in
+                guard case .signedIn(_, let household) = auth?.state else { return nil }
+                return ActiveGardenContext.householdID(
+                    signedInHouseholdID: household.id,
+                    participantZoneName: ActiveGardenContext.participantZoneName(),
+                    cloudKitSyncEnabled: FeatureFlags.cloudKitHouseholdSyncEnabled)
+            })
+        let seasonalCareTemplates: any SeasonalCareTemplateRepository
+        do {
+            seasonalCareTemplates = try BundledSeasonalCareTemplateRepository()
+        } catch let error as BundledSeasonalCareTemplateRepositoryError {
+            seasonalCareTemplates = UnavailableSeasonalCareTemplateRepository(error: error)
+        } catch {
+            seasonalCareTemplates = UnavailableSeasonalCareTemplateRepository(error: .invalidResource)
+        }
+        let seasonalCareReminders = SeasonalCareReminderReconciler(scheduler: SystemNotificationScheduler())
         // Phase 4C — weather warnings service. Replaces the legacy
         // `NotificationsCenter.refreshFrostWarnings` path with the
         // actor-orchestrated frost/heat/water flow. Providers are
@@ -106,6 +142,9 @@ public final class AppEnvironment {
             journal: journal, assistant: assistant,
             preferences: prefs, apiKeys: apiKeys,
             subscriptions: subscriptions,
+            seasonalCare: seasonalCare,
+            seasonalCareTemplates: seasonalCareTemplates,
+            seasonalCareReminders: seasonalCareReminders,
             weatherWarnings: weatherWarnings
         )
     }
@@ -121,6 +160,9 @@ public final class AppEnvironment {
         preferences: AppPreferences,
         apiKeys: APIKeyStore,
         subscriptions: SubscriptionManager,
+        seasonalCare: SeasonalCareStore,
+        seasonalCareTemplates: any SeasonalCareTemplateRepository,
+        seasonalCareReminders: SeasonalCareReminderReconciler,
         weatherWarnings: WeatherWarningsService
     ) {
         self.client = client
@@ -133,9 +175,21 @@ public final class AppEnvironment {
         self.preferences = preferences
         self.apiKeys = apiKeys
         self.subscriptions = subscriptions
+        self.seasonalCare = seasonalCare
+        self.seasonalCareTemplates = seasonalCareTemplates
+        self.seasonalCareReminders = seasonalCareReminders
         self.weatherWarnings = weatherWarnings
         sync.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
         journal.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
+        seasonalCare.onLocalHouseholdMutation = { [weak self] in
+            guard let self else { return }
+            self.noteHouseholdMutation()
+            self.reconcileSeasonalCareRemindersPassively()
+        }
+        seasonalCare.cloudKitScopeIDProvider = { [weak self] in
+            guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
+            return self.ensureCloudCoordinator(household: household).scopeID
+        }
         sync.cloudKitScopeIDProvider = { [weak self] in
             guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
             return self.ensureCloudCoordinator(household: household).scopeID
@@ -167,6 +221,22 @@ public final class AppEnvironment {
         journal.wireErrorSink { [weak self] error in
             self?.surfaceError(error)
         }
+        seasonalCareDayObserver = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged, object: nil, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshSeasonalCareEvaluationClock()
+                self?.reconcileSeasonalCareRemindersPassively()
+            }
+        }
+        seasonalCareTimeZoneObserver = NotificationCenter.default.addObserver(
+            forName: .NSSystemTimeZoneDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshSeasonalCareEvaluationClock()
+                self?.reconcileSeasonalCareRemindersPassively()
+            }
+        }
         // Stabilization B3 + R1 — sign-out / identity-switch wipe. Erases every model (generic over
         // SeedkeepSchema.all — includes the pending-write queue + sync cursors), drops notifications,
         // AND tears down the CloudKit coordinator (engine state token + per-record synced-state file +
@@ -180,6 +250,7 @@ public final class AppEnvironment {
                 // Best effort — a wipe failure must not block sign-out; the keychain token is gone.
             }
             NotificationsCenter.shared.removeAllAppNotifications()
+            Task { await self.seasonalCareReminders.cancelAll() }
             self.cloudCoordinator?.wipeAndClear()
             self.cloudCoordinator = nil
             self.cloudCoordinatorKey = nil
@@ -198,6 +269,75 @@ public final class AppEnvironment {
     /// auto-dismiss timer in `MainTabView`.
     public func dismissBannerError() {
         bannerError = nil
+    }
+
+    /// Reconciles all committed, future seasonal-care reminders for the active
+    /// household. Callers that react to a single task still use this full
+    /// collector so one toggle cannot cancel another task's request.
+    @discardableResult
+    public func reconcileSeasonalCareReminders(
+        allowAuthorizationRequest: Bool = false
+    ) async -> SeasonalCareReminderOutcome {
+        guard let householdID = activeGardenHouseholdID else {
+            return await seasonalCareReminders.reconcile(
+                items: [], householdID: nil, allowAuthorizationRequest: false)
+        }
+        let context = ModelContext(container)
+        let seeds = (try? context.fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate {
+            $0.householdID == householdID && $0.deletedAt == nil
+        }))) ?? []
+        let seedsByID = Dictionary(uniqueKeysWithValues: seeds.map { ($0.id, $0) })
+        let tasks = (try? context.fetch(FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate {
+            $0.householdID == householdID && $0.deletedAt == nil && $0.notificationEnabled
+        }))) ?? []
+        let completions = (try? context.fetch(FetchDescriptor<LocalSeasonalCareCompletion>(predicate: #Predicate {
+            $0.householdID == householdID
+        }))) ?? []
+        let completedByTask = Dictionary(grouping: completions, by: \.taskID)
+        var calendar = Calendar.current
+        let timeZone = calendar.timeZone
+        let now = Date()
+        var items: [SeasonalCareReminderItem] = []
+        for task in tasks {
+            guard let seed = seedsByID[task.seedID], let window = task.annualCareWindow else { continue }
+            let completedYears = Set((completedByTask[task.id] ?? []).map(\.gardenYear))
+            let createdAt = Date(timeIntervalSince1970: TimeInterval(task.createdAt) / 1000)
+            guard let evaluation = try? window.nextIncompleteEvaluation(
+                on: now, calendar: calendar, timeZone: timeZone,
+                completedGardenYears: completedYears, firstOccurrenceDate: createdAt)
+            else { continue }
+            let occurrence: AnnualCareOccurrence
+            switch evaluation.state {
+            case .upcoming:
+                occurrence = evaluation.occurrence
+            case .due where evaluation.occurrence.start > now:
+                occurrence = evaluation.occurrence
+            case .due, .overdue:
+                guard let next = try? window.occurrence(
+                    gardenYear: evaluation.occurrence.gardenYear + 1,
+                    calendar: calendar, timeZone: timeZone) else { continue }
+                occurrence = next
+            case .completed:
+                continue
+            }
+            items.append(SeasonalCareReminderItem(
+                taskID: task.id,
+                gardenYear: occurrence.gardenYear,
+                title: task.title,
+                seedName: seed.customName?.isEmpty == false ? seed.customName! : "Untitled seed",
+                fireDate: occurrence.start,
+                timeZoneIdentifier: timeZone.identifier))
+        }
+        return await seasonalCareReminders.reconcile(
+            items: items, householdID: householdID,
+            allowAuthorizationRequest: allowAuthorizationRequest)
+    }
+
+    /// Refreshes the shared date used by seasonal-care projections. The
+    /// revision changes even when two refreshes happen within one second.
+    public func refreshSeasonalCareEvaluationClock(now: Date = Date()) {
+        seasonalCareEvaluationDate = now
+        seasonalCareEvaluationRevision &+= 1
     }
 
     /// Pushes `message` into `bannerError`, applying a 5-second same-string
@@ -226,6 +366,7 @@ public final class AppEnvironment {
     /// Notification scheduling for the other transitions lands in
     /// Phase 5.1.4 (the side-effect helper has the hook points stubbed).
     public func syncIfPossible() async {
+        refreshSeasonalCareEvaluationClock()
         if case .signedIn(_, let household) = auth.state {
             let activeGardenHouseholdID = self.activeGardenHouseholdID ?? household.id
             // R1: route HOUSEHOLD garden data through the CloudKit coordinator when the flag is on,
@@ -300,6 +441,13 @@ public final class AppEnvironment {
             // 2h staleness gate when called with `.foreground` so a
             // tab-back-in doesn't burn a WeatherKit fetch.
             _ = await weatherWarnings.refreshAllIfStale(reason: .foreground)
+            _ = await reconcileSeasonalCareReminders()
+        }
+    }
+
+    private func reconcileSeasonalCareRemindersPassively() {
+        Task { @MainActor [weak self] in
+            _ = await self?.reconcileSeasonalCareReminders()
         }
     }
 

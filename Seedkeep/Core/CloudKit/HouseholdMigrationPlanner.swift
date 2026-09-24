@@ -29,11 +29,14 @@ enum HouseholdMigrationPlanner {
         var journalEntryPhotos: [LocalJournalEntryPhoto] = []
         var checklistItems: [LocalJournalChecklistItem] = []
         var petDepartures: [LocalPetDeparture] = []
+        var seasonalCareTasks: [LocalSeasonalCareTask] = []
+        var seasonalCareCompletions: [LocalSeasonalCareCompletion] = []
     }
 
     /// The full ordered plan:
     ///   Household → Location/Tag → Seed → SeedPhoto → Bed → PlantingEvent
-    ///   → JournalEntry → JournalEntryPhoto/JournalChecklistItem → PetDeparture → receipt.
+    ///   → JournalEntry → JournalEntryPhoto/JournalChecklistItem → PetDeparture
+    ///   → SeasonalCareTask → SeasonalCareCompletion → receipt.
     /// Order matters: a `.deleteSelf` child (SeedPhoto, Journal photo/checklist, PetDeparture) must
     /// be written after its parent so the reference resolves even across separate save batches.
     static func plan(_ input: Input, completedAt: Int64) -> [CloudKitRecordValue] {
@@ -44,6 +47,7 @@ enum HouseholdMigrationPlanner {
         out += input.locations.map(\.cloudKitValue)
         out += input.tags.map(\.cloudKitValue)
         out += input.seeds.map(\.cloudKitValue)
+        out += input.seasonalCareTasks.map(\.cloudKitValue)
         out += input.seedPhotos.map(\.cloudKitValue)
         out += input.beds.map(\.cloudKitValue)
         out += input.plantingEvents.map(\.cloudKitValue)
@@ -51,6 +55,7 @@ enum HouseholdMigrationPlanner {
         out += input.journalEntryPhotos.map(\.cloudKitValue)
         out += input.checklistItems.map(\.cloudKitValue)
         out += input.petDepartures.map(\.cloudKitValue)
+        out += input.seasonalCareCompletions.map(\.cloudKitValue)
         out.append(SeedkeepRecordValues.migrationReceipt(
             householdID: input.householdID, completedAt: completedAt, schemaVersion: schemaVersion))
         return out
@@ -89,6 +94,14 @@ enum HouseholdMigrationPlanner {
         let plantingEventIDs = Set(input.plantingEvents.map(\.id))
         input.petDepartures = fetch(FetchDescriptor<LocalPetDeparture>())
             .filter { plantingEventIDs.contains($0.plantingEventID) }
+        let activeSeedIDs = Set(input.seeds.filter { $0.deletedAt == nil }.map(\.id))
+        input.seasonalCareTasks = fetch(FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.householdID == hid }))
+            .filter { $0.deletedAt != nil || activeSeedIDs.contains($0.seedID) }
+        let seasonalCareTaskIDs = Set(input.seasonalCareTasks
+            .filter { $0.deletedAt == nil && activeSeedIDs.contains($0.seedID) }
+            .map(\.id))
+        input.seasonalCareCompletions = fetch(FetchDescriptor<LocalSeasonalCareCompletion>(predicate: #Predicate { $0.householdID == hid }))
+            .filter { seasonalCareTaskIDs.contains($0.taskID) }
         return input
     }
 

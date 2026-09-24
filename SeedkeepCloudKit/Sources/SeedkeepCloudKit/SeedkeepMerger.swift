@@ -69,7 +69,7 @@ public struct SeedkeepRecordMerger: RecordMerger {
         case .seedPhoto, .journalEntryPhoto:
             return mergePhoto(local: local, remote: remote)
         case .household, .location, .tag, .bed, .plantingEvent, .journalEntry,
-             .petDeparture, .migrationReceipt:
+             .petDeparture, .seasonalCareTask, .seasonalCareCompletion, .migrationReceipt:
             // All other shared-zone types: honest whole-record LWW by updatedAt.
             return mergeDefaultLWW(local: local, remote: remote)
         }
