@@ -33,6 +33,7 @@ public struct AnnualCareWindow: Equatable, Sendable {
         calendar suppliedCalendar: Calendar,
         timeZone: TimeZone,
         completedGardenYears: Set<Int>,
+        firstGardenYear: Int? = nil,
         firstOccurrenceDate: Date? = nil
     ) throws -> AnnualCareEvaluation {
         var calendar = suppliedCalendar
@@ -67,6 +68,7 @@ public struct AnnualCareWindow: Equatable, Sendable {
                 selected = current
             }
         } else if normalizedDate < current.start,
+                  (firstOccurrenceDate != nil || firstGardenYear != nil),
                   previous.gardenYear >= minimumGardenYear,
                   !completedGardenYears.contains(previous.gardenYear) {
             selected = previous

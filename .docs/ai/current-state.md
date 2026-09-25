@@ -1,6 +1,6 @@
 # Current State
 
-## Seasonal-care source handoff — 2026-09-24
+## Seasonal-care source qualification — 2026-09-24
 
 The isolated `codex/seasonal-care` worktree contains the approved seasonal-care
 foundation and CloudKit source integration: annual-window evaluation with
@@ -8,22 +8,25 @@ creation-day first eligibility, SwiftData task/completion models, local mutation
 store, additive CloudKit manifest/values/merger/migration/applier/cascade paths,
 and full-household reminder reconciliation on `AppEnvironment`.
 
-Focused Swift Testing files were added for evaluator boundaries, store mutation
-semantics, CloudKit round trips, deterministic completion identity, parent
-arrival/orphan export filtering, tombstone cascade scope, and reminder behavior.
-The package/Xcode gates are blocked at launch because the host reports the
-unaccepted Xcode license (exit 69); no license acceptance, simulator run, device QA, live
-schema import, production action, or archive was performed. The companion
-schema artifact worktree could not regenerate `seedkeep-schema.ckdb` for the
-same license blocker.
+The earlier host Xcode license blocker is cleared. The count-enforced full gate
+passed both packages, 803 CloudKit-OFF app tests and 1 Production-default
+CloudKit-ON test; focused seasonal tests passed 21 across 4 suites. Independent
+reads confirmed the final serialized OFF/ON result bundles. The companion
+`codex/seasonal-care-schema` artifact matches the manifest: 14 record types,
+31 added lines and no removals. No live schema import occurred.
 
 Seed Detail and Today include manual/template tasks, editing, annual completion
 history and optional reminders. The starter pack contains three clearly labeled
 Minnesota templates; manual tasks remain available for other crops/regions.
-Independent Terra review found no unresolved material source findings after
-the repairs. This is source-only review; the qualification gates above remain
-unrun. This checkpoint does not claim feature acceptance or close `seedkeep-p49.1`. See
-`seasonal-care-source-handoff.md` for qualification limits.
+Independent Terra review found no unresolved material findings in the final
+source fixes, test evidence and additive artifact. A second fresh unsigned
+Simulator install/launch rendered the signed-out screen at unchanged
+`1.0.0 (54)`; the accessibility snapshot timed out. Authenticated seasonal UI,
+notification delivery and same-account convergence remain unrun for the later
+combined hands-on session. No account bypass or new test infrastructure was added.
+This qualifies the bounded source milestone, not parent feature/release
+acceptance. See `seasonal-care-source-handoff.md` and
+`evidence/2026-09-24-seasonal-care-qualification.md` for evidence and limits.
 
 ## Deferred V1 M1 — `seedkeep-27d.33` — 2026-09-10
 

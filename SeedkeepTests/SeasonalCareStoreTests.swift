@@ -23,7 +23,7 @@ struct SeasonalCareStoreTests {
             packetCount: 1, source: .store, createdAt: 1, updatedAt: 1))
         try context.save()
         var signals = 0
-        let now = fixedDate("2026-08-01T12:00:00Z")
+        let now = fixedDate("2026-07-15T12:00:00Z")
         let store = SeasonalCareStore(
             container: container,
             householdIDProvider: { householdID },

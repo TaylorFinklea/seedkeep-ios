@@ -48,7 +48,7 @@ public enum SeasonalCareReminderOutcome: Equatable, Sendable {
 /// a late add is removed immediately after it returns.
 @MainActor
 public final class SeasonalCareReminderReconciler {
-    public static let identifierPrefix = "seedkeep.care."
+    nonisolated public static let identifierPrefix = "seedkeep.care."
 
     private let scheduler: any NotificationScheduler
     private var generation: UInt64 = 0
@@ -59,7 +59,7 @@ public final class SeasonalCareReminderReconciler {
         self.scheduler = scheduler
     }
 
-    public static func identifier(taskID: String, gardenYear: Int) -> String {
+    nonisolated public static func identifier(taskID: String, gardenYear: Int) -> String {
         "\(identifierPrefix)\(taskID).\(gardenYear)"
     }
 

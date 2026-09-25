@@ -306,7 +306,8 @@ struct HouseholdRecordApplierTests {
         HouseholdRecordApplier.apply(deletedSeed, householdID: "hh1", into: c)
         HouseholdRecordApplier.apply(task.cloudKitValue, householdID: "hh1", into: c)
         try c.save()
-        let savedTask = try fetchOne(c, FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == task.id }))
+        let taskID = task.id
+        let savedTask = try fetchOne(c, FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == taskID }))
         #expect(savedTask.deletedAt == 99)
         let afterTombstone = HouseholdMigrationPlanner.fetchInput(
             from: c, householdID: "hh1", householdName: "G", householdCreatedAt: 1, householdUpdatedAt: 1)
@@ -317,6 +318,6 @@ struct HouseholdRecordApplierTests {
         malformed.refs["seedID"] = "location:s1"
         HouseholdRecordApplier.apply(malformed, householdID: "hh1", into: c)
         try c.save()
-        #expect(try c.fetch(FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == task.id })).count == 1)
+        #expect(try c.fetch(FetchDescriptor<LocalSeasonalCareTask>(predicate: #Predicate { $0.id == taskID })).count == 1)
     }
 }

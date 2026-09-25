@@ -2,7 +2,8 @@
 
 Date: 2026-09-24
 Worktree: `seedkeep-ios-seasonal-care`, branch `codex/seasonal-care`
-Base: `f3e3c59`; tracker: umbrella `seedkeep-p49.1` (still open).
+Base: `f3e3c59`; source-qualification tracker: umbrella `seedkeep-p49.1`.
+Parent `seedkeep-p49` retains live schema and device acceptance.
 Companion schema worktree: `seedkeep-seasonal-care-schema`, branch
 `codex/seasonal-care-schema`, base `e272a9c`.
 
@@ -47,28 +48,32 @@ cascade cleanup, and schema registration. Valid orphan children are retained
 locally for later parent arrival and excluded from export until their active
 parent exists; malformed ref types are ignored.
 
-Validation evidence is limited to `git diff --check`, template JSON structural
-validation, targeted static scans and source inspection. New Swift tests are
-written but have not executed.
-Swift package/Xcode tests and schema generation were attempted but blocked at
-the Xcode license check (exit 69). No license acceptance or bypass was attempted.
-No simulator/device QA, live CloudKit schema mutation, production change,
-build increment, archive, upload, push or merge was performed.
+Qualification resumed after the host's Xcode license blocker cleared; no agent
+accepted or bypassed the license. Focused seasonal tests passed 21 across 4
+suites. The existing count-enforced full gate passed both packages, 803
+CloudKit-OFF app tests and 1 Production-default CloudKit-ON test. Final clean
+serialized OFF/ON bundles were independently inspected by the lead and Terra.
+The companion schema artifact was generated and checked against this source:
+14 record types, 31 added lines, no removals. Existing V1 records are preserved.
 
-Independent Terra source review found no unresolved material findings in the
-final frozen diff. Repairs covered annual creation/rollover boundaries,
+Independent Terra review found no unresolved material findings in the final
+source delta, test evidence and additive schema. Repairs covered annual creation/rollover boundaries,
 completion identity and parent/cascade isolation, full-household reminder
 reconciliation and cancellation races, pack validation/error presentation,
 completed-task controls/history, and observable day/timezone updates.
-This source-only conclusion does not qualify the implementation without the
-unrun compiler, test, simulator and schema checks.
+An unsigned install/launch on a second fresh iPhone 17 Pro simulator rendered
+the signed-out entry screen; screenshot inspected, accessibility snapshot timed
+out. Artifact identity remains `app.seedkeep.ios`, `1.0.0 (54)`. There is no
+existing account-free route to seasonal screens, so authenticated CRUD,
+notification delivery, relaunch persistence through UI and device convergence
+remain unrun. No shipping authentication switch or new host infrastructure was
+added. Detailed commands, result bundles, rerun history and screenshot:
+`evidence/2026-09-24-seasonal-care-qualification.md`.
 
-Qualification must resume with focused tests, the existing count-enforced full
-test gate, additive schema generation/parity in the companion worktree, and an
-isolated simulator smoke. The canonical umbrella schema artifact and CI schema
-pin remain unchanged. Production schema deployment and physical convergence
-need their later explicit authorization and evidence. Source review cannot
-substitute for any of these checks.
+The canonical iOS V1 checkout, umbrella schema artifact and CI schema pin remain
+unchanged. No signing, live schema mutation, production change, build increment,
+archive, upload, push or merge occurred. Production schema deployment and
+physical convergence need their later explicit authorization and evidence.
 
 Later combined hands-on QA should cover care add/edit/complete/delete and
 relaunch, notification denial/retry and next-year scheduling, date/timezone

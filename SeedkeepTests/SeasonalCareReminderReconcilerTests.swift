@@ -86,7 +86,7 @@ struct SeasonalCareReminderReconcilerTests {
         #expect(trigger?.dateComponents.year == 2027)
         #expect(trigger?.dateComponents.month == 4)
         #expect(trigger?.dateComponents.day == 1)
-        #expect(trigger?.dateComponents.timeZone?.identifier == "UTC")
+        #expect(trigger?.dateComponents.timeZone?.secondsFromGMT(for: fireDate) == 0)
     }
 
     @Test("mixed add failures report a partial scheduling failure")
@@ -123,7 +123,7 @@ struct SeasonalCareReminderReconcilerTests {
 
         let pending = await scheduler.pendingSnapshot()
         #expect(pending.count == 1)
-        #expect(pending.first?.content.title == "New title")
+        #expect(pending.first == "New title")
     }
 
     @Test("cancelAll racing a new household pass leaves the new request")
@@ -149,7 +149,7 @@ struct SeasonalCareReminderReconcilerTests {
 
         let pending = await scheduler.pendingSnapshot()
         #expect(pending.count == 1)
-        #expect(pending.first?.content.title == "New title")
+        #expect(pending.first == "New title")
     }
 
     @Test("sign-out cancellation removes care requests only")
@@ -176,7 +176,7 @@ struct SeasonalCareReminderReconcilerTests {
     }
 }
 
-private actor SuspendedNotificationScheduler: NotificationScheduler {
+private actor SuspendedNotificationScheduler: @preconcurrency NotificationScheduler {
     private var status: UNAuthorizationStatus = .authorized
     private var pending: [UNNotificationRequest] = []
     private var shouldBlockNextAdd = false
@@ -198,8 +198,8 @@ private actor SuspendedNotificationScheduler: NotificationScheduler {
         addContinuation = nil
     }
 
-    func pendingSnapshot() -> [UNNotificationRequest] {
-        pending
+    func pendingSnapshot() -> [String] {
+        pending.map(\.content.title)
     }
 
     func authorizationStatus() async -> UNAuthorizationStatus {
