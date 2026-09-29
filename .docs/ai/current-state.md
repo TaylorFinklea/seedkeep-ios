@@ -1,5 +1,28 @@
 # Current State
 
+## Combined QA preparation — 2026-09-29
+
+The canonical cross-repo dashboard and execution procedure are maintained in
+the umbrella checkout: `/Users/tfinklea/git/seedkeep/.docs/ai/current-state.md`
+and `phases/2026-09-29-combined-qa-session.md`. This isolated source checkout
+is `codex/seasonal-care` at `3e62f2e`; the companion schema checkout is at
+`d936cff`. No new hands-on seasonal result, signed install, live schema
+deployment or account state was inspected in this preparation pass.
+
+Source qualification remains complete under `seedkeep-p49.1`, QA preparation
+`seedkeep-p49.2` is closed, and parent `seedkeep-p49` remains open for
+authenticated CRUD/relaunch, notification behavior, additive Production schema
+deployment and same-account convergence. Run V1 first and establish a
+supported isolated same-account care household/store before writing seasonal
+records; otherwise defer those writes until V1 acceptance. The user authorized
+scoped documentation/Beads commits and branch pushes; verified publication and
+remote readback are recorded in the canonical
+`/Users/tfinklea/git/seedkeep/.docs/ai/phases/2026-09-29-session-handoff.md`.
+Live schema deployment, signing/install, build increment, archive, upload and
+merge remain unrun or unapproved.
+The detailed procedure and its V1 ordering boundaries are in the umbrella
+document above; the qualification evidence below remains historical.
+
 ## Seasonal-care source qualification — 2026-09-24
 
 The isolated `codex/seasonal-care` worktree contains the approved seasonal-care

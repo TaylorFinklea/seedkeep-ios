@@ -1,5 +1,32 @@
 # Seasonal-care source handoff
 
+## Current handoff — 2026-09-29
+
+Canonical status and the ordered combined QA procedure live in the umbrella
+checkout: `/Users/tfinklea/git/seedkeep/.docs/ai/current-state.md` and
+`/Users/tfinklea/git/seedkeep/.docs/ai/phases/2026-09-29-combined-qa-session.md`.
+No new hands-on result was reported after the source qualification below. The
+isolated source remains `3e62f2e`; its additive schema companion remains
+`d936cff`.
+
+`seedkeep-p49.1` source qualification and `seedkeep-p49.2` QA preparation are
+closed; parent `seedkeep-p49` remains open. V1 `seedkeep-27d.33` and the
+historical build-54 `seedkeep-27d.32` remain open, with build 54 rejected and
+its counter unchanged. Run the approved V1 checks first. Before any seasonal
+record write, establish the supported isolated same-account QA household/store
+and obtain the separate schema/import and exact signed-install approvals; if
+that isolation is unavailable, defer care writes until V1 acceptance. No live
+schema deployment, signing/install, build increment, archive, upload or merge
+has been run or approved by this handoff refresh. The user authorized scoped
+documentation/Beads commits and branch pushes; verified publication and remote
+readback are recorded in the canonical
+`/Users/tfinklea/git/seedkeep/.docs/ai/phases/2026-09-29-session-handoff.md`.
+
+The qualification record below is historical evidence from 2026-09-24 and is
+preserved unchanged.
+
+## Historical qualification record — 2026-09-24
+
 Date: 2026-09-24
 Worktree: `seedkeep-ios-seasonal-care`, branch `codex/seasonal-care`
 Base: `f3e3c59`; source-qualification tracker: umbrella `seedkeep-p49.1`.
