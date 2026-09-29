@@ -6,6 +6,22 @@
 
 iOS client for Seedkeep. Phase 1 ships a household seed library with offline-first inventory, scan-to-catalog flow, Sign in with Apple, and a tier-aware extraction pipeline (Free on-device, BYOK direct-to-provider, Hosted via the server). Phase 2 builds the garden plan on top of that inventory. Pairs with the `seedkeep-server` API.
 
+## Current delivery checkpoint — 2026-09-29
+
+The canonical cross-repo status and ordered QA procedure are in the umbrella
+checkout's `/Users/tfinklea/git/seedkeep/.docs/ai/current-state.md` and
+`/Users/tfinklea/git/seedkeep/.docs/ai/phases/2026-09-29-combined-qa-session.md`.
+V1 main is `f3e3c59`;
+build 54 remains rejected with its counter unchanged, and no new hands-on
+result or installed-source mapping is claimed. Resume the approved V1 checks
+before any seasonal-care write. Seasonal-care source `3e62f2e` and schema
+`d936cff` remain isolated source checkpoints. The user authorized scoped
+documentation/Beads commits and branch pushes; verified publication and remote
+readback are recorded in the canonical
+`/Users/tfinklea/git/seedkeep/.docs/ai/phases/2026-09-29-session-handoff.md`.
+Live schema deployment, signing/install, archive, upload and merge remain
+unrun or unapproved.
+
 ## Now / Next / Later
 
 ### Now (Phase 2: Garden plan — partially shipped)

@@ -1,5 +1,33 @@
 # Current State
 
+## Combined QA preparation — 2026-09-29
+
+The canonical cross-repo dashboard and execution procedure are maintained in
+the umbrella checkout: `/Users/tfinklea/git/seedkeep/.docs/ai/current-state.md`
+and `phases/2026-09-29-combined-qa-session.md`. This checkout is the V1
+main source at `f3e3c59`; build `1.0.0 (54)` remains rejected, its counter is
+unchanged, and no new hands-on result was reported in this preparation pass.
+
+Resume the approved V1 checks first: verify the exact You → Settings build
+stamp/install source, enter and save the Home ZIP, scan the prepared online
+barcode card from Library's viewfinder, record the raw detection and catalog
+match before saving, inspect Seed Detail planting guidance, relaunch, and
+record same-account iPad receipt. Device/install provenance and the catalog
+match remain unknown. Earlier photo attempts ended in `Server Record Changed`,
+and the scalar sender save has no receiver-convergence proof.
+
+Seasonal care remains isolated on `seedkeep-ios-seasonal-care` at `3e62f2e`
+with schema companion `seedkeep-seasonal-care-schema` at `d936cff`; source
+child `seedkeep-p49.1` and QA preparation `seedkeep-p49.2` are closed while
+parent `seedkeep-p49` remains open. V1 `seedkeep-27d.33` and historical
+build-54 `seedkeep-27d.32` remain open. Keep care writes out of this V1 data
+graph until the supported isolated same-account care path is established or V1
+is accepted. The user authorized scoped documentation/Beads commits and branch
+pushes; verified publication and remote readback are recorded in the canonical
+`/Users/tfinklea/git/seedkeep/.docs/ai/phases/2026-09-29-session-handoff.md`.
+Live schema deployment, signing/install, archive, upload and merge remain
+unrun or unapproved.
+
 ## Active M1 — `seedkeep-27d.33` — 2026-09-10
 
 Build `1.0.0 (54)` remains rejected; its archive is retained, counter 54 is unchanged, and repair `b11195f` remains the source input.
