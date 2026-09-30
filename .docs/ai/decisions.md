@@ -259,3 +259,10 @@
 **Alternatives considered**: Reject and rewind the whole fetched batch (rejected because one persistently unreadable asset would wedge unrelated household changes); retry incremental fetch (rejected because an advanced cursor does not redeliver an unchanged record); treat the shell as permanently complete (rejected because the photo becomes unrecoverable on that installation); let the cache-miss callback populate test bytes directly (rejected because it does not exercise the production path).
 
 **Rationale**: Record identity survives cursor advancement, while temporary asset URLs do not. A small durable retry roster preserves forward progress for the batch without silently abandoning photo bytes, and the generation/epoch fences preserve the existing account-switch privacy boundary.
+
+## Beads retired (2026-09-29)
+
+Beads (`bd`) is no longer used. The cross-repo backlog lives in
+`~/git/seedkeep/.docs/ai/roadmap.md`; this repo's older standalone Beads
+backlog is archived in `beads-archive.jsonl` and its Backlog section here.
+Earlier entries that mention Beads are historical.

@@ -101,3 +101,22 @@ unrun or unapproved.
 ## Backlog
 
 <!-- Self-contained items any agent can execute. Each entry: Scope, Files, Acceptance, Verify, Tier hint. -->
+
+## Backlog (migrated from Beads, 2026-09-29)
+
+Open items restored from the `backlog-seedkeep-ios` Dolt remote (last pushed 2026-07-11) when Beads was retired; they may be stale, so verify before starting. Full export of all 20 issues is in `beads-archive.jsonl`.
+
+- [ ] P1 Triage TestFlight feedback and crash logs for builds 11-49 (`seedkeep-ios-bqt`)
+- [ ] P1 Device-verify latest TestFlight build (0.4.0 build 49, against PRODUCTION CloudKit) (`seedkeep-ios-r22`)
+- [ ] P2 Real-device verify Hosted-tier extraction path (F5 loop close) (`seedkeep-ios-1uf`)
+- [ ] P2 Build offline photo upload queue with retry orchestration (`seedkeep-ios-1w3`)
+- [ ] P2 Unflag Hosted tier: register IAP products, set Fly secrets, flip flag (`seedkeep-ios-end`)
+- [ ] P2 R1 AC4 destructive teardown after build-49 device-proven ship (`seedkeep-ios-mba`)
+- [ ] P3 Run two-device real Sign in with Apple test (`seedkeep-ios-61n`)
+- [ ] P3 Investigate scan-confirm freeze regression (~7945ms) (`seedkeep-ios-jft`)
+- [ ] P3 Integrate cooperative-extension regional planting calendars (`seedkeep-ios-jz7`)
+- [ ] P3 Build remaining Phase 4 surfaces: corner-photo suggestions, push warnings, community catalog (`seedkeep-ios-spu`)
+- [ ] P3 Polish herbarium aesthetic on ScanFlow, RecommendationPanel, journal cards (`seedkeep-ios-zwg`)
+- [ ] P4 Phase 5 — Tomagachi companion + sensors (`seedkeep-ios-9kg`)
+- [ ] P4 Phase 5: re-enable/ship plant pets before PetDeparture immediacy (`seedkeep-ios-9kg.1`)
+- [ ] P4 R1: extend per-mutation immediacy to PetDeparture (deferred from g4w; do when pets ship) (`seedkeep-ios-m7x`)
