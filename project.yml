@@ -9,6 +9,9 @@ options:
     # Free-tier user gets on-device extraction and the OCR-only fallback path
     # is unreachable.
     iOS: "26.0"
+    # Native macOS destination of the same SwiftUI target (redesign plan, 2026-10-15). The
+    # target MacBook runs macOS 26, which also matches the iOS floor and FoundationModels.
+    macOS: "26.0"
   developmentLanguage: en
   groupSortPosition: top
   generateEmptyDirectories: true
@@ -37,11 +40,13 @@ packages:
 targets:
   Seedkeep:
     type: application
-    platform: iOS
+    supportedDestinations: [iOS, macOS]
     sources:
       - path: Seedkeep
         excludes:
           - "Config/AppConfig.local.xcconfig"
+          # Selected per SDK through INFOPLIST_FILE[sdk=macosx*]; never a bundle resource.
+          - "Info-macOS.plist"
     resources:
       - Seedkeep/Resources
     info:
@@ -103,6 +108,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER)
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_MACCATALYST: NO
+        # The macOS build uses its own static Info.plist and entitlements (sandbox, network,
+        # files, photos, location). XcodeGen's info/entitlements blocks below generate the iOS ones.
+        "INFOPLIST_FILE[sdk=macosx*]": Seedkeep/Info-macOS.plist
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Seedkeep/Seedkeep-macOS.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_EMIT_LOC_STRINGS: YES
@@ -142,7 +152,7 @@ targets:
 
   SeedkeepTests:
     type: bundle.unit-test
-    platform: iOS
+    supportedDestinations: [iOS, macOS]
     sources:
       - SeedkeepTests
     dependencies:
@@ -153,3 +163,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER).tests
         GENERATE_INFOPLIST_FILE: YES
+        # XcodeGen picks the iOS executable path for multiplatform hosts; the Mac host lives in
+        # Contents/MacOS.
+        "TEST_HOST[sdk=macosx*]": "$(BUILT_PRODUCTS_DIR)/Seedkeep.app/Contents/MacOS/Seedkeep"
+        BUNDLE_LOADER: "$(TEST_HOST)"

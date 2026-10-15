@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- macOS Info.plist for the Seedkeep target (selected via INFOPLIST_FILE[sdk=macosx*] in project.yml).
+     Keep the shared keys in step with the iOS keys generated from project.yml's `info` block. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Seedkeep</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.seedkeep.invite</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>seedkeep</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Lets the system launch the app to accept a CloudKit share. -->
+	<key>CKSharingSupported</key>
+	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>KeychainService</key>
+	<string>$(KEYCHAIN_SERVICE)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.lifestyle</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Seedkeep can attach photos from your library to seed entries.</string>
+	<key>SeedkeepAPIHost</key>
+	<string>$(SEEDKEEP_API_HOST)</string>
+	<key>SeedkeepAPIScheme</key>
+	<string>$(SEEDKEEP_API_SCHEME)</string>
+	<!-- Bundled fonts are copied flat into Contents/Resources (see project.yml resources). -->
+	<key>ATSApplicationFontsPath</key>
+	<string>.</string>
+</dict>
+</plist>
