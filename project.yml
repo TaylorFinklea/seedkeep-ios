@@ -127,6 +127,12 @@ targets:
     configFiles:
       Debug: Seedkeep/Config/AppConfig.example.xcconfig
       Release: Seedkeep/Config/AppConfig.example.xcconfig
+    # Explicit shared scheme: Xcode's auto-created scheme for a multiplatform target does not
+    # include the test bundle, so `xcodebuild test -scheme Seedkeep` needs this (iOS and macOS).
+    scheme:
+      testTargets:
+        - SeedkeepTests
+      gatherCoverageData: false
     entitlements:
       path: Seedkeep/Seedkeep.entitlements
       properties:
