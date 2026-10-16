@@ -29,7 +29,9 @@ struct AccountDeletionFlowView: View {
                 }
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     // "Close" only ever dismisses the sheet. Abandoning the

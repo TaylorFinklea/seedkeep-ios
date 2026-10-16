@@ -69,7 +69,9 @@ struct AssistantView: View {
                 }
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .navigationDestination(for: String.self) { id in
                 AssistantThreadView(threadID: id)
             }

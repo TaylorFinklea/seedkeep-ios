@@ -454,6 +454,10 @@ public final class AppEnvironment {
 
     // MARK: - CloudKit household sharing (participant cutover)
 
+    #if os(macOS)
+    @ObservationIgnored private var isProcessingPendingShares = false
+    #endif
+
     /// Whether this device is currently viewing a SHARED household (adopted via a CKShare) rather
     /// than its own. Drives the Settings "you're viewing a shared garden / Leave" affordance.
     var isViewingSharedHousehold: Bool { loadParticipantMarker() != nil }
@@ -497,8 +501,26 @@ public final class AppEnvironment {
 
     /// Warm-tap entry from the scene delegate: drain a just-accepted share + adopt it.
     func processPendingShare() async {
+        #if os(macOS)
+        guard case .signedIn = auth.state else { return }
+        guard !isProcessingPendingShares else { return }
+        isProcessingPendingShares = true
+        defer { isProcessingPendingShares = false }
+        await MacPendingShareQueue.shared.drain(
+            isSignedIn: { [weak self] in
+                guard let self, case .signedIn = self.auth.state else { return false }
+                return true
+            },
+            accept: { [weak self] metadata in
+                guard let self else { return }
+                try await self.acceptParticipantShare(metadata)
+            },
+            onError: { [weak self] error in self?.surfaceError(error) }
+        )
+        #else
         guard let metadata = PendingShareInbox.shared.take() else { return }
         await bootParticipant(accepting: metadata)
+        #endif
     }
 
     /// Invite code forwarded from `ShareSceneDelegate`. The custom scene delegate REPLACES SwiftUI's,
@@ -526,6 +548,13 @@ public final class AppEnvironment {
     /// (clean swap — the participant's own data stays in their own CloudKit zone, restored on Leave),
     /// persist the participant marker, rebuild as a participant coordinator, and sync.
     func bootParticipant(accepting metadata: CKShare.Metadata) async {
+        #if os(macOS)
+        do {
+            try await acceptParticipantShare(metadata)
+        } catch {
+            surfaceError(error)
+        }
+        #else
         if metadata.participantRole == .owner { return }   // owner tapped their own link — benign no-op
         guard metadata.containerIdentifier == "iCloud.app.seedkeep" else { return }
         do {
@@ -560,7 +589,34 @@ public final class AppEnvironment {
             PendingShareInbox.shared.deposit(metadata)
             surfaceError(error)
         }
+        #endif
     }
+
+    #if os(macOS)
+    private func acceptParticipantShare(_ metadata: CKShare.Metadata) async throws {
+        if metadata.participantRole == .owner { return }
+        guard metadata.containerIdentifier == "iCloud.app.seedkeep" else { return }
+        let flow = SeedkeepShareFlow()
+        let zoneID = try await flow.acceptZoneWideShare(metadata)
+        guard case .signedIn = auth.state else { throw PendingShareAuthChangedError() }
+        let coordinator = cloudCoordinator ?? {
+            guard case .signedIn(_, let household) = auth.state else { return nil }
+            return ensureCloudCoordinator(household: household)
+        }()
+        if let coordinator {
+            coordinator.wipeAndClear()
+            guard !coordinator.requiresWipeRetry else { throw PendingShareWipeRetryError() }
+        } else {
+            try HouseholdCloudCoordinator.wipeHouseholdSwiftData(container: container)
+        }
+        try HouseholdCloudCoordinator.resetStateToken(
+            at: HouseholdCloudCoordinator.participantStateTokenURL(ownerZoneID: zoneID)
+        )
+        saveParticipantMarker(ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
+        cloudCoordinator = nil; cloudCoordinatorKey = nil
+        await syncIfPossible()
+    }
+    #endif
 
     /// Cut this device over to a garden it has just received as a
     /// successor in an account-deletion handoff.

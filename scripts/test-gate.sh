@@ -26,6 +26,9 @@ DEVELOPER_DIR="$(bash "$REPO_ROOT/scripts/resolve-xcode-developer-dir.sh" "${DEV
 export DEVELOPER_DIR
 
 cd "$REPO_ROOT"
+echo "[test-gate] Xcode: $(xcodebuild -version | tr '\n' ' ')"
+echo "[test-gate] iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+echo "[test-gate] macOS SDK: $(xcrun --sdk macosx --show-sdk-version)"
 command -v xcodegen >/dev/null 2>&1 || fail "xcodegen is required to generate Seedkeep.xcodeproj"
 echo "[test-gate] Generating Xcode project"
 xcodegen generate >/dev/null
@@ -35,8 +38,12 @@ if [[ -z "$SIM_UDID" ]]; then
     SIM_LINE="$(awk '/iPhone/ { print; exit }' <<< "$DEVICE_LIST")"
     SIM_UDID="$(printf '%s\n' "$SIM_LINE" | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f-]{27}' || true)"
 fi
-[[ -n "$SIM_UDID" ]] || fail "no available iPhone simulator found"
+if [[ -z "$SIM_UDID" ]]; then
+    echo "[test-gate] unavailable destination: platform=iOS Simulator (no available iPhone simulator)"
+    fail "no available iPhone simulator found"
+fi
 if ! grep -Fq "$SIM_UDID" <<< "$DEVICE_LIST"; then
+    echo "[test-gate] unavailable destination: platform=iOS Simulator,id=$SIM_UDID"
     fail "simulator $SIM_UDID is not available"
 fi
 xcrun simctl boot "$SIM_UDID" >/dev/null 2>&1 || true
@@ -61,6 +68,24 @@ bash "$COUNT_GATE" "legacy CloudKit-OFF app tests" xcodebuild "${XCODEBUILD_ARGS
     test
 
 bash "$COUNT_GATE" "production-default CloudKit-ON contract" xcodebuild "${XCODEBUILD_ARGS[@]}" \
+    'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG SEEDKEEP_TEST_CLOUDKIT_ON' \
+    -only-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
+    test
+
+MAC_XCODEBUILD_ARGS=(
+    -project "$REPO_ROOT/Seedkeep.xcodeproj"
+    -scheme Seedkeep
+    -destination "platform=macOS"
+    -parallel-testing-enabled NO
+    CODE_SIGNING_ALLOWED=NO
+    CODE_SIGNING_REQUIRED=NO
+)
+
+bash "$COUNT_GATE" "macOS CloudKit-OFF app tests" xcodebuild "${MAC_XCODEBUILD_ARGS[@]}" \
+    -skip-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
+    test
+
+bash "$COUNT_GATE" "macOS production-default CloudKit-ON contract" xcodebuild "${MAC_XCODEBUILD_ARGS[@]}" \
     'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG SEEDKEEP_TEST_CLOUDKIT_ON' \
     -only-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
     test

@@ -1,3 +1,5 @@
+// Live camera capture (AVFoundation) is iPhone and iPad only; macOS never compiles this file.
+#if os(iOS)
 import SwiftUI
 import AVFoundation
 
@@ -233,3 +235,5 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
         }
     }
 }
+
+#endif

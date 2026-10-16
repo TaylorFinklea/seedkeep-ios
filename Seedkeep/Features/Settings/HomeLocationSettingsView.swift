@@ -22,7 +22,9 @@ struct HomeLocationSettingsView: View {
         Form {
             Section {
                 TextField("12345", text: $zipText)
+                    #if os(iOS)
                     .keyboardType(.numberPad)
+                    #endif
                     .onChange(of: zipText) { _, new in
                         // Strip non-digit characters and cap at 5.
                         let digits = new.filter(\.isNumber)
@@ -74,7 +76,9 @@ struct HomeLocationSettingsView: View {
         }
         .vellumForm()
         .navigationTitle("Home location")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { Task { await save() } }

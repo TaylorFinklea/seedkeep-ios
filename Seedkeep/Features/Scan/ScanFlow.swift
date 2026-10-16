@@ -1,6 +1,9 @@
 import SwiftUI
-import UIKit
 import SeedkeepKit
+
+// Live packet scanning needs the camera, so the flow is iOS-only. The macOS build hides the
+// scan entry point (LibraryView) instead of presenting this.
+#if os(iOS)
 
 /// Result the scan flow returns to its parent. Either a catalog hit (we
 /// know exactly what packet it is) or an AI extraction (best-effort
@@ -582,3 +585,5 @@ private struct ErrorOverlay: View {
         .padding(.horizontal, 32)
     }
 }
+
+#endif

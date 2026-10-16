@@ -31,3 +31,6 @@ Package.resolved
 
 # Git worktrees
 .worktrees/
+
+# Local xcodebuild derived data (-derivedDataPath .dd)
+.dd/

@@ -85,11 +85,17 @@ struct AddSeedView: View {
 
                 Section {
                     TextField("Name (e.g. Cherokee Purple)", text: $name)
+                        #if os(iOS)
                         .textInputAutocapitalization(.words)
+                        #endif
                     TextField("Variety (optional)", text: $variety)
+                        #if os(iOS)
                         .textInputAutocapitalization(.words)
+                        #endif
                     TextField("Company (e.g. Baker Creek)", text: $company)
+                        #if os(iOS)
                         .textInputAutocapitalization(.words)
+                        #endif
                 } header: {
                     Rubric(text: "identity")
                 }
@@ -154,7 +160,9 @@ struct AddSeedView: View {
             }
             .vellumForm()
             .navigationTitle(prefill == nil ? "Add seed" : "Confirm seed")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .onAppear { applyPrefillIfNeeded() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -518,7 +526,9 @@ private struct TagPickerView: View {
             .buttonStyle(.plain)
         }
         .navigationTitle("Tags")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
 

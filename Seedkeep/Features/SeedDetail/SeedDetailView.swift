@@ -95,7 +95,9 @@ struct SeedDetailView: View {
                     AddPlantingEventView(bedID: nil, prefillSeedID: seedID)
                 }
                 .navigationTitle(seed.customName ?? "Seed")
+                #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
+                #endif
                 .publishesAssistantContext(pageType: "seed", entityID: seed.id, label: seed.customName)
                 .task(id: seed.id) {
                     // Fetch the catalog entry for the growing-info section.
@@ -547,7 +549,9 @@ struct SeedDetailView: View {
     private func identitySection(_ seed: LocalSeed) -> some View {
         Section {
             TextField("Type (e.g. Pepper)", text: $typeDraft)
+                #if os(iOS)
                 .textInputAutocapitalization(.words)
+                #endif
                 .onChange(of: typeDraft) { _, new in
                     guard identityHydrated else { return }
                     // Persist through the local model; SyncEngine schedules the
@@ -559,7 +563,9 @@ struct SeedDetailView: View {
                     }
                 }
             TextField("Name (e.g. Cherokee Purple)", text: $nameDraft)
+                #if os(iOS)
                 .textInputAutocapitalization(.words)
+                #endif
                 .onChange(of: nameDraft) { _, new in
                     guard identityHydrated else { return }
                     let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -573,7 +579,9 @@ struct SeedDetailView: View {
                     }
                 }
             TextField("Variety (optional)", text: $varietyDraft)
+                #if os(iOS)
                 .textInputAutocapitalization(.words)
+                #endif
                 .onChange(of: varietyDraft) { _, new in
                     guard identityHydrated else { return }
                     let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -587,7 +595,9 @@ struct SeedDetailView: View {
                     }
                 }
             TextField("Company (e.g. Baker Creek)", text: $companyDraft)
+                #if os(iOS)
                 .textInputAutocapitalization(.words)
+                #endif
                 .onChange(of: companyDraft) { _, new in
                     guard identityHydrated else { return }
                     let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -869,7 +879,9 @@ private struct TagSelectionView: View {
             .buttonStyle(.plain)
         }
         .navigationTitle("Tags")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
 

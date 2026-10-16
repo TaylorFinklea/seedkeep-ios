@@ -10,7 +10,9 @@ struct WhatsNewSheet: View {
         NavigationStack {
             ReleaseDetailView(release: initialRelease)
                 .navigationTitle("What's New")
+                #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
+                #endif
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Close") { dismiss() }
@@ -102,7 +104,9 @@ struct ChangelogHistoryView: View {
             NavigationLink {
                 ReleaseDetailView(release: release)
                     .navigationTitle("What's New")
+                    #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
+                    #endif
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(release.version) (\(release.build))")
@@ -117,6 +121,8 @@ struct ChangelogHistoryView: View {
             }
         }
         .navigationTitle("Version History")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }

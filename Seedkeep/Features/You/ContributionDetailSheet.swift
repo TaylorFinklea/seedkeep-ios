@@ -84,9 +84,11 @@ struct ContributionDetailSheet: View {
             }
             .vellumForm()
             .navigationTitle("Contribution")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .platformTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -477,12 +479,14 @@ private struct DissentSheet: View {
             }
             .vellumForm()
             .navigationTitle("Disagree")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .platformLeading) {
                     Button(didSubmit ? "Done" : "Cancel") { dismiss() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .platformTrailing) {
                     if !didSubmit {
                         Button("Send") { Task { await submit() } }
                             .disabled(!canSubmit)

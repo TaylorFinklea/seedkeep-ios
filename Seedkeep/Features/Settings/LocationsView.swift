@@ -24,7 +24,9 @@ struct LocationsView: View {
     var body: some View {
         listContent
             .navigationTitle("Locations")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar { toolbarContent }
             .alert("New location", isPresented: $showingAdd) {
                 TextField("Name", text: $newName)
@@ -73,7 +75,7 @@ struct LocationsView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItem(placement: .platformTrailing) {
             Button {
                 newName = ""
                 showingAdd = true

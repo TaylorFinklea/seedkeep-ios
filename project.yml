@@ -45,8 +45,12 @@ targets:
       - path: Seedkeep
         excludes:
           - "Config/AppConfig.local.xcconfig"
+          # ShareSceneDelegate uses UIKit and belongs only to the iOS destination.
+          - "App/ShareSceneDelegate.swift"
           # Selected per SDK through INFOPLIST_FILE[sdk=macosx*]; never a bundle resource.
           - "Info-macOS.plist"
+      - path: Seedkeep/App/ShareSceneDelegate.swift
+        destinationFilters: [iOS]
     resources:
       - Seedkeep/Resources
     info:

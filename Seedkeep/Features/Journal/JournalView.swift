@@ -150,7 +150,9 @@ struct JournalView: View {
                 .listStyle(.plain)
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .publishesAssistantContext(pageType: "journal")
             .navigationDestination(for: Route.self) { route in
                 switch route {

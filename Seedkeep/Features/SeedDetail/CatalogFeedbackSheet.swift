@@ -209,7 +209,9 @@ struct CatalogFeedbackSheet: View {
             }
             .vellumForm()
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(didSubmit ? "Done" : "Cancel") { dismiss() }
@@ -307,8 +309,12 @@ struct CatalogFeedbackSheet: View {
         Section {
             TextField("value", text: $suggestedValue)
                 .font(HerbFont.body(size: 14))
+                #if os(iOS)
                 .keyboardType(.decimalPad)
+                #endif
+                #if os(iOS)
                 .textInputAutocapitalization(.never)
+                #endif
                 .autocorrectionDisabled(true)
                 .onChange(of: suggestedValue) { _, _ in
                     userAcknowledgedBounds = false

@@ -1,4 +1,4 @@
-#if canImport(CloudKit)
+#if os(iOS)
 import CloudKit
 import UIKit
 
@@ -48,6 +48,98 @@ enum CloudSharingPresenter {
         func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {}
         func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) { onComplete() }
         func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) { onComplete() }
+    }
+}
+#elseif os(macOS)
+import AppKit
+import CloudKit
+
+/// Presents the native macOS CloudKit sharing service for an already-saved household share.
+enum CloudSharingPresenter {
+    @MainActor private static var activeSessions: [MacCloudSharingSession] = []
+
+    @MainActor
+    static func present(share: CKShare, container: CKContainer, title: String, onComplete: @escaping () -> Void = {}) {
+        _ = title // The saved CKShare already carries its title.
+        guard let service = NSSharingService(named: .cloudSharing) else {
+            presentError("iCloud sharing is unavailable on this Mac.")
+            return
+        }
+
+        let itemProvider = NSItemProvider()
+        let options = CKAllowedSharingOptions(
+            allowedParticipantPermissionOptions: .readWrite,
+            allowedParticipantAccessOptions: .specifiedRecipientsOnly
+        )
+        itemProvider.registerCKShare(share, container: container, allowedSharingOptions: options)
+
+        let session = MacCloudSharingSession(service: service, itemProvider: itemProvider, onComplete: onComplete)
+        service.delegate = session
+        activeSessions.append(session)
+        service.perform(withItems: [itemProvider])
+    }
+
+    @MainActor fileprivate static func release(_ session: MacCloudSharingSession) {
+        activeSessions.removeAll { $0 === session }
+    }
+
+    @MainActor fileprivate static func presentError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn’t share garden"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+}
+
+@MainActor
+private final class MacCloudSharingSession: NSObject, NSCloudSharingServiceDelegate {
+    let service: NSSharingService
+    let itemProvider: NSItemProvider
+    private let onComplete: () -> Void
+    private var didFinish = false
+    private var didNotifyCompletion = false
+
+    init(service: NSSharingService, itemProvider: NSItemProvider, onComplete: @escaping () -> Void) {
+        self.service = service
+        self.itemProvider = itemProvider
+        self.onComplete = onComplete
+    }
+
+    nonisolated func sharingService(_ sharingService: NSSharingService, didSave share: CKShare) {
+        Task { @MainActor [weak self] in self?.notifyCompletion() }
+    }
+
+    nonisolated func sharingService(_ sharingService: NSSharingService, didStopSharing share: CKShare) {
+        Task { @MainActor [weak self] in self?.notifyCompletion() }
+    }
+
+    nonisolated func options(for sharingService: NSSharingService, share provider: NSItemProvider) -> NSSharingService.CloudKitOptions {
+        [.allowPrivate, .allowReadWrite]
+    }
+
+    nonisolated func sharingService(_ sharingService: NSSharingService, didCompleteForItems items: [Any], error: Error?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.finish(error: error)
+        }
+    }
+
+    @MainActor
+    private func notifyCompletion() {
+        guard !didFinish, !didNotifyCompletion else { return }
+        didNotifyCompletion = true
+        onComplete()
+    }
+
+    @MainActor
+    private func finish(error: Error?) {
+        guard !didFinish else { return }
+        didFinish = true
+        if let error {
+            CloudSharingPresenter.presentError(error.localizedDescription)
+        }
+        CloudSharingPresenter.release(self)
     }
 }
 #endif

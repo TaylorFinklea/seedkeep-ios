@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UIKit
 import SeedkeepKit
 import PhotosUI
 
@@ -95,7 +94,9 @@ struct WhatToPlantView: View {
             }
         }
         .navigationTitle("What to plant")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .refreshable {
             let ids = seeds.compactMap(\.catalogID)
             if !ids.isEmpty {
@@ -108,7 +109,7 @@ struct WhatToPlantView: View {
             await appEnv.recommendations.bulkRefresh(catalogSeedIDs: ids)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .platformTrailing) {
                 PhotosPicker(
                     selection: $pickerItem,
                     matching: .images,
@@ -128,8 +129,8 @@ struct WhatToPlantView: View {
             guard let newItem else { return }
             Task {
                 if let data = try? await newItem.loadTransferable(type: Data.self),
-                   let uiImage = UIImage(data: data) {
-                    await launchCornerSuggestions(image: uiImage)
+                   let image = PlatformImageCoding.image(data: data) {
+                    await launchCornerSuggestions(image: image)
                 }
                 pickerItem = nil
             }
@@ -144,7 +145,7 @@ struct WhatToPlantView: View {
 
     // MARK: - Corner suggestions launch
 
-    private func launchCornerSuggestions(image: UIImage) async {
+    private func launchCornerSuggestions(image: PlatformImage) async {
         let client = appEnv.client
         let container = appEnv.container
         let recommendations = appEnv.recommendations

@@ -1,3 +1,4 @@
+#if os(iOS)
 import UIKit
 
 /// Minimal `UIApplicationDelegate` adopted via `@UIApplicationDelegateAdaptor` on `SeedkeepApp`.
@@ -21,3 +22,4 @@ final class SeedkeepAppDelegate: NSObject, UIApplicationDelegate {
     }
     #endif
 }
+#endif

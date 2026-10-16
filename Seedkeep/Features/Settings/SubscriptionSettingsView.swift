@@ -95,7 +95,9 @@ struct SubscriptionSettingsView: View {
         }
         .vellumForm()
         .navigationTitle("Subscription")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task {
             if !loadedOnce {
                 loadedOnce = true

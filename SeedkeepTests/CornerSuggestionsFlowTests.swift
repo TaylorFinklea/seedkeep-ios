@@ -1,7 +1,6 @@
 import Testing
 import Foundation
 import SwiftData
-import UIKit
 @testable import Seedkeep
 import SeedkeepKit
 
@@ -77,13 +76,8 @@ struct CornerSuggestionsFlowTests {
 
     // MARK: - Stub helpers
 
-    private func makeImage() -> UIImage {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8), format: format).image { ctx in
-            UIColor.white.setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
-        }
+    private func makeImage() -> PlatformImage {
+        PlatformImageFixtures.solid(red: 1, green: 1, blue: 1, size: CGSize(width: 8, height: 8))
     }
 
     // MARK: - (a) capture → rank: plant_now first

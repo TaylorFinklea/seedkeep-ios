@@ -33,9 +33,11 @@ struct PendingWritesView: View {
             }
         }
         .navigationTitle("Pending writes")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .platformTrailing) {
                 Button {
                     Task { try? await appEnv.sync.flushPending() }
                 } label: {

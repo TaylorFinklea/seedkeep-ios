@@ -149,7 +149,9 @@ struct JournalEntryView: View {
         }
         .vellumForm()
         .navigationTitle("")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
@@ -372,12 +374,12 @@ struct JournalEntryView: View {
         }
     }
 
-    /// Decode pixel dimensions from JPEG bytes — used to populate the
+    /// Pixel dimensions of the image bytes (EXIF orientation applied) — used to populate the
     /// X-Photo-Width / X-Photo-Height headers the server stores.
     nonisolated private static func imageDimensions(_ data: Data) async -> (Int?, Int?) {
         return await Task.detached(priority: .userInitiated) { () -> (Int?, Int?) in
-            guard let img = UIImage(data: data) else { return (nil, nil) }
-            return (Int(img.size.width), Int(img.size.height))
+            guard let size = PhotoResizer.pixelDimensions(data) else { return (nil, nil) }
+            return (Int(size.width), Int(size.height))
         }.value
     }
 
@@ -401,13 +403,13 @@ struct JournalEntryView: View {
 private struct JournalPhotoThumbnail: View {
     let photoId: String
     @Environment(AppEnvironment.self) private var appEnv
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
     @State private var isLoading = false
 
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image)
+                Image(platformImage: image)
                     .resizable()
                     .scaledToFill()
             } else if isLoading {
@@ -427,7 +429,7 @@ private struct JournalPhotoThumbnail: View {
                     photoId: photoId,
                     householdID: appEnv.activeGardenHouseholdID
                 ) {
-                    image = UIImage(data: data)
+                    image = PlatformImageCoding.image(data: data)
                 }
             } catch {
                 // The neutral placeholder remains available for a later retry.

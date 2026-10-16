@@ -59,7 +59,9 @@ struct AddPlantingEventView: View {
             }
             .vellumForm()
             .navigationTitle("Plan event")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar { toolbarContent }
             .onAppear {
                 if selectedBedID == nil { selectedBedID = bedID }

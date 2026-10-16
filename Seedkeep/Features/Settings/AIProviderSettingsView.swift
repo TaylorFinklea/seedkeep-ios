@@ -83,7 +83,9 @@ struct AIProviderSettingsView: View {
         }
         .vellumForm()
         .navigationTitle("AI provider")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task {
             if AppPreferences.isHostedTierEnabled { await refresh() }
         }

@@ -9,7 +9,7 @@ struct AuthedImage: View {
     let photoID: String
     let contentMode: ContentMode
 
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
     @State private var isLoading = true
 
     init(photoID: String, contentMode: ContentMode = .fill) {
@@ -20,7 +20,7 @@ struct AuthedImage: View {
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image)
+                Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
             } else if isLoading {
@@ -44,7 +44,7 @@ struct AuthedImage: View {
                 householdID: appEnv.activeGardenHouseholdID
             ) else { return }
             await MainActor.run {
-                self.image = UIImage(data: data)
+                self.image = PlatformImageCoding.image(data: data)
             }
         } catch {
             await MainActor.run { self.image = nil }

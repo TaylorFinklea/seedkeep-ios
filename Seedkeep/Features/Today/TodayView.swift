@@ -78,7 +78,7 @@ struct TodayView: View {
                 refreshDateStrings()
             }
             .onReceive(NotificationCenter.default.publisher(
-                for: UIApplication.willEnterForegroundNotification)) { _ in
+                for: PlatformLifecycle.willEnterForeground)) { _ in
                 refreshDateStrings()
             }
         }

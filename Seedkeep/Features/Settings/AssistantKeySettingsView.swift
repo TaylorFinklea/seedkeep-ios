@@ -37,7 +37,9 @@ struct AssistantKeySettingsView: View {
                 Section {
                     SecureField("sk-ant-…", text: $keyInput)
                         .autocorrectionDisabled()
+                        #if os(iOS)
                         .textInputAutocapitalization(.never)
+                        #endif
                     Button(working ? "Saving…" : "Save key") {
                         Task { await save() }
                     }
@@ -83,7 +85,9 @@ struct AssistantKeySettingsView: View {
         }
         .vellumForm()
         .navigationTitle("AI Assistant")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task {
             guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
             await appEnv.assistant.refreshKeyStatus()

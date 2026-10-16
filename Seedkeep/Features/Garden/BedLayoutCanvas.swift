@@ -89,7 +89,11 @@ struct BedLayoutCanvas: View {
             }
         }
         .frame(height: canvasHeight)
+        #if os(iOS)
         .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(nsColor: .windowBackgroundColor))
+        #endif
         .clipShape(.rect(cornerRadius: 10))
     }
 

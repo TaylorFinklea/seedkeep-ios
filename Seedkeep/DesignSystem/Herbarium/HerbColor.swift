@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// Color tokens for the Herbarium design system (V2). Vellum cream paper,
 /// sepia ink, sage washes, rose/ochre accents.
@@ -110,7 +109,7 @@ enum HerbColor {
     /// Derived from the foreground token at 15% opacity; unknown verdicts
     /// fall back to the system gray fill used by neutral badges.
     static func verdictBackground(for verdict: String) -> Color {
-        verdictForeground(for: verdict)?.opacity(0.15) ?? Color(.systemGray5)
+        verdictForeground(for: verdict)?.opacity(0.15) ?? neutralFill
     }
 
     // MARK: - Helpers
@@ -121,19 +120,41 @@ enum HerbColor {
         light: UInt32, lightAlpha: Double = 1,
         dark:  UInt32, darkAlpha:  Double = 1
     ) -> Color {
-        Color(uiColor: UIColor { trait in
-            trait.userInterfaceStyle == .dark
-                ? uiColor(hex: dark,  alpha: darkAlpha)
-                : uiColor(hex: light, alpha: lightAlpha)
-        })
+        color(PlatformColor.dynamic(
+            light: platformColor(hex: light, alpha: lightAlpha),
+            dark:  platformColor(hex: dark,  alpha: darkAlpha)
+        ))
     }
 
-    private static func uiColor(hex: UInt32, alpha: Double) -> UIColor {
-        UIColor(
-            red:   Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >>  8) & 0xFF) / 255,
-            blue:  Double( hex        & 0xFF) / 255,
-            alpha: alpha
-        )
+    /// System gray fill for neutral badges: `UIColor.systemGray5` on iOS. macOS has no matching
+    /// system colour, so it uses the same light and dark values.
+    static var neutralFill: Color {
+        #if os(iOS)
+        Color(.systemGray5)
+        #else
+        color(PlatformColor.dynamic(
+            light: platformColor(hex: 0xE5E5EA, alpha: 1),
+            dark:  platformColor(hex: 0x2C2C2E, alpha: 1)
+        ))
+        #endif
+    }
+
+    private static func color(_ platform: PlatformColor) -> Color {
+        #if os(iOS)
+        Color(uiColor: platform)
+        #else
+        Color(nsColor: platform)
+        #endif
+    }
+
+    private static func platformColor(hex: UInt32, alpha: Double) -> PlatformColor {
+        let red = CGFloat((hex >> 16) & 0xFF) / 255
+        let green = CGFloat((hex >> 8) & 0xFF) / 255
+        let blue = CGFloat(hex & 0xFF) / 255
+        #if os(iOS)
+        return UIColor(red: red, green: green, blue: blue, alpha: CGFloat(alpha))
+        #else
+        return NSColor(srgbRed: red, green: green, blue: blue, alpha: CGFloat(alpha))
+        #endif
     }
 }

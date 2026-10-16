@@ -63,9 +63,11 @@ struct TagsView: View {
             }
         }
         .navigationTitle("Tags")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .platformTrailing) {
                 Button {
                     newName = ""
                     newColor = nil
@@ -154,7 +156,9 @@ private struct NewTagSheet: View {
             Form {
                 Section {
                     TextField("Tag name", text: $name)
+                        #if os(iOS)
                         .textInputAutocapitalization(.words)
+                        #endif
                 } header: {
                     Rubric(text: "name")
                 }
@@ -183,7 +187,9 @@ private struct NewTagSheet: View {
             }
             .vellumForm()
             .navigationTitle("New tag")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

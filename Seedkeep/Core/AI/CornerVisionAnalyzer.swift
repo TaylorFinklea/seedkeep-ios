@@ -1,4 +1,4 @@
-import UIKit
+import CoreGraphics
 import Vision
 
 // MARK: - Cue types
@@ -53,7 +53,7 @@ struct CornerCues: Equatable, Sendable {
 
 // MARK: - CornerVisionAnalyzer
 
-/// Takes a `UIImage` / `CGImage`, runs two cheap on-device Apple Vision
+/// Takes a `PlatformImage` / `CGImage`, runs two cheap on-device Apple Vision
 /// heuristics, and returns `CornerCues`.
 ///
 /// - Exposure: mean luminance of a greyscale render. Bright image → full sun.
@@ -66,8 +66,8 @@ struct CornerVisionAnalyzer: Sendable {
 
     // MARK: - Public API
 
-    func analyze(image: UIImage) async -> CornerCues {
-        guard let cgImage = image.cgImage else { return .unknown }
+    func analyze(image: PlatformImage) async -> CornerCues {
+        guard let cgImage = PlatformImageCoding.cgImage(image) else { return .unknown }
         return await analyze(cgImage: cgImage)
     }
 

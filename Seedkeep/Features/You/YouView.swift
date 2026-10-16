@@ -97,7 +97,9 @@ struct YouView: View {
                 }
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .publishesAssistantContext(pageType: "you")
         }
     }

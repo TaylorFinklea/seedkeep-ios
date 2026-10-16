@@ -1,5 +1,6 @@
 import Testing
-import UIKit
+import Foundation
+import CoreGraphics
 @testable import Seedkeep
 
 /// Tests for `CornerVisionAnalyzer`.
@@ -13,29 +14,20 @@ struct CornerVisionAnalyzerTests {
 
     // MARK: - Fixture helpers
 
-    /// Makes a solid-colour `UIImage` at the given greyscale brightness (0=black, 255=white).
-    private func solidGrey(_ grey: UInt8, size: CGSize = CGSize(width: 64, height: 64)) -> UIImage {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-            UIColor(white: CGFloat(grey) / 255, alpha: 1).setFill()
-            ctx.fill(CGRect(origin: .zero, size: size))
-        }
+    /// Makes a solid-colour image at the given greyscale brightness (0=black, 255=white).
+    private func solidGrey(_ grey: UInt8, size: CGSize = CGSize(width: 64, height: 64)) -> PlatformImage {
+        let value = CGFloat(grey) / 255
+        return PlatformImageFixtures.solid(red: value, green: value, blue: value, size: size)
     }
 
-    /// Makes a solid-colour UIImage with the given RGB tuple.
-    private func solidColor(r: UInt8, g: UInt8, b: UInt8, size: CGSize = CGSize(width: 64, height: 64)) -> UIImage {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-            UIColor(
-                red: CGFloat(r) / 255,
-                green: CGFloat(g) / 255,
-                blue: CGFloat(b) / 255,
-                alpha: 1
-            ).setFill()
-            ctx.fill(CGRect(origin: .zero, size: size))
-        }
+    /// Makes a solid-colour image with the given RGB tuple.
+    private func solidColor(r: UInt8, g: UInt8, b: UInt8, size: CGSize = CGSize(width: 64, height: 64)) -> PlatformImage {
+        PlatformImageFixtures.solid(
+            red: CGFloat(r) / 255,
+            green: CGFloat(g) / 255,
+            blue: CGFloat(b) / 255,
+            size: size
+        )
     }
 
     // MARK: - Exposure heuristic (coarse assertions)
@@ -79,10 +71,10 @@ struct CornerVisionAnalyzerTests {
 
     @Test("nil CGImage → .unknown, no crash")
     func nilCGImage() async {
-        // UIImage with no cgImage — construct from 0-byte data.
+        // Image with no bitmap — construct from 0-byte data.
         let emptyData = Data()
-        let img = UIImage(data: emptyData) ?? UIImage()
-        // img.cgImage is nil for an empty/corrupt UIImage.
+        let img = PlatformImageCoding.image(data: emptyData) ?? PlatformImage()
+        // The image has no CGImage when it is empty or corrupt.
         let cues = await analyzer.analyze(image: img)
         #expect(cues.exposure == .unknown)
         #expect(cues.openness == .unknown)
@@ -90,15 +82,10 @@ struct CornerVisionAnalyzerTests {
 
     @Test("zero-size CGImage → .unknown, no crash")
     func zeroSizeCGImage() async {
-        // Build a 0×0 CGImage via a 0-pt UIGraphicsImageRenderer.
-        // The result is a valid UIImage but the underlying bitmap has 0 pixels,
-        // so our guard against width/height == 0 kicks in.
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        // Minimum we can request is 1×1; fake a CGImage with 0 dimensions
-        // by cropping a 1×1 image to an empty rect.
+        // Build a 0×0 CGImage: the smallest fixture is 1×1, so crop it to an empty rect.
+        // When that succeeds, the analyzer's width/height guard fires.
         let base = solidGrey(128, size: CGSize(width: 1, height: 1))
-        guard let baseCG = base.cgImage else {
+        guard let baseCG = PlatformImageCoding.cgImage(base) else {
             // Can't construct a 1×1 CGImage on this platform — nothing to test.
             return
         }

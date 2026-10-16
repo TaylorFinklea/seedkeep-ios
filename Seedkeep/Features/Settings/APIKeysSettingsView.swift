@@ -58,7 +58,9 @@ struct APIKeysSettingsView: View {
         }
         .vellumForm()
         .navigationTitle("API keys")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .onAppear {
             anthropicSaved = appEnv.apiKeys.has(.anthropic)
             openaiSaved = appEnv.apiKeys.has(.openai)
@@ -74,7 +76,9 @@ struct APIKeysSettingsView: View {
     ) -> some View {
         Section {
             SecureField(saved.wrappedValue ? "•••••• (saved)" : "Paste key", text: draft)
+                #if os(iOS)
                 .textInputAutocapitalization(.never)
+                #endif
                 .autocorrectionDisabled()
                 .font(HerbFont.body(size: 14).monospaced())
 

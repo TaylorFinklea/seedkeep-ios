@@ -3,23 +3,35 @@ import SwiftData
 import SeedkeepKit
 import OSLog
 import SeedkeepCloudKit
+#if os(iOS)
+import UIKit
+#endif
 
 @main
 struct SeedkeepApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var pendingInviteCode: String?
     @State private var pendingHandoff: AccountDeletionHandoffLink?
-    // Pure-SwiftUI app otherwise — this delegate exists only to route scenes through ShareSceneDelegate
-    // so CKShare acceptance is delivered (WindowGroup doesn't surface it on the app delegate).
+    #if os(macOS)
+    @MainActor private static var didRunStartup = false
+    #endif
+    // iOS routes scenes through ShareSceneDelegate; macOS receives CKShare acceptance on its app delegate.
+    #if os(iOS)
     @UIApplicationDelegateAdaptor(SeedkeepAppDelegate.self) private var appDelegate
+    #elseif os(macOS)
+    @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
+    #endif
 
     init() {
+        #if os(iOS)
         configureTabBarAppearance()
+        #endif
     }
 
     /// Apply the IM Fell English SC small-caps font to tab bar labels
     /// while keeping the native liquid-glass tab bar chrome. The
     /// PostScript name has underscores (not what the filename suggests).
+    #if os(iOS)
     private func configureTabBarAppearance() {
         guard let smallCapsFont = UIFont(name: "IM_FELL_English_SC", size: 10) else { return }
         let labelAttrs: [NSAttributedString.Key: Any] = [
@@ -29,6 +41,7 @@ struct SeedkeepApp: App {
         UITabBarItem.appearance().setTitleTextAttributes(labelAttrs, for: .normal)
         UITabBarItem.appearance().setTitleTextAttributes(labelAttrs, for: .selected)
     }
+    #endif
 
     var body: some Scene {
         WindowGroup {
@@ -54,6 +67,13 @@ struct SeedkeepApp: App {
             // off until they've been verified screen-by-screen.
             .preferredColorScheme(.light)
             .task {
+                #if os(macOS)
+                guard !Self.didRunStartup else { return }
+                Self.didRunStartup = true
+                // Hosted Mac tests share the developer's Keychain and CloudKit account. Keep
+                // startup entirely local so a test host cannot restore a real session or mutate it.
+                if !FeatureFlags.canRunLiveAppStartup { return }
+                #endif
                 appDelegate.environment = environment   // let the scene delegate drive participant adopt
                 // BEFORE restoring the session, and deliberately not gated
                 // on it: an account deletion that committed but whose
@@ -63,7 +83,13 @@ struct SeedkeepApp: App {
                 // the only thing that can finish that deletion.
                 await environment.recoverCommittedAccountDeletion()
                 await environment.auth.restoreSession()
+                #if os(macOS)
+                if case .signedIn = environment.auth.state {
+                    await appDelegate.processPendingShares()
+                }
+                #else
                 await environment.processPendingShare()  // cold-launch: adopt a share tapped while terminated
+                #endif
             }
             .onOpenURL { url in
                 route(IncomingLink(url: url))
@@ -118,6 +144,9 @@ struct RootView: View {
             case .signedIn:
                 MainTabView()
                     .task(id: snapshotID(auth.state)) {
+                        #if os(macOS)
+                        await appEnv.processPendingShare()
+                        #endif
                         await appEnv.syncIfPossible()
                     }
                     .task {
@@ -130,9 +159,13 @@ struct RootView: View {
                         // + streak counters are materialized whenever
                         // the user opens the app.
                         guard newPhase == .active else { return }
-                        // Also drain any pending CKShare accept (a cold accept whose first attempt
-                        // failed re-deposits the metadata; foregrounding retries it without a relaunch).
+                        // iOS retries a pending CKShare accept here; the macOS app delegate retries
+                        // on application activation.
+                        #if os(iOS)
                         Task { await appEnv.processPendingShare(); await appEnv.syncIfPossible() }
+                        #else
+                        Task { await appEnv.syncIfPossible() }
+                        #endif
                     }
                     .sheet(item: $whatsNewRelease) { release in
                         WhatsNewSheet(initialRelease: release)

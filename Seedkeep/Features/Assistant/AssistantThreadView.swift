@@ -91,7 +91,9 @@ struct AssistantThreadView: View {
             }
         }
         .navigationTitle("")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task {
             guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
             appEnv.assistant.openThread(threadID)
@@ -129,7 +131,7 @@ struct AssistantThreadView: View {
         let hasText = !composerText.trimmingCharacters(in: .whitespaces).isEmpty
         let canSend = (hasText || pickedPhotoData != nil) && !isStreaming
         VStack(spacing: 6) {
-            if let data = pickedPhotoData, let img = UIImage(data: data) {
+            if let data = pickedPhotoData, let img = PlatformImageCoding.image(data: data) {
                 attachmentChip(image: img)
             }
             HStack(alignment: .bottom, spacing: 8) {
@@ -171,9 +173,9 @@ struct AssistantThreadView: View {
     }
 
     @ViewBuilder
-    private func attachmentChip(image: UIImage) -> some View {
+    private func attachmentChip(image: PlatformImage) -> some View {
         HStack(spacing: 8) {
-            Image(uiImage: image)
+            Image(platformImage: image)
                 .resizable()
                 .scaledToFill()
                 .frame(width: 36, height: 36)
@@ -243,6 +245,7 @@ struct AssistantThreadView: View {
         )
     }
 
+    #if os(iOS)
     private static func resizeJPEG(_ data: Data, maxDimension: CGFloat, quality: CGFloat) -> Data? {
         guard let image = UIImage(data: data) else { return nil }
         let size = image.size
@@ -256,6 +259,13 @@ struct AssistantThreadView: View {
         let scaled = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
         return scaled.jpegData(compressionQuality: quality)
     }
+    #else
+    /// macOS: one encode pass through PhotoResizer, with no byte budget.
+    private static func resizeJPEG(_ data: Data, maxDimension: CGFloat, quality: CGFloat) -> Data? {
+        let budget = PhotoResizer.Budget(maxDimension: maxDimension, quality: quality, targetBytes: .max)
+        return PhotoResizer.resizedJPEG(data, budget: budget)
+    }
+    #endif
 
     private func confirm(toolCallID: String) async {
         do { try await appEnv.assistant.confirmToolCall(toolCallID) }

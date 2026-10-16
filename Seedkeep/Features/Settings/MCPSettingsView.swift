@@ -111,7 +111,9 @@ struct MCPSettingsView: View {
         }
         }
         .navigationTitle("Claude / MCP")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task {
             guard !FeatureFlags.serverGardenFeaturesRestricted else { return }
             await refresh()
@@ -215,7 +217,9 @@ struct MCPSettingsView: View {
             }
             .vellumForm()
             .navigationTitle("New MCP token")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showNewTokenSheet = false }
@@ -383,7 +387,9 @@ private struct PairingCodeSheet: View {
                 }
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -448,7 +454,7 @@ private struct FreshSecretSheet: View {
                                 .background(HerbColor.vellumHi)
                                 .overlay(Rectangle().strokeBorder(HerbColor.inkFaint, lineWidth: 0.5))
                             Button {
-                                UIPasteboard.general.string = secret.token
+                                Pasteboard.copy(secret.token)
                                 copiedToken = true
                             } label: {
                                 Text(copiedToken ? "✓ COPIED" : "COPY TOKEN")
@@ -475,7 +481,7 @@ private struct FreshSecretSheet: View {
                                 .background(HerbColor.vellumHi)
                                 .overlay(Rectangle().strokeBorder(HerbColor.inkFaint, lineWidth: 0.5))
                             Button {
-                                UIPasteboard.general.string = configSnippet
+                                Pasteboard.copy(configSnippet)
                                 copiedConfig = true
                             } label: {
                                 Text(copiedConfig ? "✓ COPIED" : "COPY CONFIG")
@@ -497,7 +503,9 @@ private struct FreshSecretSheet: View {
                 }
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

@@ -22,9 +22,13 @@ struct ServerSettingsView: View {
         Form {
             Section {
                 TextField("https://api.example.com", text: $draftURLText)
+                    #if os(iOS)
                     .keyboardType(.URL)
+                    #endif
                     .textContentType(.URL)
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled()
             } header: {
                 Rubric(text: "server url")
@@ -74,7 +78,9 @@ struct ServerSettingsView: View {
         }
         .vellumForm()
         .navigationTitle("Server")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { Task { await save() } }

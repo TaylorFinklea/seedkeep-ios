@@ -20,7 +20,9 @@ struct AddBedView: View {
             Form {
                 Section {
                     TextField("Back garden, greenhouse shelf, etc.", text: $name)
+                        #if os(iOS)
                         .textInputAutocapitalization(.sentences)
+                        #endif
                 } header: {
                     Rubric(text: "name")
                 }
@@ -35,7 +37,9 @@ struct AddBedView: View {
                         Text("Width")
                         Spacer()
                         TextField("ft", text: $widthFeet)
+                            #if os(iOS)
                             .keyboardType(.decimalPad)
+                            #endif
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 80)
                         Text("ft").foregroundStyle(HerbColor.inkSoft)
@@ -44,7 +48,9 @@ struct AddBedView: View {
                         Text("Length")
                         Spacer()
                         TextField("ft", text: $lengthFeet)
+                            #if os(iOS)
                             .keyboardType(.decimalPad)
+                            #endif
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 80)
                         Text("ft").foregroundStyle(HerbColor.inkSoft)
@@ -65,7 +71,9 @@ struct AddBedView: View {
             }
             .vellumForm()
             .navigationTitle("New bed")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.disabled(saving)

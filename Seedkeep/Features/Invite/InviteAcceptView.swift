@@ -21,7 +21,9 @@ struct InviteAcceptView: View {
             }
             .padding(.horizontal, 24)
             .navigationTitle("Household invite")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }

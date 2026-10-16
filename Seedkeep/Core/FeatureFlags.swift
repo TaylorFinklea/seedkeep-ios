@@ -63,5 +63,6 @@ enum FeatureFlags {
     }
 
     /// True when the app is hosting a unit-test bundle (XCTest is linked + loaded only then).
-    private static let isRunningUnitTests = NSClassFromString("XCTestCase") != nil
+    static let isRunningUnitTests = NSClassFromString("XCTestCase") != nil
+    static var canRunLiveAppStartup: Bool { !isRunningUnitTests }
 }

@@ -50,7 +50,11 @@ struct RetrospectiveCard: View {
                     }
                 }
                 .padding()
+                #if os(iOS)
                 .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
+                #else
+                .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 10))
+                #endif
             }
         }
         .task {

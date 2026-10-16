@@ -37,13 +37,15 @@ struct JournalRecoveryReviewView: View {
             }
         }
         .navigationTitle("Journal items need review")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Done") { dismiss() }
             }
             if !items.isEmpty {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .platformTrailing) {
                     Button("Keep all private") {
                         for item in items { appEnv.keepJournalRecoveryItemPrivate(item) }
                     }

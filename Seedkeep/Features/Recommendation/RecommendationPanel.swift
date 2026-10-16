@@ -292,7 +292,7 @@ private struct SuitabilityGradientBar: View {
                 // No data — fill with a subtle grey band
                 context.fill(
                     Path(CGRect(origin: .zero, size: size)),
-                    with: .color(Color(.systemGray5))
+                    with: .color(HerbColor.neutralFill)
                 )
                 return
             }
@@ -347,7 +347,7 @@ private struct SuitabilityGradientBar: View {
     /// Maps a score 0.0–1.0 to a gradient colour (grey → green).
     private func segmentColor(score: Double) -> Color {
         if score < 0.001 {
-            return Color(.systemGray5)
+            return HerbColor.neutralFill
         }
         // Blend from a muted amber (low) to bright green (high)
         let r = 0.60 - 0.50 * score
@@ -517,7 +517,11 @@ private func makeSampleRecommendation(
     return ScrollView {
         RecommendationPanel(recommendation: rec, refined: nil, userDate: nil)
             .padding()
+            #if os(iOS)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
+            #else
+            .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12))
+            #endif
             .padding()
     }
 }

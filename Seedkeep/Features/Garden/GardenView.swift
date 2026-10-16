@@ -74,7 +74,9 @@ struct GardenView: View {
                 }
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .publishesAssistantContext(pageType: "garden")
             .navigationDestination(for: String.self) { bedID in
                 BedDetailView(bedID: bedID)
@@ -86,7 +88,7 @@ struct GardenView: View {
                 PetDetailView(plantingEventID: dest.plantingEventID)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .platformLeading) {
                     Button {
                         showWhatToPlant = true
                     } label: {
@@ -94,7 +96,7 @@ struct GardenView: View {
                     }
                     .accessibilityLabel("What to plant")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .platformTrailing) {
                     Button {
                         showAddBed = true
                     } label: {

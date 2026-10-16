@@ -113,9 +113,11 @@ struct BedDetailView: View {
                     }
                 }
                 .navigationTitle("")
+                #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
+                #endif
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .platformTrailing) {
                         Button {
                             showAddEvent = true
                         } label: {

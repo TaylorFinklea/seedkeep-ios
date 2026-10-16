@@ -50,7 +50,9 @@ struct CatalogDetailView: View {
         }
         .vellumForm()
         .navigationTitle(catalog?.common_name ?? "Catalog entry")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task(id: catalogSeedID) {
             await load()
         }

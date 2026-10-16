@@ -197,7 +197,9 @@ struct NotificationsSettingsView: View {
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Notifications")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task {
             authStatus = await NotificationsCenter.shared.authorizationStatus()
         }

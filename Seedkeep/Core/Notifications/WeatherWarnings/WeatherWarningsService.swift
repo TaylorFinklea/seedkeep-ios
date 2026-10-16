@@ -1,9 +1,6 @@
 import Foundation
 import SwiftData
 @preconcurrency import UserNotifications
-#if canImport(UIKit)
-import UIKit
-#endif
 
 // MARK: - Cross-component notification name
 
@@ -311,9 +308,12 @@ actor WeatherWarningsService {
     func refreshAllIfStale(reason: RefreshReason) async -> RefreshOutcome? {
         if reason == .foreground {
             let current = await scheduler.authorizationStatus()
-            let isGranted = current == .authorized
-                || current == .provisional
-                || current == .ephemeral
+            // `.ephemeral` (App Clips) exists only on iOS.
+            #if os(iOS)
+            let isGranted = current == .authorized || current == .provisional || current == .ephemeral
+            #else
+            let isGranted = current == .authorized || current == .provisional
+            #endif
             if isGranted {
                 let container = self.container
                 let persistedRaw = await MainActor.run { () -> Int? in
@@ -1124,14 +1124,7 @@ actor WeatherWarningsService {
     }
 
     private func notificationSettingsDeepLink() -> URL? {
-        #if canImport(UIKit)
-        if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
-            return url
-        }
-        return URL(string: UIApplication.openSettingsURLString)
-        #else
-        return nil
-        #endif
+        PlatformSettings.notificationSettingsURL
     }
 
     private func encodeOutcome(_ outcome: RefreshOutcome) -> String {

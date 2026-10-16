@@ -48,7 +48,9 @@ struct PetDetailView: View {
             }
         }
         .navigationTitle("")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 
     @ViewBuilder

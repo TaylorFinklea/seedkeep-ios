@@ -183,6 +183,7 @@ EXPORT_OPTIONS="$REPO_ROOT/Seedkeep/ExportOptions.plist"
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
 
 step "Archiving Release for generic iOS"
+# M0 adds macOS build/test support only; this release flow remains iOS-only.
 # Auth keys let -allowProvisioningUpdates regenerate the profile without a signed-in Xcode account.
 xcodebuild \
     -project "$PROJECT" \

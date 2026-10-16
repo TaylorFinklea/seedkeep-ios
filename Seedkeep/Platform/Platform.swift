@@ -127,6 +127,26 @@ enum PlatformSettings {
     }
 }
 
+extension ToolbarItemPlacement {
+    /// Trailing navigation-bar slot on iOS; the primary toolbar slot on macOS.
+    static var platformTrailing: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarTrailing
+        #else
+        .primaryAction
+        #endif
+    }
+
+    /// Leading navigation-bar slot on iOS; the navigation toolbar slot on macOS.
+    static var platformLeading: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarLeading
+        #else
+        .navigation
+        #endif
+    }
+}
+
 enum PlatformLifecycle {
     /// Posted when the app returns to the foreground (iOS) or becomes active (macOS). On macOS
     /// this also fires on ordinary focus changes between apps; handlers must be idempotent.

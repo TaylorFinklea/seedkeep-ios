@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UIKit
 import SeedkeepKit
 import PhotosUI
 
@@ -15,7 +14,7 @@ final class CornerSuggestionsViewModel {
     // MARK: - State
 
     /// Captured thumbnail (ephemeral — discarded on dismiss).
-    private(set) var capturedImage: UIImage?
+    private(set) var capturedImage: PlatformImage?
 
     /// Cues computed from the image. Editable by the user.
     var cues: CornerCues = .unknown
@@ -35,7 +34,7 @@ final class CornerSuggestionsViewModel {
 
     // MARK: - Dependencies (injected for testability)
 
-    var analyze: (UIImage) async -> CornerCues
+    var analyze: (PlatformImage) async -> CornerCues
     var fetchSeeds: () -> [PlantSuggestionRanker.SeedInput]
     var fetchRecommendations: ([String]) async -> [PlantSuggestionRanker.RecommendationInput]
     var today: () -> Date
@@ -49,7 +48,7 @@ final class CornerSuggestionsViewModel {
     // MARK: - Init
 
     init(
-        analyze: @escaping (UIImage) async -> CornerCues,
+        analyze: @escaping (PlatformImage) async -> CornerCues,
         fetchSeeds: @escaping () -> [PlantSuggestionRanker.SeedInput],
         fetchRecommendations: @escaping ([String]) async -> [PlantSuggestionRanker.RecommendationInput],
         today: @escaping () -> Date = { Date() }
@@ -63,7 +62,7 @@ final class CornerSuggestionsViewModel {
     // MARK: - Actions
 
     /// Called when the user picks or captures a photo.
-    func capture(image: UIImage) async {
+    func capture(image: PlatformImage) async {
         capturedImage = image
         isLoading = true
         defer { isLoading = false }
@@ -132,7 +131,9 @@ struct CornerSuggestionsView: View {
             }
             .background(VellumBackground())
             .navigationTitle("Corner suggestions")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -154,7 +155,7 @@ struct CornerSuggestionsView: View {
     @ViewBuilder
     private var thumbnailSection: some View {
         if let img = viewModel.capturedImage {
-            Image(uiImage: img)
+            Image(platformImage: img)
                 .resizable()
                 .scaledToFill()
                 .frame(height: 180)

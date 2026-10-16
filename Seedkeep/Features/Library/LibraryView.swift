@@ -57,11 +57,17 @@ struct LibraryView: View {
                 }
             }
             .navigationTitle("")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
+            #if os(iOS)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search seeds")
+            #else
+            .searchable(text: $searchText, prompt: "Search seeds")
+            #endif
             .publishesAssistantContext(pageType: "library")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .platformLeading) {
                     Menu {
                         Toggle("Group by type", isOn: $groupByType)
                     } label: {
@@ -69,21 +75,24 @@ struct LibraryView: View {
                     }
                     .accessibilityLabel("Library options")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .platformTrailing) {
                     Button { showingRandom = true } label: { Image(systemName: "shuffle") }
                         .accessibilityLabel("Random pick")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingScan = true } label: { Image(systemName: "viewfinder") }
-                        .accessibilityLabel("Scan packet")
+                if PlatformCapabilities.supportsCameraScanning {
+                    ToolbarItem(placement: .platformTrailing) {
+                        Button { showingScan = true } label: { Image(systemName: "viewfinder") }
+                            .accessibilityLabel("Scan packet")
+                    }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .platformTrailing) {
                     Button { showingAdd = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("Add seed")
                 }
             }
             .sheet(isPresented: $showingAdd) { AddSeedView() }
             .sheet(isPresented: $showingRandom) { RandomPickView() }
+            #if os(iOS)
             .fullScreenCover(isPresented: $showingScan) {
                 ScanFlow { result in
                     switch result {
@@ -96,6 +105,7 @@ struct LibraryView: View {
                     }
                 }
             }
+            #endif
             .sheet(item: Binding(
                 get: { scanPrefill.map { ScanPrefillBox(prefill: $0) } },
                 set: { box in scanPrefill = box?.prefill }

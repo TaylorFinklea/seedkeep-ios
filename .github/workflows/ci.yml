@@ -1,4 +1,4 @@
-name: iOS CI
+name: Seedkeep CI
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
   cloudkit-schema:
     name: CloudKit Schema Parity
     if: ${{ github.actor != 'dependabot[bot]' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 15
 
     steps:
@@ -60,7 +60,7 @@ jobs:
 
   test:
     name: Build & Test
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
       - name: Checkout
@@ -79,6 +79,13 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Build unsigned macOS destination
+        run: |
+          xcodegen generate
+          xcodebuild -project Seedkeep.xcodeproj -scheme Seedkeep \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 
       - name: Run release-quality test gate
         run: ./scripts/test-gate.sh

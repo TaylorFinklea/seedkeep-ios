@@ -289,7 +289,9 @@ struct SettingsContent: View {
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .sheet(isPresented: $showingJournalRecoveryReview) {
             NavigationStack {
                 JournalRecoveryReviewView()
