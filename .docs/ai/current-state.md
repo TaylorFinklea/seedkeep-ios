@@ -1,5 +1,39 @@
 # Current State
 
+## Native Workbench redesign — M0 complete (2026-10-16)
+
+The app stays native. It's being redesigned in the Workbench style for
+iPhone, iPad and Mac, and the redesign ships as 1.0. Plan:
+`~/git/seedkeep/.docs/ai/phases/2026-10-15-native-workbench-redesign-plan.md`
+(approved 2026-10-15).
+- **V1 build-55 plan retired:** the sections below are kept for history
+  only.
+- **M0 (native macOS build of the current app) is done** on branch
+  `redesign/m0-mac`, commit `b363a92` (seed `908b60f`, scheme fix
+  `d2c5ab6`).
+  - **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 769 + 1, macOS
+    app 783 + 1; all passing on Xcode 27 with the iOS 27 simulator.
+  - **iOS behaviour unchanged:** the share, photo and lifecycle paths are
+    identical to the previous code.
+  - **Reviews:** Opus 5.5 and GPT-6.1 Sol across three rounds; both report
+    no blocking issues.
+- **Unsigned smoke test (2026-10-16):**
+  - The Mac Debug build launched and stayed running for more than 5 min,
+    with a 1690×992 on-screen window and no crash or fault logs.
+  - A screenshot wasn't possible because the Claude app lacks the macOS
+    Screen Recording permission.
+- **Capability matrix and signed-check plan:**
+  `.docs/ai/plans/2026-10-15-m0-capability-matrix.md`.
+- **Next:**
+  - R1 (shell and Seeds table).
+  - Signed Mac checks need the owner's approval for macOS signing and
+    provisioning.
+- **Local setup:**
+  - Simulators "Seedkeep iPhone" (`DD9BE2B2…`) and "Seedkeep iPad"
+    (`1B4EF142…`) on iOS 27.
+  - `scripts/test-gate.sh --simulator-udid <iPhone>` runs both platforms.
+
+
 ## Combined QA preparation — 2026-09-29
 
 The canonical cross-repo dashboard and execution procedure are maintained in
