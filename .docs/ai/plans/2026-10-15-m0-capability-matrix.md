@@ -148,3 +148,50 @@ which is already done.
 - **Assistant photos:** on Mac, small rotated assistant photos are baked
   upright instead of keeping the EXIF tag. They look the same; the assistant
   is unwired for 1.0.
+
+## Signed results (2026-10-16, owner-approved macOS development signing)
+
+**Build and identity:** a signed Debug build on this Mac (macOS 27),
+`xcodebuild -allowProvisioningUpdates`.
+- Identity: "Apple Development: Taylor Finklea".
+- Profile: "Mac Team Provisioning Profile: app.seedkeep.ios" (team K7CBQW6MPG).
+
+**Checked:**
+- **1. Sandbox: PASS.** The signed app carries `app-sandbox`. Launch created
+  `~/Library/Containers/app.seedkeep.ios`.
+- **2. iCloud container and Production: PASS (entitlement level).**
+  - The embedded entitlements include `iCloud.app.seedkeep` with CloudKit
+    and the Production environment.
+  - The profile authorizes iCloud, Sign in with Apple, associated domains,
+    WeatherKit, time-sensitive notifications and `keychain-access-groups`.
+  - Account status is checked together with sign-in, below.
+- **3. Store location: PASS.** The running app has
+  `~/Library/Containers/app.seedkeep.ios/Data/Library/Application Support/seedkeep.store`
+  open (seen with lsof; macOS keeps other processes from listing another
+  app's container).
+- **Signature:** `codesign --verify --deep --strict` passes.
+
+**Found and fixed:** the unsigned macOS test host was writing the live
+store to `~/Library/Application Support/seedkeep.store`, because it isn't
+sandboxed. `AppEnvironment.makeModelContainer` now keeps the store in memory
+under XCTest; outside tests the configuration is unchanged.
+
+**Still to check:** items 4–13 need a sign-in. Sign in with Apple needs the
+owner at the keyboard, using the owner's own account, read-only. Writes are
+limited to one clearly labelled test seed, deleted afterwards. Checklist for
+the owner, running the signed build from Xcode (Seedkeep scheme, My Mac):
+1. **Sign in with Apple:** sign in, quit, relaunch. Still signed in, with no
+   keychain prompt (items 6 and 7).
+2. **Hydration:** the garden loads from iCloud (item 4). Network calls for
+   the catalog and recommendations work (item 8).
+3. **Offline relaunch:** turn Wi-Fi off, relaunch; the data is still there
+   (item 3).
+4. **Photos:** add a photo to the test seed from Photos and from Files
+   (item 9).
+5. **Frost warnings:** settings show the home ZIP; notifications can be
+   enabled (items 10 and 12).
+6. **Sharing:** open Settings › Share garden via iCloud. The Mac share sheet
+   appears; cancel it, and confirm no error alert appears (item 5 and the
+   Opus follow-up).
+7. **Invite link:** open a `seedkeep://` invite link to confirm routing
+   (item 13).

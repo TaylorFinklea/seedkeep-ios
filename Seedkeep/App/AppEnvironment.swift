@@ -933,7 +933,17 @@ public final class AppEnvironment {
         // Seedkeep does NOT use SwiftData/NSPersistentCloudKitContainer auto-mirroring: the shared
         // household zone is synced by our own CKSyncEngine stack (SeedkeepCloudKit). SwiftData is the
         // local source of truth only.
-        let config = ModelConfiguration("seedkeep", schema: schema, cloudKitDatabase: .none)
+        //
+        // Under XCTest the hosting app keeps its store in memory. Hosted tests build their own
+        // containers; the host's live environment must never touch a real store. On macOS the
+        // unsigned test host is not sandboxed, so an on-disk store would land in the developer's
+        // own ~/Library/Application Support. Outside tests this is false: the store is unchanged.
+        let config = ModelConfiguration(
+            "seedkeep",
+            schema: schema,
+            isStoredInMemoryOnly: FeatureFlags.isRunningUnitTests,
+            cloudKitDatabase: .none
+        )
         do {
             return try ModelContainer(for: schema, configurations: config)
         } catch {
