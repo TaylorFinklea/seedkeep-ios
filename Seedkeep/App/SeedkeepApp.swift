@@ -44,7 +44,7 @@ struct SeedkeepApp: App {
     #endif
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             #if DEBUG
             if let spikeMode = CKSpike.mode {
                 CKSpikeView(mode: spikeMode)
@@ -55,6 +55,7 @@ struct SeedkeepApp: App {
             mainRoot
             #endif
         }
+        .commands { WorkbenchCommands() }
     }
 
     @ViewBuilder private var mainRoot: some View {
@@ -132,6 +133,8 @@ struct RootView: View {
     /// know what a later dismissal is closing, since a `.sheet(item:)`
     /// setter always receives `nil` regardless of which item it was.
     @State private var presentedHandoffID: String?
+    @State private var workbenchModel = WorkbenchModel()
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ZStack {
@@ -142,7 +145,7 @@ struct RootView: View {
                 ProgressView("Signing you in…")
                     .progressViewStyle(.circular)
             case .signedIn:
-                MainTabView()
+                signedInRoot
                     .task(id: snapshotID(auth.state)) {
                         #if os(macOS)
                         await appEnv.processPendingShare()
@@ -170,6 +173,11 @@ struct RootView: View {
                     .sheet(item: $whatsNewRelease) { release in
                         WhatsNewSheet(initialRelease: release)
                     }
+            }
+        }
+        .onChange(of: isSignedIn) { _, signedIn in
+            if !signedIn {
+                workbenchModel.resetForScopeChange()
             }
         }
         .sheet(item: Binding(
@@ -236,6 +244,39 @@ struct RootView: View {
             // checkpoint were both waiting for.
             if signedIn { appEnv.accountDeletionFlow.reload() }
         }
+    }
+
+    @ViewBuilder
+    private var signedInRoot: some View {
+        Group {
+            #if os(macOS)
+            shellForSignedInWindow
+            #else
+            if WorkbenchShellPolicy.shouldShowWorkbench(
+                isMac: false,
+                idiom: workbenchDeviceIdiom,
+                horizontalSizeClass: horizontalSizeClass
+            ) {
+                shellForSignedInWindow
+            } else {
+                MainTabView()
+            }
+            #endif
+        }
+        .onChange(of: appEnv.activeGardenHouseholdID) { _, _ in workbenchModel.resetForScopeChange() }
+    }
+
+    private var shellForSignedInWindow: some View {
+        WorkbenchShell(model: workbenchModel)
+            .focusedSceneValue(\.workbenchModel, workbenchModel)
+    }
+
+    private var workbenchDeviceIdiom: WorkbenchDeviceIdiom {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad ? .tablet : .phone
+        #else
+        .other
+        #endif
     }
 
     private var isSignedIn: Bool {

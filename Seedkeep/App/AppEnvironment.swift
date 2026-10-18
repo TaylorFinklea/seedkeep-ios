@@ -194,6 +194,13 @@ public final class AppEnvironment {
         presentBanner(humanizeError(error))
     }
 
+    /// Surfaces an already-worded message via `bannerError` (same banner and debounce as
+    /// `surfaceError`). Used where the message is built by the caller, such as a Seeds-table
+    /// write or undo report, so it shows in the window banner on every screen.
+    public func surfaceMessage(_ message: String) {
+        presentBanner(message)
+    }
+
     /// Hides the banner. Wired to the banner's dismiss action and the
     /// auto-dismiss timer in `MainTabView`.
     public func dismissBannerError() {

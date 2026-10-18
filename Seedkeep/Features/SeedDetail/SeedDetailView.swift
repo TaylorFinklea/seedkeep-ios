@@ -17,11 +17,20 @@ struct SeedDetailView: View {
 
     @Query(filter: #Predicate<LocalLocation> { $0.deletedAt == nil },
            sort: \.sortOrder, order: .forward)
-    private var locations: [LocalLocation]
+    private var allLocations: [LocalLocation]
 
     @Query(filter: #Predicate<LocalTag> { $0.deletedAt == nil },
            sort: \.name, order: .forward)
-    private var tags: [LocalTag]
+    private var allTags: [LocalTag]
+
+    /// Only the active garden's locations and tags, so the pickers never assign another household's ids.
+    private var locations: [LocalLocation] {
+        SeedDetailScope.locations(allLocations, householdID: appEnv.activeGardenHouseholdID)
+    }
+
+    private var tags: [LocalTag] {
+        SeedDetailScope.tags(allTags, householdID: appEnv.activeGardenHouseholdID)
+    }
 
     @State private var pendingDelete = false
     @State private var pickedPhoto: PhotosPickerItem?
@@ -896,5 +905,17 @@ private struct YearPicker: View {
                 Text(String(y)).tag(Optional(y))
             }
         }
+    }
+}
+
+/// Household scoping for `SeedDetailView`'s location and tag pickers: the Library's rule, applied
+/// in memory to the unscoped queries.
+enum SeedDetailScope {
+    static func locations(_ all: [LocalLocation], householdID: String?) -> [LocalLocation] {
+        all.filter { $0.deletedAt == nil && $0.householdID == householdID }
+    }
+
+    static func tags(_ all: [LocalTag], householdID: String?) -> [LocalTag] {
+        all.filter { $0.deletedAt == nil && $0.householdID == householdID }
     }
 }

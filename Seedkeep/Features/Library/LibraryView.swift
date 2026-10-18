@@ -192,7 +192,7 @@ struct LibraryView: View {
 }
 
 /// Identifiable wrapper so the prefill sheet can use `.sheet(item:)`.
-private struct ScanPrefillBox: Identifiable {
+struct ScanPrefillBox: Identifiable {
     let prefill: AddSeedView.Prefill
     var id: String {
         switch prefill {

@@ -326,3 +326,33 @@ Requirements:
   (packages, iOS app in both modes, macOS app in both modes). Counts must
   not drop: iOS 769 + 1, macOS 783 + 1, plus new tests.
 - iPad build and launch on the "Seedkeep iPad" simulator (`1B4EF142…`).
+
+## Outcome and known limitations (2026-10-18)
+
+Reviewed by Opus 5.5 and GPT-6.1 Sol across two rounds, with confirmation
+reviews from both. Every confirmed HIGH and MEDIUM is fixed, apart from the
+first limitation below.
+
+**Known limitations, accepted for R1:**
+- **Scroll position after an edit or reveal.** The edited or revealed row stays
+  selected, but SwiftUI `Table` has no scroll-to-row API, so a re-sort can move
+  it out of view. Revisit in R2, for example with a custom grid if it matters
+  in use. This was Sol's original finding 7.
+- **Bulk-write speed.** A bulk change runs one `SyncEngine` write per seed. The
+  Opus probe measured about 0.6 s for 1,000 seeds. A batched write API is a
+  follow-up.
+- **Undoing Add Tag.** It restores the earlier tag list, so tags another member
+  added in between are removed. This follows from the CloudKit merger's
+  last-writer-wins rule.
+- **Garden-scope changes aren't observed.** `activeGardenHouseholdID` reads
+  UserDefaults without observation; this is a pre-existing pattern. Resets
+  depend on a re-render, but every write still checks the household.
+
+**Not yet verified by hand:**
+- the iPad table at regular width after sign-in
+- VoiceOver
+- keyboard-only use
+- 1,000-seed scrolling
+
+Simulator and signed runs can't sign in without the owner, so the owner's
+signed checklist covers these.

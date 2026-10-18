@@ -48,9 +48,14 @@ final class WorkbenchModel {
     var isPaletteOpen = false
     var isInspectorOpen = true
 
-    /// True while a text field or an inline draft has keyboard focus in this window. Commands
-    /// that act on the selection (Delete) are disabled while it's set.
+    /// True while one of the Seeds screen's own drafts or its search field has focus in this
+    /// window. Set only from this window's focus state (never from process-wide notifications).
     var isEditingText = false
+
+    /// The undo manager the Seeds screen registers edits with in this window (the environment's
+    /// when SwiftUI provides one, otherwise a per-window fallback). Menus and the iPad toolbar
+    /// undo and redo through it, so the fallback is always reachable.
+    var activeUndoManager: UndoManager?
 
     /// Requests from menus and the palette, queued until the Seeds screen takes them. A queue
     /// (not a counter) means a request sent before Seeds is on screen is still delivered once
@@ -76,6 +81,9 @@ final class WorkbenchModel {
         pendingSeedsRequests = []
         isEditingText = false
         isPaletteOpen = false
+        revealedSeedID = nil
+        // Undo actions belong to the old garden scope; clear them even if Seeds is off screen.
+        activeUndoManager?.removeAllActions()
     }
 
     /// Jumps to one seed: shows Seeds, selects it, and opens the inspector. The Seeds screen

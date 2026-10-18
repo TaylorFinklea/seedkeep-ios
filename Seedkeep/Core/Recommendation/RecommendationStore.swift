@@ -91,10 +91,7 @@ public final class RecommendationStore {
     /// Also re-requests any IDs previously returned as `pending`.
     /// Caps the combined input at 200 IDs.
     public func bulkRefresh(catalogSeedIDs: [String]) async {
-        var ids = Array(Set(catalogSeedIDs).union(pendingIDs))
-        if ids.count > 200 {
-            ids = Array(ids.prefix(200))
-        }
+        let ids = Self.bulkRequestIDs(requested: catalogSeedIDs, pending: pendingIDs)
         guard !ids.isEmpty else { return }
 
         let response: WireRecommendation.BulkResponse
@@ -115,8 +112,25 @@ public final class RecommendationStore {
         for dto in response.recommendations {
             upsert(dto: dto)
         }
-        // Track IDs the server says are still computing so we re-request them.
-        pendingIDs = Set(response.pending)
+        // Track IDs the server says are still computing so we re-request them. IDs that did not fit
+        // this call's budget were never sent, so they stay pending.
+        pendingIDs = Set(response.pending).union(pendingIDs.subtracting(ids))
+    }
+
+    /// The ids one bulk call sends. The caller's ids come first, de-duplicated and in order. Pending
+    /// ids fill only what is left of the budget, so they can never displace a requested id.
+    static func bulkRequestIDs(requested: [String], pending: Set<String>, limit: Int = 200) -> [String] {
+        var seen = Set<String>()
+        var ids: [String] = []
+        for id in requested {
+            guard ids.count < limit else { break }
+            if seen.insert(id).inserted { ids.append(id) }
+        }
+        for id in pending.sorted() {
+            guard ids.count < limit else { break }
+            if seen.insert(id).inserted { ids.append(id) }
+        }
+        return ids
     }
 
     // MARK: - WeatherKit-refined recommendation
