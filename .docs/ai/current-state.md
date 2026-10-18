@@ -1,5 +1,30 @@
 # Current State
 
+## Native Workbench redesign — R1 complete (2026-10-18)
+
+R1 is on branch `redesign/r1-shell-seeds`, commit `16ec7b9`. It stacks on M0
+and is local only, not merged or pushed. On regular-width iPad and on Mac,
+the app now shows the Workbench:
+- a sidebar shell
+- a spreadsheet-style Seeds table: sorting, multi-select, filters, inline
+  edits with undo, bulk actions, an inspector, CSV export and packet scanning
+- menus and shortcuts, and a ⌘K command palette
+
+iPhone, including Plus/Max in landscape, keeps the tab UI unchanged.
+
+- **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 854 + 1, macOS app
+  868 + 1, on Xcode 27.1.
+- **Reviews:** Opus 5.5 and GPT-6.1 Sol, with three rounds plus confirmations.
+- **Contract and known limitations:**
+  `.docs/ai/plans/2026-10-17-r1-shell-seeds.md`.
+- **Not yet verified by hand:** the signed-in iPad table layout, VoiceOver,
+  keyboard-only use and 1,000-seed scrolling. Simulators can't sign in.
+- **Next:**
+  - owner review of R1
+  - R2: the design-system rollout, dark mode, Dynamic Type and the compact
+    iPhone restyle
+
+
 ## Native Workbench redesign — M0 complete (2026-10-16)
 
 The app stays native. It's being redesigned in the Workbench style for
