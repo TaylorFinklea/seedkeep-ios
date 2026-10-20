@@ -315,6 +315,9 @@ struct SettingsContent: View {
                     Text("Frost dates estimated from the hardiness zone")
                         .font(HerbFont.bodyItalic(size: 12))
                         .foregroundStyle(HerbColor.inkSoft)
+                    // App Review §5.1.1(i): the privacy policy must be reachable in the app.
+                    Link("Privacy Policy", destination: URL(string: "https://seedkeep.app/privacy")!)
+                    Link("Support", destination: URL(string: "https://seedkeep.app/support")!)
                 } header: {
                     Rubric(text: "about")
                 }

@@ -25,9 +25,7 @@
 			<span class="dot" aria-hidden="true">·</span>
 			<a href="/support">Support</a>
 			<span class="dot" aria-hidden="true">·</span>
-			<a href="https://github.com/TaylorFinklea/seedkeep-ios">iOS source</a>
-			<span class="dot" aria-hidden="true">·</span>
-			<a href="https://github.com/TaylorFinklea/seedkeep-server">Server source</a>
+			<a href="https://github.com/TaylorFinklea/seedkeep-ios">Source</a>
 			<span class="dot" aria-hidden="true">·</span>
 			<a href="mailto:taylor.finklea@gmail.com">taylor.finklea@gmail.com</a>
 		</p>

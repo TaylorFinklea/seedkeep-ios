@@ -2,7 +2,7 @@
   <title>Privacy Policy — Seedkeep</title>
   <meta
     name="description"
-    content="Seedkeep stores only what you enter. Catalog photos are shared so other households scanning the same packet get an instant match. No analytics, no trackers, no third-party SDKs."
+    content="Seedkeep has no server and no account. Your garden stays in your iCloud, the app sends nothing to the developer, and there are no analytics, trackers, or ads."
   />
 </svelte:head>
 
@@ -12,59 +12,48 @@
   <h1>Privacy Policy</h1>
 
   <p class="meta">
-    <strong>Effective:</strong> August 22, 2026 ·
-    <strong>App:</strong> Seedkeep (iOS) ·
+    <strong>Effective:</strong> October 20, 2026 ·
+    <strong>App:</strong> Seedkeep (iPhone, iPad, and Mac) ·
     <strong>Bundle ID:</strong> <code>app.seedkeep.ios</code> ·
     <strong>Developer:</strong> Taylor Finklea
   </p>
 
   <h2>The short version</h2>
   <p>
-    Seedkeep stores your garden records and photos in your iCloud garden. Its
-    service stores the account information needed for Sign in with Apple, your
-    manually entered home ZIP and derived coarse location, and packet scans and
-    corrections contributed to the shared seed catalog. Seedkeep has no
-    advertising, tracking, analytics, or telemetry, and does not sell your data.
-    The sections below explain the services that receive data to provide these
-    features.
+    Seedkeep has no server and no Seedkeep account. The app uses your iCloud
+    account: your garden records and photos are stored in your private iCloud
+    database (CloudKit) and on your devices, and the developer cannot access
+    them. Seedkeep has no advertising, tracking, analytics, or telemetry, and
+    does not sell your data. Packet scans are read on your device with the Free
+    option, or, if you choose BYOK with your own API key, the packet photos go
+    directly from your device to the AI provider you choose. The sections below
+    explain each part.
   </p>
 
   <h2>What we collect</h2>
   <ul>
     <li>
-      <strong>Account information</strong> — your Sign in with Apple identifier, Seedkeep
-      account and household identifiers, and the name or email Apple provides if you
-      choose to share them. The Seedkeep service uses this information to authenticate
-      you and operate your account.
+      <strong>iCloud record identifier</strong> — the app reads the iCloud user record
+      identifier Apple provides, an opaque ID specific to Seedkeep's iCloud container,
+      so it can recognize which garden is yours. The identifier is kept on your device.
     </li>
     <li>
       <strong>Garden content</strong> — seed inventory, storage locations, tags, notes,
       garden beds, planting events, journal entries, checklists, and seed or journal
-      photos. This content is stored in your private CloudKit garden and, when you
-      share a garden, the associated CloudKit share.
+      photos. This content is stored in your private iCloud database (CloudKit) and
+      on your devices. The developer cannot access it.
     </li>
     <li>
-      <strong>Packet scans and catalog contributions</strong> — the front-and-back
-      packet photos, barcode when available, extracted packet fields, model identifier,
-      and confidence values. The app submits these through your authenticated account
-      to Seedkeep's shared catalog service.
+      <strong>Packet photos and scan results</strong> — the front-and-back packet
+      photos and the fields read from them. The result fills in a new seed, and both
+      photos are saved as that seed's photos in your iCloud garden.
     </li>
     <li>
-      <strong>Catalog corrections</strong> — suggested field changes, explanatory
-      notes, and their review status. These are stored with your account so you can
-      see the outcome in the app.
-    </li>
-    <li>
-      <strong>Coarse home location</strong> — the 5-digit US ZIP you enter in You
-      → Settings → Home location, plus the coarse coordinates, USDA zone, and frost
-      dates derived from it. Seedkeep uses these for planting guidance and WeatherKit
-      forecasts.
-    </li>
-    <li>
-      <strong>Service-operation data</strong> — hosting providers and service logs
-      may process an IP address, request time, endpoint, and error details to deliver
-      requests, secure the service, prevent abuse, and diagnose failures. Seedkeep
-      does not use this information for advertising or cross-app tracking.
+      <strong>Home location</strong> — the 5-digit US ZIP code you may enter under
+      You → Settings → Home location. The app looks it up in a table bundled in the
+      app, which gives the USDA plant hardiness zone, approximate coordinates of the
+      ZIP area, and estimated frost dates. The lookup makes no network request, and
+      the ZIP is stored only on that device.
     </li>
   </ul>
 
@@ -72,138 +61,137 @@
   <ul>
     <li>
       Seedkeep does not use analytics, telemetry, crash-reporting SDKs,
-      advertising IDs, or fingerprinting.
+      advertising IDs, or fingerprinting, and does not track you.
     </li>
     <li>
-      The current app has no advertising, subscription, in-app purchase, or
-      hosted AI tier.
+      The app has no advertising, in-app purchases, subscriptions, or hosted AI.
     </li>
     <li>
-      Seedkeep does not request Core Location and does not collect precise,
-      continuous, or background location. Location comes only from the ZIP you
-      enter.
+      Seedkeep does not request your device's location (no Core Location). The
+      only location it uses is the ZIP code you enter.
     </li>
     <li>
-      Seedkeep does not read your contacts, calendars, or microphone. It
-      accesses the camera or photos only when you choose to capture or select an
-      image for a Seedkeep feature.
+      Seedkeep accesses the camera or photo library only when you choose to take
+      or pick a photo.
     </li>
     <li>
       Seedkeep does not sell, rent, or trade your data, and does not use it to
-      train Seedkeep-owned AI models.
+      train AI models.
     </li>
   </ul>
 
-  <h2>AI extraction</h2>
+  <h2>Packet scanning</h2>
   <p>
-    The current app offers two ways to extract packet information from photos:
+    On iPhone and iPad, you can scan a packet with the camera. The app offers
+    two options:
   </p>
   <ul>
     <li>
-      <strong>Free (on-device)</strong> — Apple Vision and Foundation Models perform
-      the extraction on your device. Afterward, the app submits the front-and-back
-      packet photos and structured result to Seedkeep's authenticated shared-catalog
-      service.
+      <strong>Free (on-device)</strong> — Apple Vision reads the packet's text on
+      your device and, when it is available, Apple's on-device foundation model sorts
+      it into fields. Without the model, some fields may stay empty. The app sends
+      nothing to the developer.
     </li>
     <li>
-      <strong>BYOK (bring your own key)</strong> — you choose Anthropic or OpenAI
-      and save your API key in the device Keychain. Seedkeep sends the packet photos
-      directly from your device to that provider for extraction; the key never reaches
-      Seedkeep's service. The provider's terms and privacy policy govern that request.
-      The app then submits the same packet photos and structured result to Seedkeep's
-      shared catalog.
+      <strong>BYOK (bring your own key)</strong> — you choose Anthropic or
+      OpenAI and save your own API key in the device Keychain. The packet photos
+      are sent directly from your device to that provider with that key. The app
+      sends nothing to the developer. The provider may keep requests according
+      to your API agreement and settings; see the
+      <a href="https://www.anthropic.com/legal/privacy">Anthropic</a> and
+      <a href="https://openai.com/policies/privacy-policy">OpenAI</a> privacy policies.
+      Deleting content in Seedkeep does not delete records the provider holds. To
+      stop BYOK uploads, choose Free under You → Settings → AI provider and clear
+      your keys under You → Settings → API keys.
     </li>
   </ul>
-
-  <h2>Shared catalog</h2>
   <p>
-    When you scan a barcode, Seedkeep first checks whether the shared catalog
-    already knows the packet. A new extraction contributes the packet photos,
-    structured fields, and confidence data so future scans can match it. Catalog
-    submissions are authenticated and are conservatively treated as linked to
-    your account for privacy disclosure, even though the catalog shown to other
-    users does not display the contributor's identity.
+    With either option, the result fills in a new seed and both packet photos
+    are saved as that seed's photos in your iCloud garden.
   </p>
+
+  <h2>Earlier test versions</h2>
   <p>
-    A shared catalog entry may remain after account deletion because it has
-    become reusable catalog data rather than part of a household garden. Contact
-    us if you have a concern about a specific catalog contribution.
+    Test versions released before October 2026 used a Seedkeep server for Sign
+    in with Apple accounts, a shared seed catalog of packet photos and extracted
+    fields contributed by users, home ZIP lookup, and account deletion. That
+    service has been shut down, and the current app does not use it. If you used
+    an earlier version and want data held by that service deleted, email
+    <a href="mailto:taylor.finklea@gmail.com">taylor.finklea@gmail.com</a>.
   </p>
 
   <h2>Household sharing</h2>
   <p>
-    Garden sharing uses Apple's CloudKit sharing system. From You → Settings, an
-    owner can choose “Share garden via iCloud” and send Apple's invitation. An
-    accepted participant can view and edit the shared seed library, garden plan,
-    journal, and photos. A participant can choose “Leave shared garden”; the
-    owner can manage the share through Apple's sharing controller. CloudKit
-    sharing does not send the garden's record contents to the Seedkeep service.
+    Garden sharing uses Apple's iCloud sharing. An owner can choose “Share
+    garden via iCloud” under You → Settings and send Apple's invitation.
+    Accepted participants can view and edit the shared garden. A participant can
+    leave with “Leave shared garden” under You → Settings. The owner manages the
+    share through Apple's sharing controls. Shared garden data stays in iCloud
+    under the owner's account.
   </p>
 
   <h2>Location, WeatherKit, and notifications</h2>
   <p>
-    When you save a home ZIP, the Seedkeep service resolves it to coarse
-    coordinates, a USDA zone, and frost dates. The app caches those values and
-    uses the coordinates to request a local forecast from Apple WeatherKit.
-    Seedkeep does not request your device's location. Notifications are
-    scheduled locally on your device for features you enable; the current app
-    does not use remote push notifications.
+    Planting windows are computed on your device from each seed's growing
+    information, the hardiness zone, and the frost dates for your home ZIP code.
+    The coordinates for that ZIP area are used to request a local forecast from
+    Apple WeatherKit. Seedkeep does not request your device's location.
+  </p>
+  <p>
+    Notifications, such as frost, heat, and watering reminders, are scheduled
+    locally on your device. The app does not use remote push notifications.
   </p>
 
   <h2>Children</h2>
   <p>
-    Seedkeep is rated 4+ and contains no objectionable content. We do not
-    knowingly collect data from children under 13. If you're a parent and
-    discover your child has created a Seedkeep account, email <a
-      href="mailto:taylor.finklea@gmail.com">taylor.finklea@gmail.com</a
-    >.
+    Seedkeep is rated 4+. The app does not send data to the developer, from
+    anyone, including children under 13. If you have a question about children's
+    privacy, email
+    <a href="mailto:taylor.finklea@gmail.com">taylor.finklea@gmail.com</a>.
   </p>
 
   <h2>Data retention &amp; deletion</h2>
   <p>
-    Garden content remains in its CloudKit garden until you delete the content,
-    leave the share, or complete account deletion. To delete your account in the
-    app, choose You → Delete account and confirm “Delete my account.” Opening
-    the flow alone deletes nothing. The resumable flow handles your CloudKit
-    role before deleting the Seedkeep account last:
+    Seedkeep does not keep your garden on a Seedkeep server, so you delete data
+    in the app or in iCloud:
   </p>
   <ul>
     <li>
-      <strong>Participant</strong> — leaves the accepted share without deleting the
-      owner's or other participants' garden.
+      <strong>Individual items</strong> — deleting a seed, bed, or journal entry in
+      the app hides it on all your synced devices. The record stays in your iCloud
+      garden, marked as deleted, and photos of deleted seeds are not yet removed from
+      iCloud.
     </li>
     <li>
-      <strong>Solo owner</strong> — deletes the owned CloudKit garden and then the
-      Seedkeep account.
+      <strong>The app</strong> — deleting Seedkeep from a device removes the garden
+      copy stored on that device. It does not delete your iCloud garden. BYOK API
+      keys saved in the Keychain can remain after the app is removed; clear them first
+      under You → Settings → API keys.
     </li>
     <li>
-      <strong>Owner with accepted participants</strong> — must hand the garden to
-      an existing participant and verify the copy before the original garden and departing
-      account can be deleted.
+      <strong>Seedkeep data in your iCloud account</strong> — on iPhone or iPad, open
+      the device's Settings app and go to [your name] → iCloud → Manage Storage (or
+      Storage), choose Seedkeep, and tap Delete Data. On Mac, go to System Settings
+      → [your name] → iCloud → Manage, and choose Seedkeep. This does not delete a
+      garden that someone else owns and shared with you. First delete the Seedkeep
+      app from all your devices, including this one: a device that still has the app
+      and unsynced changes can upload them again.
     </li>
   </ul>
   <p>
-    Shared catalog entries may remain as described above. Minimal deletion
-    receipts and operational records may also be retained when needed to verify
-    completion, prevent replay or abuse, comply with law, or resolve a support
-    request; they cannot restore a deleted garden or account.
+    If you email support, the developer receives what you send, such as your
+    email address, device details, and screenshots, and uses it only to answer
+    you. Ask at any time to have it deleted.
   </p>
+  <p>For data from earlier test versions, see “Earlier test versions” above.</p>
 
   <h2>Where data lives</h2>
   <p>
-    Garden records and garden photos live in Apple's CloudKit under your private
-    database or an accepted share. The official Seedkeep service runs on Fly.io
-    in the United States; its Postgres database stores account and catalog
-    records, and Cloudflare R2 stores shared packet images. Network requests use
-    TLS. Apple, Fly.io, Cloudflare, and—only when you choose BYOK—Anthropic or
-    OpenAI process data as service providers under their own terms and privacy
+    Garden records and photos live in your private iCloud database (CloudKit)
+    and on your devices. A shared garden stays in iCloud under the owner's
+    account. Apple provides iCloud and WeatherKit. Anthropic or OpenAI process
+    packet photos only when you choose BYOK, under their own terms and privacy
     policies.
-  </p>
-  <p>
-    Seedkeep is open-source and can connect to a separately operated Seedkeep
-    server. If you choose a server other than the official service, that
-    server's operator controls its server-side data practices; this policy
-    covers the official Seedkeep service.
   </p>
 
   <h2>Changes</h2>
