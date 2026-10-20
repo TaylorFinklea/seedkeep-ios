@@ -323,6 +323,17 @@ public final class AppEnvironment {
     @ObservationIgnored private var cloudCoordinator: HouseholdCloudCoordinator?
     @ObservationIgnored private var cloudCoordinatorKey: String?
 
+    /// N1 (parent-owned seam): CloudKit use (coordinator creation, sync, saves, photo recovery,
+    /// sharing) requires an iCloud identity confirmed this session and no paused account deletion.
+    /// Slice A applies it at those call sites; slice B maintains `pausedDeletionCheckpointCount`.
+    var canUseCloudKit: Bool {
+        auth.isIdentityVerified && pausedDeletionCheckpointCount == 0
+    }
+
+    /// Account-deletion checkpoints left from before the server was retired. While any exist,
+    /// CloudKit stays off so a deleted garden is never re-provisioned (N1 quarantine).
+    private(set) var pausedDeletionCheckpointCount = 0
+
     /// Read-only access to the live CloudKit coordinator for the Settings diagnostics panel
     /// (nil until the first sync after the flag is toggled on). Its @Observable state drives the UI.
     var cloudKit: HouseholdCloudCoordinator? { cloudCoordinator }

@@ -49,6 +49,11 @@ public final class AuthController {
 
     public private(set) var state: State = .signedOut
 
+    /// N1 (parent-owned seam): false while `.signedIn` was entered from a cached identity that
+    /// iCloud has not confirmed yet (offline or transient failure). Local use continues; CloudKit
+    /// use waits (`AppEnvironment.canUseCloudKit`) until a later resolution confirms the account.
+    public private(set) var isIdentityVerified = true
+
     private let client: SeedkeepClient
     private let tokenStore: any TokenStoring
     private let defaults: UserDefaults
