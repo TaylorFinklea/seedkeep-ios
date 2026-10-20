@@ -33,13 +33,20 @@ struct LiveCloudIdentityProvider: CloudIdentityProviding {
         return try await Self.bounded { try await container.userRecordID().recordName }
     }
 
+    /// A Seedkeep garden zone. The live CloudKit spike checks (`SeedkeepSpikeChecks`, debug builds)
+    /// left `seedkeep-spike-*` zones in the Production container; they are test fixtures, never
+    /// gardens (real household IDs are server IDs or UUIDs), so they are never offered or adopted.
+    static func isGardenZoneName(_ zoneName: String) -> Bool {
+        zoneName.hasPrefix("seedkeep-") && !zoneName.hasPrefix("seedkeep-spike-")
+    }
+
     func listGardenZones(_ scope: GardenDatabaseScope) async throws -> [GardenZoneSummary] {
         let database = scope == .owned ? container.privateCloudDatabase : container.sharedCloudDatabase
         // A listing failure throws: it must never read as "no gardens".
         let zoneIDs = try await Self.bounded {
             try await database.allRecordZones()
                 .map(\.zoneID)
-                .filter { $0.zoneName.hasPrefix("seedkeep-") }
+                .filter { Self.isGardenZoneName($0.zoneName) }
         }
         guard !zoneIDs.isEmpty else { return [] }
 

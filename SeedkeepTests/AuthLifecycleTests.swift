@@ -1210,6 +1210,18 @@ struct AuthLifecycleTests {
 
     // MARK: - Deterministic household
 
+    @Test("spike-check test zones are never gardens; real garden zones are")
+    func spikeZonesAreNotGardens() {
+        #expect(LiveCloudIdentityProvider.isGardenZoneName("seedkeep-hh_abc123"))
+        #expect(LiveCloudIdentityProvider.isGardenZoneName(
+            "seedkeep-\(DeterministicHouseholdID.make(userRecordName: Self.userA))"))
+        for spike in ["seedkeep-spike-asset-engine", "seedkeep-spike-merge", "seedkeep-spike-roundtrip",
+                      "seedkeep-spike-share", "seedkeep-spike-share-handoff"] {
+            #expect(!LiveCloudIdentityProvider.isGardenZoneName(spike), "\(spike)")
+        }
+        #expect(!LiveCloudIdentityProvider.isGardenZoneName("com.apple.coredata.cloudkit.zone"))
+    }
+
     @Test("DeterministicHouseholdID is stable, UUID-shaped and lowercase")
     func deterministicHouseholdID() {
         let id = DeterministicHouseholdID.make(userRecordName: "_abc123")
