@@ -43,6 +43,7 @@ struct SeedsTableView: View {
     @State private var isSelecting = false
     @State private var showingAdd = false
     @State private var showingScan = false
+    @State private var showingRandomPick = false
     @State private var scanPrefill: AddSeedView.Prefill?
     @State private var showingExporter = false
     @State private var exportDocument: SeedCSVDocument?
@@ -116,11 +117,22 @@ struct SeedsTableView: View {
         .sheet(isPresented: $showingAdd) {
             AddSeedView()
         }
+        // N2: the random pick, which the Library offers on compact iPhone. Here it opens in a sheet.
+        .sheet(isPresented: $showingRandomPick) {
+            RandomPickView(showsClose: true)
+        }
+        .toolbar {
+            ToolbarItem(placement: .platformTrailing) {
+                Button { showingRandomPick = true } label: { Image(systemName: "shuffle") }
+                    .accessibilityLabel("Pick a random seed")
+                    .help("Pick a random seed")
+            }
+        }
         #if os(iOS)
         // Packet scanning, as the Library offers it: the Seeds table replaces the Library on
         // regular-width iPad, so it must keep the scan-and-prefill entry.
         .toolbar {
-            if !ServerRetirement.isRetired && PlatformCapabilities.supportsCameraScanning {
+            if PlatformCapabilities.supportsCameraScanning {
                 ToolbarItem(placement: .platformTrailing) {
                     Button { showingScan = true } label: { Image(systemName: "viewfinder") }
                         .accessibilityLabel("Scan packet")
@@ -130,12 +142,8 @@ struct SeedsTableView: View {
         .fullScreenCover(isPresented: $showingScan) {
             ScanFlow { result in
                 switch result {
-                case .catalogHit(let barcode, let cat):
-                    scanPrefill = .catalog(barcode: barcode, cat)
-                case .extracted(let extraction, let barcode):
-                    scanPrefill = .extraction(extraction, barcode: barcode)
-                case .preExtracted(let pre, let barcode):
-                    scanPrefill = .preExtraction(pre, barcode: barcode)
+                case .localExtraction(let scanID, let fields, let binding):
+                    scanPrefill = .localExtraction(scanID: scanID, fields: fields, binding: binding)
                 }
             }
         }
@@ -176,9 +184,6 @@ struct SeedsTableView: View {
             UndoEvents.names.map { NotificationCenter.default.publisher(for: $0, object: undoTarget) }
         )) { _ in
             undoRevision += 1
-        }
-        .task(id: catalogKey) {
-            await refreshVerdicts()
         }
         .onAppear {
             // The shell owns the window's undo manager; only fill it in when used without one.
@@ -257,21 +262,6 @@ struct SeedsTableView: View {
         )
     }
 
-    private var catalogKey: String {
-        rows.compactMap(\.catalogID).sorted().joined(separator: ",")
-    }
-
-    /// Fetches verdicts for every catalog seed in the household, 200 ids per request, the most
-    /// `bulkRefresh` accepts in one call.
-    private func refreshVerdicts() async {
-        guard !ServerRetirement.isRetired else { return }
-        let ids = Array(Set(rows.compactMap(\.catalogID))).sorted()
-        for start in stride(from: 0, to: ids.count, by: 200) {
-            let chunk = Array(ids[start..<min(start + 200, ids.count)])
-            await appEnv.recommendations.bulkRefresh(catalogSeedIDs: chunk)
-        }
-    }
-
     // MARK: - Content
 
     @ViewBuilder
@@ -316,12 +306,10 @@ struct SeedsTableView: View {
                 locationCell(row)
             }
             .width(min: 110, ideal: 150)
-            if !ServerRetirement.isRetired {
-                TableColumn("Window", value: \.verdictLabel) { row in
-                    windowCell(row)
-                }
-                .width(min: 120, ideal: 150)
+            TableColumn("Window", value: \.verdictLabel) { row in
+                windowCell(row)
             }
+            .width(min: 120, ideal: 150)
         }
     }
 
@@ -364,12 +352,10 @@ struct SeedsTableView: View {
                 textCell(row.tagsText)
             }
             .width(min: 100, ideal: 160)
-            if !ServerRetirement.isRetired {
-                TableColumn("Window", value: \.verdictLabel) { row in
-                    windowCell(row)
-                }
-                .width(min: 110, ideal: 140)
+            TableColumn("Window", value: \.verdictLabel) { row in
+                windowCell(row)
             }
+            .width(min: 110, ideal: 140)
         }
         .modifier(DeleteKeyCommand { requestDeleteFromKeyboard() })
     }
@@ -680,6 +666,8 @@ struct SeedsTableView: View {
                 searchFocused = true
             case .deleteSelection:
                 requestDeleteFromKeyboard()
+            case .randomPick:
+                showingRandomPick = true
             }
         }
     }
@@ -732,10 +720,7 @@ struct SeedsTableView: View {
             selection: selection,
             sortOrder: sortOrder
         )
-        exportDocument = SeedCSVDocument(data: SeedCSV.data(
-            for: exported,
-            includeRecommendationWindow: !ServerRetirement.isRetired
-        ))
+        exportDocument = SeedCSVDocument(data: SeedCSV.data(for: exported))
         exportName = SeedCSV.baseFileName(on: Date())
         showingExporter = true
     }

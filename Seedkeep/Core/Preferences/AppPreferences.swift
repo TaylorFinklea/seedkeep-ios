@@ -44,9 +44,9 @@ public final class AppPreferences {
         public var helpText: String {
             switch self {
             case .free:
-                return "Apple Foundation Models extract packet info on-device. No network calls, no cost. Requires iOS 26+ for the AI step; older devices fall back to manual entry."
+                return "Extraction runs on your device. Saved seeds sync through iCloud."
             case .byok:
-                return "Same on-device flow but you can configure your own OpenAI or Anthropic API key for higher accuracy. Keys live in the device Keychain and never reach our server."
+                return "Packet photos are sent to your AI provider with your own key. Your key is stored only on this device and sent only to your AI provider."
             case .hosted:
                 return "Server runs Anthropic vision + reviewer for the highest accuracy. Requires a Hosted subscription via the App Store."
             }
@@ -61,6 +61,8 @@ public final class AppPreferences {
         static let cachedUsdaZone = "seedkeep.location.usdaZone"
         static let cachedLatitude = "seedkeep.location.latitude"
         static let cachedLongitude = "seedkeep.location.longitude"
+        static let avgLastFrost = "seedkeep.location.avgLastFrost"
+        static let avgFirstFrost = "seedkeep.location.avgFirstFrost"
     }
 
     private let defaults: UserDefaults
@@ -80,6 +82,8 @@ public final class AppPreferences {
         self._cachedUsdaZone = defaults.string(forKey: Key.cachedUsdaZone)
         self._cachedLatitude = defaults.object(forKey: Key.cachedLatitude) as? Double
         self._cachedLongitude = defaults.object(forKey: Key.cachedLongitude) as? Double
+        self._avgLastFrost = defaults.string(forKey: Key.avgLastFrost)
+        self._avgFirstFrost = defaults.string(forKey: Key.avgFirstFrost)
     }
 
     private var _serverURLOverride: URL?
@@ -149,9 +153,8 @@ public final class AppPreferences {
         }
     }
 
-    /// The USDA hardiness zone string resolved from `homeZip` by the server
-    /// (e.g. "7b"). Cached locally so the UI can display it without a
-    /// round-trip on launch.
+    /// The USDA hardiness zone string resolved from `homeZip` by the bundled
+    /// climate table (e.g. "7b").
     private var _cachedUsdaZone: String?
     public var cachedUsdaZone: String? {
         get { _cachedUsdaZone }
@@ -165,11 +168,11 @@ public final class AppPreferences {
         }
     }
 
-    // MARK: - Cached coordinates (resolved from homeZip by the server)
+    // MARK: - Cached coordinates (resolved from homeZip by the bundled climate table)
 
-    /// Latitude of the home location, resolved from the ZIP by the server and
-    /// cached so `WeatherKitRefiner` can request a local forecast without a
-    /// network round-trip.  nil until the user has saved a ZIP at least once.
+    /// Latitude of the home location, resolved from the ZIP by the bundled
+    /// climate table and cached so `WeatherKitRefiner` can request a local
+    /// forecast.  nil until the user has saved a ZIP at least once.
     private var _cachedLatitude: Double?
     public var cachedLatitude: Double? {
         get { _cachedLatitude }
@@ -197,4 +200,73 @@ public final class AppPreferences {
         }
     }
 
+    // MARK: - Cached frost dates (resolved from homeZip by the bundled climate table)
+
+    /// Average last spring frost for the home location, "MM-DD". nil until a
+    /// ZIP is saved, or for a ZIP saved before frost dates were cached.
+    private var _avgLastFrost: String?
+    public var avgLastFrost: String? {
+        get { _avgLastFrost }
+        set {
+            _avgLastFrost = newValue
+            if let v = newValue {
+                defaults.set(v, forKey: Key.avgLastFrost)
+            } else {
+                defaults.removeObject(forKey: Key.avgLastFrost)
+            }
+        }
+    }
+
+    /// Average first autumn frost for the home location, "MM-DD" (see `avgLastFrost`).
+    private var _avgFirstFrost: String?
+    public var avgFirstFrost: String? {
+        get { _avgFirstFrost }
+        set {
+            _avgFirstFrost = newValue
+            if let v = newValue {
+                defaults.set(v, forKey: Key.avgFirstFrost)
+            } else {
+                defaults.removeObject(forKey: Key.avgFirstFrost)
+            }
+        }
+    }
+
+    /// The home climate built from the cached location fields, or nil while any of them is missing.
+    var homeClimate: HomeClimate? {
+        guard let zip = homeZip,
+              let zone = cachedUsdaZone,
+              let latitude = cachedLatitude,
+              let longitude = cachedLongitude,
+              let lastFrost = avgLastFrost,
+              let firstFrost = avgFirstFrost else { return nil }
+        return HomeClimate(
+            zip: zip,
+            latitude: latitude,
+            longitude: longitude,
+            usdaZone: zone,
+            avgLastFrost: lastFrost,
+            avgFirstFrost: firstFrost
+        )
+    }
+
+    /// Caches every home-location field from a climate lookup.
+    func saveHomeClimate(_ climate: HomeClimate) {
+        homeZip = climate.zip
+        cachedUsdaZone = climate.usdaZone
+        cachedLatitude = climate.latitude
+        cachedLongitude = climate.longitude
+        avgLastFrost = climate.avgLastFrost
+        avgFirstFrost = climate.avgFirstFrost
+    }
+
+    /// Fills the frost dates of a saved ZIP that predates them. The ZIP is unchanged, so the cached
+    /// coordinates stay as they are. The table lookup runs off the main actor.
+    func backfillFrostDates() async {
+        guard let zip = homeZip, avgLastFrost == nil || avgFirstFrost == nil else { return }
+        let climate = await Task.detached { ClimateLookup.climate(forZip: zip) }.value
+        // The ZIP may have changed while the lookup ran; only fill the ZIP that was asked for.
+        guard let climate, homeZip == zip else { return }
+        avgLastFrost = climate.avgLastFrost
+        avgFirstFrost = climate.avgFirstFrost
+    }
 }

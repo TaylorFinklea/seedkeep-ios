@@ -4,17 +4,14 @@ import SeedkeepKit
 
 /// Manual-entry sheet for adding a new seed packet. Used both as the
 /// "+" tap (no prefill) and as the post-scan confirmation screen
-/// (prefilled from a catalog hit or AI extraction; see `Prefill`).
+/// (prefilled from an on-device or BYOK extraction; see `Prefill`).
 struct AddSeedView: View {
-    /// Pre-fill source. `.catalog` populates fields from a confirmed
-    /// catalog match; `.extraction` populates them from server-side AI
-    /// vision (Hosted tier); `.preExtraction` populates them from
-    /// on-device extraction (Free / BYOK tier). All three render a
-    /// review banner so the user knows what they're spot-checking.
+    /// Pre-fill source. `.localExtraction` populates the fields from an
+    /// on-device (Free) or BYOK extraction. The scan's two photos are staged
+    /// under `scanID` and attach to the seed when it saves (N2).
     enum Prefill: Equatable {
-        case catalog(barcode: String?, CatalogSeedDTO)
-        case extraction(WireResponses.ExtractionResult, barcode: String?)
-        case preExtraction(WireResponses.PreExtractedResult, barcode: String?)
+        case localExtraction(scanID: UUID, fields: WireResponses.ExtractionFields,
+                             binding: ScanPhotoStaging.ScanBinding?)
     }
 
     let prefill: Prefill?
@@ -45,7 +42,11 @@ struct AddSeedView: View {
     @State private var notes: String = ""
     @State private var source: SeedSource = .store
 
-    @State private var catalogID: String?
+    /// Chooses the seed ID up front and creates the seed once, so a retry after a partial save
+    /// finishes that seed and never creates a second one.
+    @State private var saveSession = SeedSaveSession()
+    /// Mirrors `saveSession.seedCreated` for the view (the session is not observed).
+    @State private var seedCreated = false
     @State private var saving = false
     @State private var saveError: String?
     @State private var didApplyPrefill = false
@@ -159,18 +160,37 @@ struct AddSeedView: View {
                 }
             }
             .vellumForm()
+            // Once the seed exists, its details are fixed; only Retry (finish the save) remains.
+            .disabled(seedCreated)
             .navigationTitle(prefill == nil ? "Add seed" : "Confirm seed")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .onAppear { applyPrefillIfNeeded() }
+            .onAppear {
+                // The save belongs to the account and garden the scan started under, or, for a
+                // manual add, the one the sheet opens under (V1). A scan without a binding never
+                // saves: the session reports a scope change.
+                if case .localExtraction(_, _, let scanBinding)? = prefill {
+                    saveSession.bind(scanBinding)
+                } else {
+                    saveSession.bind(appEnv.scanBinding)
+                }
+                applyPrefillIfNeeded()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(saving)
+                    Button("Cancel") {
+                        // An unsaved scan's staged photos go with it. Once the seed exists they stay,
+                        // so the photos can still attach at the next launch.
+                        if !seedCreated, let scanID {
+                            ScanPhotoStaging.discard(scanID: scanID)
+                        }
+                        dismiss()
+                    }
+                    .disabled(saving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
+                    Button(seedCreated ? "Retry" : "Save") { Task { await save() } }
                         .disabled(saving || !canSave)
                 }
             }
@@ -191,11 +211,15 @@ struct AddSeedView: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The scan whose photos attach to this seed, when the sheet was opened from a scan.
+    private var scanID: UUID? {
+        if case .localExtraction(let scanID, _, _)? = prefill { return scanID }
+        return nil
+    }
+
     /// Surfaces the horticultural data the extractor pulled out of the
-    /// packet photos so the user can review *what* will land in the
-    /// global catalog before they hit Save. Read-only — these fields
-    /// belong to the catalog entry, not the per-household seed, and
-    /// editing the catalog is a Phase 2 moderation flow.
+    /// packet photos so the user can review it before they hit Save. It is
+    /// saved with this seed as its growing info (N2).
     @ViewBuilder
     private var extractedGrowingInfoSection: some View {
         if let fields = extractedFields, Self.hasAnyExtracted(fields) {
@@ -239,16 +263,15 @@ struct AddSeedView: View {
             } header: {
                 Rubric(text: "growing info (extracted)")
             } footer: {
-                Text("Surfaced from the packet. Will be added to the shared catalog so other households who scan the same packet get an instant match.")
+                Text("Read from the packet photos. Saved with this seed.")
             }
         }
     }
 
     private var extractedFields: WireResponses.ExtractionFields? {
         switch prefill {
-        case .extraction(let result, _): return result.extraction
-        case .preExtraction(let result, _): return result.extraction
-        case .catalog, .none: return nil
+        case .localExtraction(_, let fields, _): return fields
+        case .none: return nil
         }
     }
 
@@ -333,23 +356,12 @@ struct AddSeedView: View {
     @ViewBuilder
     private var prefillBanner: some View {
         switch prefill {
-        case .catalog:
-            HerbBanner(
-                severity: .success,
-                title: "Pre-filled from catalog",
-                message: "Review and confirm."
-            )
-        case .extraction(let result, _):
+        case .localExtraction(_, let fields, _):
             HerbBanner(
                 severity: .info,
-                title: "AI-extracted from photos",
-                message: "Please review. Reviewer score: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)"
-            )
-        case .preExtraction(let result, _):
-            HerbBanner(
-                severity: .info,
-                title: "Extracted on-device",
-                message: "Please review. Self-confidence: \(String(format: "%.2f", result.review.score)) — \(result.decision.status)"
+                title: "Read from the packet",
+                message: fields.self_confidence.map { "Please review. Self-confidence: \(String(format: "%.2f", $0))" }
+                    ?? "Please review."
             )
         case .none:
             EmptyView()
@@ -360,24 +372,11 @@ struct AddSeedView: View {
         guard !didApplyPrefill, let prefill else { return }
         didApplyPrefill = true
         switch prefill {
-        case .catalog(_, let cat):
-            name = cat.common_name
-            variety = cat.variety ?? ""
-            company = cat.company ?? ""
-            notes = cat.instructions ?? ""
-            catalogID = cat.id
-        case .extraction(let result, _):
-            name = result.extraction.common_name ?? ""
-            variety = result.extraction.variety ?? ""
-            company = result.extraction.company ?? ""
-            notes = result.extraction.instructions ?? ""
-            catalogID = result.catalog_seed_id
-        case .preExtraction(let result, _):
-            name = result.extraction.common_name ?? ""
-            variety = result.extraction.variety ?? ""
-            company = result.extraction.company ?? ""
-            notes = result.extraction.instructions ?? ""
-            catalogID = result.catalog_seed_id
+        case .localExtraction(_, let fields, _):
+            name = fields.common_name ?? ""
+            variety = fields.variety ?? ""
+            company = fields.company ?? ""
+            notes = fields.instructions ?? ""
         }
     }
 
@@ -386,14 +385,12 @@ struct AddSeedView: View {
         saveError = nil
         defer { saving = false }
 
-        guard case .signedIn(_, let household) = appEnv.auth.state else {
+        guard case .signedIn = appEnv.auth.state else {
             saveError = "Not signed in."
             return
         }
 
-        let activeGardenHouseholdID = appEnv.activeGardenHouseholdID ?? household.id
         let input = SeedkeepClient.CreateSeedInput(
-            catalog_id: catalogID,
             state: state,
             packet_count: state == .wishlist ? 0 : packetCount,
             location_id: locationID,
@@ -407,72 +404,51 @@ struct AddSeedView: View {
         )
 
         do {
-            let local = try appEnv.sync.enqueueCreateSeed(input, householdID: activeGardenHouseholdID)
-            if let snapshot = buildGrowingInfoSnapshot(), snapshot.hasAny {
-                try? appEnv.sync.setLocalGrowingInfo(seedID: local.id, snapshot: snapshot)
-            }
-            if let inferredType = inferredCustomType() {
-                try? appEnv.sync.setLocalCustomType(seedID: local.id, type: inferredType)
-            }
+            // A retry after a partial save finishes the seed that exists. It never creates a second one.
+            defer { seedCreated = saveSession.seedCreated }
+            try await saveSession.save(
+                input,
+                scanID: scanID,
+                snapshot: buildGrowingInfoSnapshot(),
+                customType: inferredCustomType(),
+                writer: appEnv.sync,
+                current: { [appEnv] in appEnv.scanBinding }
+            )
             // Dismiss immediately — the seed is in local SwiftData, the user
-            // sees it in Library right away, and the server push happens
-            // in the background. Previously this `await`-ed flushPending()
-            // which serially drains EVERY queued write, causing the
-            // confirm-seed screen to hang multi-seconds whenever older
-            // pending writes were still in the queue (logged 7945ms freeze).
-            Task { try? await appEnv.sync.flushPending() }
+            // sees it in Library right away. The server push is retired (N2), so there is nothing to flush.
+            if !ServerRetirement.isRetired {
+                Task { try? await appEnv.sync.flushPending() }
+            }
+            dismiss()
+        } catch is SeedSaveSession.ScopeChanged {
+            // The account or garden changed under the sheet: its scan is discarded, and it closes.
+            appEnv.surfaceMessage(ScanPhotoStaging.scopeChangedNotice)
             dismiss()
         } catch {
-            saveError = error.localizedDescription
+            saveError = !saveSession.seedCreated
+                ? error.localizedDescription
+                : "The seed is saved, but part of it is not: \(error.localizedDescription). Tap Retry to finish."
         }
     }
 
     /// Default type guess for a freshly-added seed. Pulls from the
-    /// extraction or catalog `common_name` because that's the canonical
-    /// "what crop is this" value (e.g. "Pepper", "Tomato"). The user can
-    /// always override it later in the detail view.
+    /// extraction's `common_name`, the canonical "what crop is this" value
+    /// (e.g. "Pepper", "Tomato"). The user can always override it later in
+    /// the detail view.
     private func inferredCustomType() -> String? {
         switch prefill {
-        case .catalog(_, let cat):
-            return cat.common_name.trimmedNonEmpty
-        case .extraction(let result, _):
-            return result.extraction.common_name?.trimmedNonEmpty
-        case .preExtraction(let result, _):
-            return result.extraction.common_name?.trimmedNonEmpty
+        case .localExtraction(_, let fields, _):
+            return fields.common_name?.trimmedNonEmpty
         case .none:
             return nil
         }
     }
 
-    /// Builds the local snapshot from whichever prefill source we have.
-    /// Returns nil for manual entries with no extraction or catalog data.
+    /// Builds the local snapshot from the extraction. Returns nil for manual entries.
     private func buildGrowingInfoSnapshot() -> GrowingInfoSnapshot? {
         switch prefill {
-        case .catalog(_, let cat):
-            return GrowingInfoSnapshot(
-                scientific_name: cat.scientific_name,
-                life_cycle: cat.life_cycle,
-                sun_requirement: cat.sun_requirement,
-                frost_tolerance: cat.frost_tolerance,
-                sow_method: cat.sow_method,
-                seed_depth_inches: cat.seed_depth_inches,
-                days_to_germinate_min: cat.days_to_germinate_min,
-                days_to_germinate_max: cat.days_to_germinate_max,
-                days_to_maturity_min: cat.days_to_maturity_min,
-                days_to_maturity_max: cat.days_to_maturity_max,
-                soil_temp_min_f: cat.soil_temp_min_f,
-                soil_temp_max_f: cat.soil_temp_max_f,
-                plant_spacing_inches: cat.plant_spacing_inches,
-                row_spacing_inches: cat.row_spacing_inches,
-                hardiness_zone_min: cat.hardiness_zone_min,
-                hardiness_zone_max: cat.hardiness_zone_max,
-                viability_years: cat.viability_years,
-                instructions: cat.instructions
-            )
-        case .extraction(let result, _):
-            return Self.snapshot(from: result.extraction)
-        case .preExtraction(let result, _):
-            return Self.snapshot(from: result.extraction)
+        case .localExtraction(_, let fields, _):
+            return Self.snapshot(from: fields)
         case .none:
             return nil
         }

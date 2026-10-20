@@ -36,19 +36,18 @@ struct WorkbenchShell: View {
     @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var queriedSeeds: [LocalSeed]
     @Query private var queriedTags: [LocalTag]
     @Query private var queriedLocations: [LocalLocation]
-    @Query private var recommendations: [LocalRecommendation]
 
     var body: some View {
         let householdID = appEnv.activeGardenHouseholdID
         let seeds = queriedSeeds.filter { $0.householdID == householdID }
         let tags = queriedTags.filter { $0.householdID == householdID && $0.deletedAt == nil }
         let locations = queriedLocations.filter { $0.householdID == householdID && $0.deletedAt == nil }
-        let recommendationsByCatalogID = Dictionary(
-            recommendations.map { ($0.catalogSeedID, $0) },
+        let recommendations = Dictionary(
+            seeds.compactMap { seed in appEnv.recommendations.recommendation(for: seed).map { (seed.id, $0) } },
             uniquingKeysWith: { first, _ in first }
         )
         let rows = SeedTableRow.rows(
-            seeds: seeds, locations: locations, tags: tags, recommendations: recommendationsByCatalogID
+            seeds: seeds, locations: locations, tags: tags, recommendations: recommendations
         )
         let seedsByID = Dictionary(seeds.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         NavigationSplitView {

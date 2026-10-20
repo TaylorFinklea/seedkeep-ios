@@ -3,18 +3,15 @@
 import SwiftUI
 import AVFoundation
 
-/// SwiftUI wrapper around `AVCaptureSession` with both barcode detection
-/// (continuous) and explicit photo capture in the same session.
+/// SwiftUI wrapper around `AVCaptureSession` for explicit photo capture. Scanning starts at the
+/// packet's front and back (N2), so there is no barcode detection.
 ///
-/// The parent controls behavior with two callbacks. `onBarcodeDetected`
-/// fires every time the metadata output sees a recognized symbology; the
-/// scan flow coordinator debounces / acts on it. `onPhotoCaptured` fires
-/// after `capture.send(.takePhoto)` triggers a snapshot, returning JPEG
-/// bytes ready to upload.
+/// `onPhotoCaptured` fires after `capture` is set to `.takePhoto(token)`, returning JPEG bytes that
+/// the scan flow stages, with the token of the capture they answer. A capture error carries its
+/// token too; a camera setup error has none.
 struct CameraView: UIViewControllerRepresentable {
-    let onBarcodeDetected: (String) -> Void
-    let onPhotoCaptured: (Data) -> Void
-    let onError: (CameraError) -> Void
+    let onPhotoCaptured: (Data, CaptureToken) -> Void
+    let onError: (CameraError, CaptureToken?) -> Void
     @Binding var capture: CaptureCommand
 
     func makeUIViewController(context: Context) -> CameraViewController {
@@ -24,8 +21,8 @@ struct CameraView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: CameraViewController, context: Context) {
-        if capture == .takePhoto {
-            uiViewController.snapPhoto()
+        if case .takePhoto(let token) = capture {
+            uiViewController.snapPhoto(token)
             // Reset so the next `.takePhoto` flip retriggers.
             DispatchQueue.main.async { capture = .idle }
         }
@@ -35,25 +32,23 @@ struct CameraView: UIViewControllerRepresentable {
         Coordinator(parent: self)
     }
 
+    @MainActor
     final class Coordinator: NSObject, CameraViewControllerDelegate {
         let parent: CameraView
         init(parent: CameraView) { self.parent = parent }
 
-        func cameraViewController(_ vc: CameraViewController, didDetectBarcode value: String) {
-            parent.onBarcodeDetected(value)
+        func cameraViewController(_ vc: CameraViewController, didCapturePhoto data: Data, token: CaptureToken) {
+            parent.onPhotoCaptured(data, token)
         }
-        func cameraViewController(_ vc: CameraViewController, didCapturePhoto data: Data) {
-            parent.onPhotoCaptured(data)
-        }
-        func cameraViewController(_ vc: CameraViewController, didEncounter error: CameraError) {
-            parent.onError(error)
+        func cameraViewController(_ vc: CameraViewController, didEncounter error: CameraError, token: CaptureToken?) {
+            parent.onError(error, token)
         }
     }
 }
 
 enum CaptureCommand: Equatable {
     case idle
-    case takePhoto
+    case takePhoto(CaptureToken)
 }
 
 enum CameraError: Error, LocalizedError {
@@ -70,21 +65,24 @@ enum CameraError: Error, LocalizedError {
     }
 }
 
+@MainActor
 protocol CameraViewControllerDelegate: AnyObject {
-    func cameraViewController(_ vc: CameraViewController, didDetectBarcode value: String)
-    func cameraViewController(_ vc: CameraViewController, didCapturePhoto data: Data)
-    func cameraViewController(_ vc: CameraViewController, didEncounter error: CameraError)
+    func cameraViewController(_ vc: CameraViewController, didCapturePhoto data: Data, token: CaptureToken)
+    func cameraViewController(_ vc: CameraViewController, didEncounter error: CameraError, token: CaptureToken?)
 }
 
 final class CameraViewController: UIViewController {
     weak var delegate: CameraViewControllerDelegate?
 
-    private let session = AVCaptureSession()
-    private let metadataOutput = AVCaptureMetadataOutput()
+    /// Started and stopped on a background queue, which AVFoundation documents as safe.
+    nonisolated(unsafe) private let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer?
-    private let metadataQueue = DispatchQueue(label: "seedkeep.camera.metadata")
-    private var lastBarcodeReportedAt: Date = .distantPast
+    /// Each in-flight capture's token, by its settings ID, so a late photo answers its own request.
+    private var tokensBySettingsID: [Int64: CaptureToken] = [:]
+    /// The last token snapped. SwiftUI can update the view again before the command resets, and
+    /// that must not take a second photo.
+    private var lastSnappedToken: CaptureToken?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -115,12 +113,15 @@ final class CameraViewController: UIViewController {
         previewLayer?.frame = view.bounds
     }
 
-    func snapPhoto() {
+    func snapPhoto(_ token: CaptureToken) {
+        guard token != lastSnappedToken else { return }
+        lastSnappedToken = token
         guard session.isRunning else {
-            delegate?.cameraViewController(self, didEncounter: .captureFailed("session not running"))
+            delegate?.cameraViewController(self, didEncounter: .captureFailed("session not running"), token: token)
             return
         }
         let settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+        tokensBySettingsID[settings.uniqueID] = token
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
 
@@ -134,11 +135,11 @@ final class CameraViewController: UIViewController {
                 if granted {
                     DispatchQueue.main.async { self.attachInputsAndOutputs() }
                 } else {
-                    self.delegate?.cameraViewController(self, didEncounter: .unauthorized)
+                    DispatchQueue.main.async { self.delegate?.cameraViewController(self, didEncounter: .unauthorized, token: nil) }
                 }
             }
         default:
-            delegate?.cameraViewController(self, didEncounter: .unauthorized)
+            delegate?.cameraViewController(self, didEncounter: .unauthorized, token: nil)
         }
     }
 
@@ -152,20 +153,10 @@ final class CameraViewController: UIViewController {
             let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
             let input = try? AVCaptureDeviceInput(device: device)
         else {
-            delegate?.cameraViewController(self, didEncounter: .unavailable)
+            delegate?.cameraViewController(self, didEncounter: .unavailable, token: nil)
             return
         }
         if session.canAddInput(input) { session.addInput(input) }
-
-        if session.canAddOutput(metadataOutput) {
-            session.addOutput(metadataOutput)
-            metadataOutput.setMetadataObjectsDelegate(self, queue: metadataQueue)
-            // Common seed-packet symbologies. UPC-A and EAN-13 dominate;
-            // Code 128 and QR are occasional. List from broad to narrow.
-            metadataOutput.metadataObjectTypes = [
-                .ean13, .ean8, .upce, .code128, .code39, .code93, .qr,
-            ]
-        }
 
         if session.canAddOutput(photoOutput) {
             session.addOutput(photoOutput)
@@ -183,33 +174,6 @@ final class CameraViewController: UIViewController {
     }
 }
 
-extension CameraViewController: AVCaptureMetadataOutputObjectsDelegate {
-    nonisolated func metadataOutput(
-        _ output: AVCaptureMetadataOutput,
-        didOutput metadataObjects: [AVMetadataObject],
-        from connection: AVCaptureConnection
-    ) {
-        // Pull out the first machine-readable string outside the actor;
-        // bounce to MainActor for the debounce + delegate hop.
-        var firstValue: String?
-        for obj in metadataObjects {
-            if let readable = obj as? AVMetadataMachineReadableCodeObject,
-               let value = readable.stringValue {
-                firstValue = value
-                break
-            }
-        }
-        guard let value = firstValue else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let now = Date()
-            if now.timeIntervalSince(self.lastBarcodeReportedAt) < 1.5 { return }
-            self.lastBarcodeReportedAt = now
-            self.delegate?.cameraViewController(self, didDetectBarcode: value)
-        }
-    }
-}
-
 extension CameraViewController: AVCapturePhotoCaptureDelegate {
     nonisolated func photoOutput(
         _ output: AVCapturePhotoOutput,
@@ -224,13 +188,14 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
         } else {
             captured = .failure(.captureFailed("no data"))
         }
+        let settingsID = photo.resolvedSettings.uniqueID
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, let token = self.tokensBySettingsID.removeValue(forKey: settingsID) else { return }
             switch captured {
             case .success(let data):
-                self.delegate?.cameraViewController(self, didCapturePhoto: data)
+                self.delegate?.cameraViewController(self, didCapturePhoto: data, token: token)
             case .failure(let err):
-                self.delegate?.cameraViewController(self, didEncounter: err)
+                self.delegate?.cameraViewController(self, didEncounter: err, token: token)
             }
         }
     }

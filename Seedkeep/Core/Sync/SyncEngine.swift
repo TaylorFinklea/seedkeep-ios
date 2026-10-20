@@ -1518,8 +1518,24 @@ public final class SyncEngine {
         try context.save()
     }
 
-    /// Creates a seed photo through the active storage path and persists its local row.
-    public func uploadPhoto(seedID: String, role: PhotoRole, jpegData: Data, householdID: String) async throws {
+    /// True when a seed photo row with this ID is stored locally (a scan's stable-ID photo, N2).
+    public func seedPhotoExists(id: String) throws -> Bool {
+        try ModelContext(container).fetchCount(
+            FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id })
+        ) > 0
+    }
+
+    /// Creates a seed photo through the active storage path and persists its local row. A caller
+    /// that passes `photoID` (a scan's photo, N2) gets a stable ID: a row that already exists is
+    /// left as it is, so a retry or relaunch never adds a second photo.
+    public func uploadPhoto(
+        seedID: String,
+        role: PhotoRole,
+        jpegData: Data,
+        householdID: String,
+        photoID: String? = nil,
+        capturedAt: Int64? = nil
+    ) async throws {
         if FeatureFlags.cloudKitHouseholdSyncEnabled {
             guard !householdID.isEmpty else {
                 throw SeedkeepError(
@@ -1536,7 +1552,11 @@ public final class SyncEngine {
                     message: "This seed belongs to a different garden. Reopen the active garden and try again."
                 )
             }
-            let id = "seed_photo_local_\(UUID().uuidString)"
+            let id = photoID ?? "seed_photo_local_\(UUID().uuidString)"
+            let existing = try context.fetch(
+                FetchDescriptor<LocalSeedPhoto>(predicate: #Predicate { $0.id == id })
+            ).first
+            if existing != nil { return }
             let recordName = SeedkeepRecordNames.seedPhoto(id)
             let pending = PhotoByteStore(lifetime: .pendingUploads, householdID: householdID)
             try pending.write(jpegData, for: recordName)
@@ -1547,7 +1567,7 @@ public final class SyncEngine {
                 r2Key: nil,
                 role: role,
                 byteSize: jpegData.count,
-                capturedAt: Int64(Date().timeIntervalSince1970 * 1_000)
+                capturedAt: capturedAt ?? Int64(Date().timeIntervalSince1970 * 1_000)
             )
             context.insert(photo)
             do {
@@ -1560,6 +1580,13 @@ public final class SyncEngine {
             return
         }
 
+        // N2: the server is retired, so this legacy branch refuses before any request is made.
+        guard !ServerRetirement.isRetired else {
+            throw SeedkeepError(
+                code: "photo_upload_unavailable",
+                message: "Seed photos are saved to your iCloud garden."
+            )
+        }
         let dto = try await client.uploadSeedPhoto(seedID: seedID, role: role, jpegData: jpegData)
         let context = ModelContext(container)
         context.insert(LocalSeedPhoto(

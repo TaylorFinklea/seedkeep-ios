@@ -36,7 +36,7 @@
 	<key>KeychainService</key>
 	<string>$(KEYCHAIN_SERVICE)</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Seedkeep needs the camera to scan seed-packet barcodes and capture front/back photos for AI catalog extraction.</string>
+	<string>Seedkeep uses the camera to photograph seed packets so it can read their details.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Seedkeep can attach photos from your library to seed entries.</string>
 	<key>SeedkeepAPIHost</key>

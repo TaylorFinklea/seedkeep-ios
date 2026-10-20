@@ -63,7 +63,7 @@ targets:
           UIColorName: ""
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-        NSCameraUsageDescription: "Seedkeep needs the camera to scan seed-packet barcodes and capture front/back photos for AI catalog extraction."
+        NSCameraUsageDescription: "Seedkeep uses the camera to photograph seed packets so it can read their details."
         NSPhotoLibraryUsageDescription: "Seedkeep can attach photos from your library to seed entries."
         # Bundled fonts for the Herbarium design system. The .ttf files live
         # in Seedkeep/Resources/Fonts/. Filename-only paths work because iOS

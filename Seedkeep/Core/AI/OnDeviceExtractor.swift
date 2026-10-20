@@ -1,4 +1,5 @@
 import Foundation
+import SeedkeepKit
 import Vision
 
 #if canImport(FoundationModels)
@@ -60,6 +61,33 @@ public struct OnDeviceExtractor: Sendable {
 
         public var hasAnyStructuredFields: Bool {
             [commonName, variety, company, instructions].contains { $0?.isEmpty == false }
+        }
+
+        /// The fields in the wire shape the scan review reads. Nothing is sent anywhere (N2).
+        public var extractionFields: WireResponses.ExtractionFields {
+            WireResponses.ExtractionFields(
+                common_name: commonName,
+                scientific_name: scientificName,
+                variety: variety,
+                company: company,
+                instructions: instructions,
+                days_to_germinate_min: daysToGerminateMin,
+                days_to_germinate_max: daysToGerminateMax,
+                days_to_maturity_min: daysToMaturityMin,
+                days_to_maturity_max: daysToMaturityMax,
+                soil_temp_min_f: soilTempMinF,
+                soil_temp_max_f: soilTempMaxF,
+                seed_depth_inches: seedDepthInches,
+                plant_spacing_inches: plantSpacingInches,
+                row_spacing_inches: rowSpacingInches,
+                sun_requirement: sunRequirement,
+                frost_tolerance: frostTolerance,
+                sow_method: sowMethod,
+                life_cycle: lifeCycle,
+                hardiness_zone_min: hardinessZoneMin,
+                hardiness_zone_max: hardinessZoneMax,
+                self_confidence: selfConfidence
+            )
         }
     }
 

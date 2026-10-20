@@ -88,15 +88,13 @@ struct GardenView: View {
                 PetDetailView(plantingEventID: dest.plantingEventID)
             }
             .toolbar {
-                if !ServerRetirement.isRetired {
-                    ToolbarItem(placement: .platformLeading) {
-                        Button {
-                            showWhatToPlant = true
-                        } label: {
-                            Image(systemName: "calendar")
-                        }
-                        .accessibilityLabel("What to plant")
+                ToolbarItem(placement: .platformLeading) {
+                    Button {
+                        showWhatToPlant = true
+                    } label: {
+                        Image(systemName: "calendar")
                     }
+                    .accessibilityLabel("What to plant")
                 }
                 ToolbarItem(placement: .platformTrailing) {
                     Button {

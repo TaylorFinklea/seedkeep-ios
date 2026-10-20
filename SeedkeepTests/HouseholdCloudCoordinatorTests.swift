@@ -1374,6 +1374,63 @@ struct HouseholdCloudCoordinatorTests {
         #expect(engine.savedRecords.isEmpty, "a wiped coordinator must not push a queued nudge")
     }
 
+    @Test("an account sign-out or switch purges every staged scan photo (N2)")
+    func accountChangePurgesScanStaging() throws {
+        for change in [HouseholdAccountChange.signOut, .switchAccounts] {
+            let hid = "hh-\(UUID().uuidString)"
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("coordinator-scan-staging-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let scanID = UUID()
+            try ScanPhotoStaging.write(
+                Data("front".utf8), side: .front, scanID: scanID,
+                scope: ScanPhotoStaging.Scope(userRecordName: "_old", householdID: hid), root: root
+            )
+            let coordinator = makeCoordinator(engine: FakeEngine(), container: makeContainer(), householdID: hid)
+            coordinator.purgeScanStaging = { try ScanPhotoStaging.purgeAll(root: root) }
+
+            coordinator.handleAccountChange(change)
+
+            #expect(ScanPhotoStaging.manifest(for: scanID, root: root) == nil)
+            #expect(!coordinator.requiresWipeRetry)
+        }
+    }
+
+    @Test("a wipe retry does not purge staging again, so scans made after the account event survive (V5)")
+    func wipeRetryDoesNotPurgeAgain() {
+        struct WipeFailed: Error {}
+        var failWipe = true
+        var purges = 0
+        let coordinator = makeCoordinator(
+            engine: FakeEngine(), container: makeContainer(), householdID: "hh-\(UUID().uuidString)",
+            wipeOperation: { _ in if failWipe { throw WipeFailed() } })
+        coordinator.purgeScanStaging = { purges += 1 }
+
+        coordinator.handleAccountChange(.switchAccounts)
+        #expect(coordinator.requiresWipeRetry)
+        #expect(purges == 1)
+
+        failWipe = false
+        coordinator.wipeAndClear()   // the retry
+        #expect(!coordinator.requiresWipeRetry)
+        #expect(purges == 1)
+
+        coordinator.handleAccountChange(.signOut)   // a new account event purges again
+        #expect(purges == 2)
+    }
+
+    @Test("a failed staging purge leaves the wipe pending a retry")
+    func failedScanStagingPurgeRequiresRetry() {
+        struct PurgeFailed: Error {}
+        let coordinator = makeCoordinator(
+            engine: FakeEngine(), container: makeContainer(), householdID: "hh-\(UUID().uuidString)")
+        coordinator.purgeScanStaging = { throw PurgeFailed() }
+
+        coordinator.handleAccountChange(.signOut)
+
+        #expect(coordinator.requiresWipeRetry)
+    }
+
     @Test("echo exclusion: a record applied from remote this pass is not re-pushed")
     func echoExcluded() async throws {
         let hid = "hh-\(UUID().uuidString)"

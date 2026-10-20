@@ -37,7 +37,6 @@ struct SeedRow: View {
                 // Verdict dot — shown immediately after the type capsule (or at
                 // the start of the row when no type is set) whenever a cached
                 // recommendation exists for this seed.
-                let _ = appEnv.recommendations.updateEpoch
                 if let dotColor = verdictDotColor {
                     Circle()
                         .fill(dotColor)
@@ -79,13 +78,9 @@ struct SeedRow: View {
     }
 
     /// Color for the verdict dot placed in the second row. Returns nil when the
-    /// seed has no catalog link, no cached recommendation, or the verdict is
-    /// unknown/absent — in that case no dot is shown.
+    /// seed has no planting window: no growing info, or no home location.
     private var verdictDotColor: Color? {
-        guard !ServerRetirement.isRetired else { return nil }
-        guard let catalogID = seed.catalogID,
-              let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
-        else { return nil }
+        guard let verdict = appEnv.recommendations.recommendation(for: seed)?.verdict else { return nil }
         return HerbColor.verdictForeground(for: verdict)
     }
 

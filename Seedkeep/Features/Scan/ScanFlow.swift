@@ -2,58 +2,47 @@ import SwiftUI
 import SeedkeepKit
 
 // Live packet scanning needs the camera, so the flow is iOS-only. The macOS build hides the
-// scan entry point (LibraryView) instead of presenting this.
+// scan entry points (LibraryView, SeedsTableView) instead of presenting this.
 #if os(iOS)
 
-/// Result the scan flow returns to its parent. Either a catalog hit (we
-/// know exactly what packet it is) or an AI extraction (best-effort
-/// fields the user can confirm or edit).
+/// Result the scan flow returns to its parent: the on-device (Free) or BYOK extraction of the two
+/// packet photos. Both photos are already staged under `scanID`, and nothing went to our server (N2).
 enum ScanResult: Equatable {
-    case catalogHit(barcode: String, catalog: CatalogSeedDTO)
-    case extracted(WireResponses.ExtractionResult, barcode: String?)
-    /// Result of an on-device extraction (free / byok tier), persisted via
-    /// `POST /api/extractions/pre-extracted`.
-    case preExtracted(WireResponses.PreExtractedResult, barcode: String?)
+    /// `binding` is the scope the scan was bound to, so the save sheet saves into that garden only.
+    case localExtraction(scanID: UUID, fields: WireResponses.ExtractionFields,
+                         binding: ScanPhotoStaging.ScanBinding?)
 }
 
-/// Orchestrates the scan-to-data flow:
-///   1. Camera live preview, barcode detection running.
-///   2. Barcode detected → look it up in the global catalog.
-///   3. Catalog hit → call back with `.catalogHit` (parent dismisses + opens AddSeedView).
-///   4. No barcode hit (or user taps "Skip barcode") → two-shot photo capture (front then back).
-///   5. POST /api/extractions, show spinner, return `.extracted` on success.
+/// Orchestrates the scan-to-data flow (N2 slice D):
+///   1. Camera live preview. The user reads the front of the packet, then the back.
+///   2. Each photo is resized to the saved-photo budget and staged on disk as it is captured.
+///   3. The user's on-device or BYOK extraction runs over the two photos.
+///   4. The result goes to the parent, which opens `AddSeedView` prefilled. Cancel stops the
+///      extraction and deletes the staging.
 struct ScanFlow: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.dismiss) private var dismiss
 
-    /// Called when the scan ends with a usable result. The parent uses
-    /// this payload to populate `AddSeedView`. Closing the flow without
-    /// a result dismisses without calling this.
+    /// Called when extraction finishes with a usable result. Closing the flow before that deletes
+    /// the scan's staged photos and dismisses without calling this.
     let onComplete: (ScanResult) -> Void
 
     enum Phase: Equatable {
-        case scanning
-        case lookingUp(String)
-        /// Barcode detected and looked up; no catalog hit. Camera stays
-        /// live so the user can frame the packet and tap to capture the
-        /// front. Separating this from `.scanning` keeps the detector
-        /// from re-firing the lookup in a loop while the user lines up
-        /// the shot.
-        case captureFront(barcode: String?)
-        case promptForBack(frontJPEG: Data, barcode: String?)
-        case extracting(Data, Data, String?)
+        case captureFront
+        case promptForBack
+        case extracting
         case error(String)
     }
 
-    @State private var phase: Phase = .scanning
+    @State private var phase: Phase = .captureFront
     @State private var capture: CaptureCommand = .idle
-    @State private var detectedBarcode: String?
+    @State private var run = ScanRun()
+    @State private var frontJPEG: Data?
 
     var body: some View {
         NavigationStack {
             ZStack {
                 CameraView(
-                    onBarcodeDetected: handleBarcode,
                     onPhotoCaptured: handlePhoto,
                     onError: handleCameraError,
                     capture: $capture
@@ -66,18 +55,23 @@ struct ScanFlow: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        run.cancel()
+                        dismiss()
+                    }
                 }
             }
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
+        // The scan belongs to the account and garden it starts under (V1).
+        .onAppear { run.bind(appEnv.scanBinding) }
+        // Swipe-down and any other dismissal also end the scan. After a hand-off this is a no-op.
+        .onDisappear { run.cancel() }
     }
 
     private var navTitle: String {
         switch phase {
-        case .scanning: return "Scriptorium"
-        case .lookingUp: return "Reading…"
         case .captureFront: return "Front of the packet"
         case .promptForBack: return "Back of the packet"
         case .extracting: return "Reading…"
@@ -88,261 +82,172 @@ struct ScanFlow: View {
     @ViewBuilder
     private var overlay: some View {
         switch phase {
-        case .scanning:
-            ScanningOverlay(
-                onCaptureWithoutBarcode: { capture = .takePhoto }
-            )
-        case .lookingUp(let barcode):
-            StatusOverlay(title: "Looking up barcode…", subtitle: barcode)
-        case .captureFront(let barcode):
-            FrontPromptOverlay(
-                barcode: barcode,
-                onCaptureFront: { capture = .takePhoto },
-                onCancel: { phase = .scanning; detectedBarcode = nil }
-            )
-        case .promptForBack(_, _):
+        case .captureFront:
+            FrontPromptOverlay(onCaptureFront: { requestCapture(.front) })
+        case .promptForBack:
             BackPromptOverlay(
-                onCaptureBack: { capture = .takePhoto },
-                onCancel: { phase = .scanning; detectedBarcode = nil }
+                onCaptureBack: { requestCapture(.back) },
+                onRestart: restart
             )
         case .extracting:
             StatusOverlay(title: "Reading the packet…", subtitle: "This usually takes 8–15 seconds.")
         case .error(let message):
-            ErrorOverlay(message: message, onRetry: { phase = .scanning })
+            ErrorOverlay(message: message, onRetry: restart)
         }
     }
 
     // MARK: - Camera callbacks
 
-    private func handleBarcode(_ value: String) {
-        guard case .scanning = phase else { return }
-        detectedBarcode = value
-        phase = .lookingUp(value)
-        Task { await lookUpBarcode(value) }
+    /// The phase that takes a photo of `side`.
+    private static func capturePhase(for side: ScanPhotoStaging.Side) -> Phase {
+        side == .front ? .captureFront : .promptForBack
     }
 
-    private func handlePhoto(_ data: Data) {
-        // Anthropic vision caps images at 5MB; Foundation Models is happy
-        // at much smaller; our server's pre-extracted endpoint takes a
-        // base64 string that bloats ~33% in transit. Resize once here so
-        // every downstream path gets a bounded payload.
-        //
-        // Run the resize on a detached task: UIImage decode + render +
-        // jpegData is sync and takes 1–3 sec per 12 MP photo on iPhone 16
-        // — easily long enough to trip the iOS hang indicator if done on
-        // MainActor.
-        let phaseBeforeResize = phase
+    /// Asks the camera for one photo of `side`. Ignored while a capture is outstanding, so a double
+    /// tap takes one photo.
+    private func requestCapture(_ side: ScanPhotoStaging.Side) {
+        guard phase == Self.capturePhase(for: side), let token = run.requestCapture(side: side) else { return }
+        capture = .takePhoto(token)
+    }
+
+    private func handlePhoto(_ data: Data, token: CaptureToken) {
+        // A photo from before a Restart or Cancel, or for another request, is stale.
+        guard run.accepts(token), phase == Self.capturePhase(for: token.side) else { return }
+        run.captureDelivered(token)
+        // Resize on a detached task. UIImage decode and render take seconds for a 12 MP capture,
+        // which is too long to run on the main actor. A stored photo never falls back to the
+        // original bytes: a decode failure is reported as an error.
         Task.detached(priority: .userInitiated) {
-            // Scan bytes are transient extraction input, never a stored photo — falling back to
-            // the original on a decode failure is intentional here (see PhotoResizer.scan).
-            let resized = PhotoResizer.resizedJPEG(data, budget: PhotoResizer.scan) ?? data
-            await self.applyResizedPhoto(resized, phaseAtCapture: phaseBeforeResize)
+            let resized = try? ScanPhotoStaging.resizedPhoto(data)
+            await self.applyStagedPhoto(resized, token: token)
         }
     }
 
     @MainActor
-    private func applyResizedPhoto(_ resized: Data, phaseAtCapture: Phase) {
-        // If the user cancelled / restarted while the resize was running,
-        // drop the photo on the floor — phase has moved on.
-        guard phase == phaseAtCapture else { return }
-        switch phase {
-        case .scanning:
-            // Front photo without a barcode (user tapped "Skip barcode").
-            phase = .promptForBack(frontJPEG: resized, barcode: detectedBarcode)
-        case .captureFront(let barcode):
-            // Barcode was captured but had no catalog hit; this is the
-            // front photo for the AI-extraction pipeline.
-            phase = .promptForBack(frontJPEG: resized, barcode: barcode)
-        case .promptForBack(let frontJPEG, let barcode):
-            phase = .extracting(frontJPEG, resized, barcode)
-            Task { await runExtraction(front: frontJPEG, back: resized, barcode: barcode) }
-        default:
-            break
+    private func applyStagedPhoto(_ resized: Data?, token: CaptureToken) {
+        // The user cancelled, restarted or moved on while the resize ran: drop the photo.
+        guard run.accepts(token), phase == Self.capturePhase(for: token.side) else { return }
+        defer { run.finishCapture(token) }
+        let side = token.side
+        guard let resized else {
+            phase = .error(PhotoResizer.Failure.decodeFailed.localizedDescription)
+            return
+        }
+        do {
+            switch try run.stage(resized, for: token, current: appEnv.scanBinding) {
+            case .staged:
+                break
+            case .stale:
+                return
+            case .scopeChanged:
+                discardForScopeChange()
+                return
+            }
+        } catch {
+            phase = .error("Could not keep this photo: \(error.localizedDescription)")
+            return
+        }
+        switch side {
+        case .front:
+            frontJPEG = resized
+            phase = .promptForBack
+        case .back:
+            guard let front = frontJPEG else {
+                phase = .error("The front photo is missing. Start the scan again.")
+                return
+            }
+            phase = .extracting
+            runExtraction(front: front, back: resized)
         }
     }
 
-    /// Run base64 encoding for both photos on a detached background task
-    /// in parallel. Each ~4 MB Data turns into a ~5.3 MB String, and the
-    /// encoder is synchronous — doing both on MainActor adds another
-    /// ~1 second of hang on top of the resize work.
-    nonisolated private static func encodeBase64Pair(front: Data, back: Data) async -> (String, String) {
-        async let f = Task.detached(priority: .userInitiated) { front.base64EncodedString() }.value
-        async let b = Task.detached(priority: .userInitiated) { back.base64EncodedString() }.value
-        return await (f, b)
-    }
-
-    private func handleCameraError(_ error: CameraError) {
+    private func handleCameraError(_ error: CameraError, token: CaptureToken?) {
+        // A failed capture from before a Restart or Cancel is stale too.
+        if let token {
+            guard run.accepts(token) else { return }
+            run.finishCapture(token)
+        }
         phase = .error(error.errorDescription ?? "Camera error")
     }
 
-    // MARK: - Network steps
+    /// The account or garden changed under the scan (V1): the run is cancelled (its staging
+    /// deleted), and the sheet closes with a notice.
+    private func discardForScopeChange() {
+        run.cancel()
+        appEnv.surfaceMessage(ScanPhotoStaging.scopeChangedNotice)
+        dismiss()
+    }
 
-    private func lookUpBarcode(_ barcode: String) async {
-        do {
-            if let hit = try await appEnv.client.catalogLookup(barcode: barcode) {
-                onComplete(.catalogHit(barcode: barcode, catalog: hit))
+    // MARK: - Extraction
+
+    private func runExtraction(front: Data, back: Data) {
+        let provider = appEnv.preferences.aiProvider
+        let keyStore = appEnv.apiKeys
+        let scanID = run.scanID
+        run.run({
+            try await Self.extract(front: front, back: back, provider: provider, keyStore: keyStore)
+        }, deliver: { result in
+            switch result {
+            case .success(let fields):
+                guard run.binding?.matches(appEnv.scanBinding) == true else {
+                    discardForScopeChange()
+                    return
+                }
+                run.handOff()
+                onComplete(.localExtraction(scanID: scanID, fields: fields, binding: run.binding))
                 dismiss()
-                return
+            case .failure(let error):
+                phase = .error(Self.failureMessage(error, provider: provider))
             }
-        } catch let err as SeedkeepError {
-            // Lookup errored — surface but let the user fall back to photos.
-            phase = .error("\(err.code): \(err.message)")
-            return
-        } catch {
-            phase = .error(error.localizedDescription)
-            return
-        }
-        // No catalog hit — move to the front-capture phase so the
-        // detector doesn't immediately re-fire while the user lines up
-        // the front-of-packet shot. The captured barcode rides through
-        // the rest of the flow so it lands on the AI-extraction submit
-        // and the resulting catalog entry inherits it.
-        phase = .captureFront(barcode: barcode)
+        })
     }
 
-    private func runExtraction(front: Data, back: Data, barcode: String?) async {
-        // Branch on the user's chosen AI provider. Free runs Apple
-        // Foundation Models on-device; BYOK calls the user's chosen
-        // remote provider with their key (still bypassing our server);
-        // Hosted hits the multipart server-vision route. All three
-        // ultimately persist via /api/extractions/pre-extracted (or
-        // /api/extractions for Hosted).
-        switch appEnv.preferences.aiProvider {
+    /// Runs the extraction the user chose. Free uses Apple's on-device model. BYOK sends the photos
+    /// to the provider the user configured, with their own key. Neither path calls our server.
+    private static func extract(
+        front: Data,
+        back: Data,
+        provider: AppPreferences.AIProvider,
+        keyStore: APIKeyStore
+    ) async throws -> WireResponses.ExtractionFields {
+        switch provider {
         case .free:
-            await runOnDeviceExtraction(front: front, back: back, barcode: barcode)
+            return try await OnDeviceExtractor().extract(frontJPEG: front, backJPEG: back).extractionFields
         case .byok:
-            await runBYOKExtraction(front: front, back: back, barcode: barcode)
+            return try await BYOKExtractor(keyStore: keyStore).extract(frontJPEG: front, backJPEG: back).extractionFields
         case .hosted:
-            await runHostedExtraction(front: front, back: back, barcode: barcode)
+            throw ScanFlowFailure.hostedUnavailable
         }
     }
 
-    private func runBYOKExtraction(front: Data, back: Data, barcode: String?) async {
-        let extractor = BYOKExtractor(keyStore: appEnv.apiKeys)
-        let output: BYOKExtractor.Output
-        do {
-            output = try await extractor.extract(frontJPEG: front, backJPEG: back)
-        } catch BYOKExtractor.Failure.noKey {
-            phase = .error("No API key set. Add one in Settings → API keys, or switch to Free / Hosted.")
-            return
-        } catch {
-            phase = .error("BYOK extraction failed: \(error.localizedDescription)")
-            return
+    private static func failureMessage(_ error: Error, provider: AppPreferences.AIProvider) -> String {
+        if case BYOKExtractor.Failure.noKey = error {
+            return "No API key set. Add one in Settings → API keys, or switch to Free."
         }
-
-        let (frontB64, backB64) = await Self.encodeBase64Pair(front: front, back: back)
-        let input = SeedkeepClient.PreExtractedInput(
-            common_name: output.commonName,
-            scientific_name: output.scientificName,
-            variety: output.variety,
-            company: output.company,
-            instructions: output.instructions,
-            days_to_germinate_min: output.daysToGerminateMin,
-            days_to_germinate_max: output.daysToGerminateMax,
-            days_to_maturity_min: output.daysToMaturityMin,
-            days_to_maturity_max: output.daysToMaturityMax,
-            soil_temp_min_f: output.soilTempMinF,
-            soil_temp_max_f: output.soilTempMaxF,
-            seed_depth_inches: output.seedDepthInches,
-            plant_spacing_inches: output.plantSpacingInches,
-            row_spacing_inches: output.rowSpacingInches,
-            sun_requirement: output.sunRequirement,
-            frost_tolerance: output.frostTolerance,
-            sow_method: output.sowMethod,
-            life_cycle: output.lifeCycle,
-            hardiness_zone_min: output.hardinessZoneMin,
-            hardiness_zone_max: output.hardinessZoneMax,
-            self_confidence: output.selfConfidence,
-            model_id: output.modelID,
-            barcode: barcode,
-            perceptual_hash: nil,
-            front_jpeg_b64: frontB64,
-            back_jpeg_b64: backB64
-        )
-
-        do {
-            let result = try await appEnv.client.submitPreExtracted(input)
-            onComplete(.preExtracted(result, barcode: barcode))
-            dismiss()
-        } catch let err as SeedkeepError where err.code == "wrong_tier" {
-            phase = .error("Server says you're on Hosted — switch in Settings → AI provider, or downgrade.")
-        } catch let err as SeedkeepError {
-            phase = .error("\(err.code): \(err.message)")
-        } catch {
-            phase = .error(error.localizedDescription)
+        switch provider {
+        case .free: return "On-device extraction failed: \(error.localizedDescription)"
+        case .byok: return "BYOK extraction failed: \(error.localizedDescription)"
+        case .hosted: return error.localizedDescription
         }
     }
 
-    private func runHostedExtraction(front: Data, back: Data, barcode: String?) async {
-        do {
-            let result = try await appEnv.client.submitExtraction(
-                frontJPEG: front,
-                backJPEG: back,
-                barcode: barcode,
-                perceptualHash: nil
-            )
-            onComplete(.extracted(result, barcode: barcode))
-            dismiss()
-        } catch let err as SeedkeepError where err.code == "wrong_tier" {
-            phase = .error("Server says you're not on the Hosted tier. Switch to Free / BYOK in Settings → AI provider, or subscribe.")
-        } catch let err as SeedkeepError {
-            phase = .error("\(err.code): \(err.message)")
-        } catch {
-            phase = .error(error.localizedDescription)
-        }
+    /// Starts a new scan. The current scan's staging is deleted, and an extraction still in flight
+    /// is dropped.
+    private func restart() {
+        run.cancel()
+        run = ScanRun()
+        run.bind(appEnv.scanBinding)
+        frontJPEG = nil
+        phase = .captureFront
     }
+}
 
-    private func runOnDeviceExtraction(front: Data, back: Data, barcode: String?) async {
-        let extractor = OnDeviceExtractor()
-        let output: OnDeviceExtractor.Output
-        do {
-            output = try await extractor.extract(frontJPEG: front, backJPEG: back)
-        } catch {
-            phase = .error("On-device extraction failed: \(error.localizedDescription)")
-            return
-        }
+/// Why an extraction could not start. Hosted extraction runs on our server, which is retired (N2).
+private enum ScanFlowFailure: LocalizedError {
+    case hostedUnavailable
 
-        let (frontB64, backB64) = await Self.encodeBase64Pair(front: front, back: back)
-        let input = SeedkeepClient.PreExtractedInput(
-            common_name: output.commonName,
-            scientific_name: output.scientificName,
-            variety: output.variety,
-            company: output.company,
-            instructions: output.instructions,
-            days_to_germinate_min: output.daysToGerminateMin,
-            days_to_germinate_max: output.daysToGerminateMax,
-            days_to_maturity_min: output.daysToMaturityMin,
-            days_to_maturity_max: output.daysToMaturityMax,
-            soil_temp_min_f: output.soilTempMinF,
-            soil_temp_max_f: output.soilTempMaxF,
-            seed_depth_inches: output.seedDepthInches,
-            plant_spacing_inches: output.plantSpacingInches,
-            row_spacing_inches: output.rowSpacingInches,
-            sun_requirement: output.sunRequirement,
-            frost_tolerance: output.frostTolerance,
-            sow_method: output.sowMethod,
-            life_cycle: output.lifeCycle,
-            hardiness_zone_min: output.hardinessZoneMin,
-            hardiness_zone_max: output.hardinessZoneMax,
-            self_confidence: output.selfConfidence,
-            model_id: output.modelID,
-            barcode: barcode,
-            perceptual_hash: nil,
-            front_jpeg_b64: frontB64,
-            back_jpeg_b64: backB64
-        )
-
-        do {
-            let result = try await appEnv.client.submitPreExtracted(input)
-            onComplete(.preExtracted(result, barcode: barcode))
-            dismiss()
-        } catch let err as SeedkeepError where err.code == "wrong_tier" {
-            phase = .error("Server says you're on Hosted. Switch to Hosted in Settings → AI provider, or downgrade.")
-        } catch let err as SeedkeepError {
-            phase = .error("\(err.code): \(err.message)")
-        } catch {
-            phase = .error(error.localizedDescription)
-        }
+    var errorDescription: String? {
+        "Hosted scanning is unavailable. Switch to Free or BYOK in Settings → AI provider."
     }
 }
 
@@ -355,38 +260,6 @@ struct ScanFlow: View {
 // scenes. The herbarium typography (IM Fell SC small-caps for headers,
 // Spectral italic for prompts) carries the design language without
 // breaking legibility.
-
-private struct ScanningOverlay: View {
-    let onCaptureWithoutBarcode: () -> Void
-
-    var body: some View {
-        VStack {
-            Spacer()
-            ScanReticle()
-            Spacer()
-            VStack(spacing: 14) {
-                Text("READ THE BARCODE")
-                    .font(HerbFont.smallCaps(size: 11))
-                    .tracking(2)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.6), in: .capsule)
-                Button {
-                    onCaptureWithoutBarcode()
-                } label: {
-                    Text("No barcode — read the front")
-                        .font(HerbFont.bodyItalic(size: 14))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 11)
-                        .background(.black.opacity(0.55), in: .capsule)
-                }
-            }
-            .padding(.bottom, 36)
-        }
-    }
-}
 
 /// Reticle as four corner brackets — reads as a scholar's viewfinder
 /// rather than a generic rounded rectangle.
@@ -422,33 +295,14 @@ private struct CornerBracket: Shape {
 }
 
 private struct FrontPromptOverlay: View {
-    let barcode: String?
     let onCaptureFront: () -> Void
-    let onCancel: () -> Void
 
     var body: some View {
         VStack {
             Spacer()
+            ScanReticle()
+            Spacer()
             VStack(spacing: 14) {
-                if let barcode {
-                    VStack(spacing: 4) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 14))
-                                .foregroundStyle(HerbColor.verdictNow)
-                            Text("BARCODE READ")
-                                .font(HerbFont.smallCaps(size: 10))
-                                .tracking(1.5)
-                                .foregroundStyle(.white)
-                        }
-                        Text(barcode)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(.black.opacity(0.6), in: .capsule)
-                }
                 Text("New packet — read the front to extract details.")
                     .font(HerbFont.bodyItalic(size: 14))
                     .foregroundStyle(.white)
@@ -456,25 +310,14 @@ private struct FrontPromptOverlay: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
                     .background(.black.opacity(0.6), in: .capsule)
-                HStack(spacing: 12) {
-                    Button(role: .cancel) { onCancel() } label: {
-                        Text("Restart")
-                            .font(HerbFont.smallCaps(size: 11))
-                            .tracking(1.5)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 11)
-                            .background(.black.opacity(0.55), in: .capsule)
-                    }
-                    Button { onCaptureFront() } label: {
-                        Text("READ FRONT")
-                            .font(HerbFont.smallCaps(size: 12))
-                            .tracking(2)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 22)
-                            .padding(.vertical, 13)
-                            .background(HerbColor.sepia, in: .capsule)
-                    }
+                Button { onCaptureFront() } label: {
+                    Text("READ FRONT")
+                        .font(HerbFont.smallCaps(size: 12))
+                        .tracking(2)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 13)
+                        .background(HerbColor.sepia, in: .capsule)
                 }
             }
             .padding(.bottom, 36)
@@ -484,7 +327,7 @@ private struct FrontPromptOverlay: View {
 
 private struct BackPromptOverlay: View {
     let onCaptureBack: () -> Void
-    let onCancel: () -> Void
+    let onRestart: () -> Void
 
     var body: some View {
         VStack {
@@ -498,7 +341,7 @@ private struct BackPromptOverlay: View {
                     .padding(.vertical, 10)
                     .background(.black.opacity(0.6), in: .capsule)
                 HStack(spacing: 12) {
-                    Button(role: .cancel) { onCancel() } label: {
+                    Button(role: .cancel) { onRestart() } label: {
                         Text("Restart")
                             .font(HerbFont.smallCaps(size: 11))
                             .tracking(1.5)

@@ -20,7 +20,7 @@ struct SeedTableRow: Identifiable, Hashable, Sendable {
     var tagIDs: [String]
     var tagNames: [String]
     var notes: String
-    /// `LocalRecommendation.verdict` raw value, or nil when there is no recommendation.
+    /// `PlantingRecommendation.verdict` raw value, or nil when there is no recommendation.
     var verdict: String?
     /// Human verdict label as the app already words it, or "" when none.
     var verdictLabel: String
@@ -31,7 +31,7 @@ struct SeedTableRow: Identifiable, Hashable, Sendable {
 extension SeedTableRow {
     /// Maps live models to rows. SLICE B owns this body (replace the placeholder); the shell
     /// (slice A) calls it once per data change to feed the table, sidebar count and palette.
-    /// `recommendations` is keyed by catalog id: fetch them once, never per row.
+    /// `recommendations` is keyed by seed id: compute them once, never per row.
     ///
     /// Deleted seeds, locations and tags are skipped. Tag ids that no longer resolve keep their
     /// place in `tagIDs` (writes must not drop them) but are left out of `tagNames`.
@@ -40,7 +40,7 @@ extension SeedTableRow {
         seeds: [LocalSeed],
         locations: [LocalLocation],
         tags: [LocalTag],
-        recommendations: [String: LocalRecommendation]
+        recommendations: [String: PlantingRecommendation]
     ) -> [SeedTableRow] {
         var locationNames: [String: String] = [:]
         for location in locations where location.deletedAt == nil {
@@ -54,7 +54,7 @@ extension SeedTableRow {
         var rows: [SeedTableRow] = []
         rows.reserveCapacity(seeds.count)
         for seed in seeds where seed.deletedAt == nil {
-            let verdict = seed.catalogID.flatMap { recommendations[$0] }?.verdict
+            let verdict = recommendations[seed.id]?.verdict
             let verdictText: String
             if let verdict {
                 verdictText = Self.verdictLabel(for: verdict)
@@ -94,7 +94,8 @@ extension SeedTableRow {
         case "too_early": return "Too early"
         case "late": return "Window closing"
         case "too_late": return "Missed this year"
-        default: return "Checking…"
+        // "unknown" is final on the device (N2): there is no window to wait for.
+        default: return "No window"
         }
     }
 

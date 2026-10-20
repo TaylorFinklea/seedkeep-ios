@@ -61,19 +61,15 @@ struct SettingsContent: View {
                 }
 
                 Section {
-                    if !ServerRetirement.isRetired {
-                        NavigationLink {
-                            HomeLocationSettingsView()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Home location", systemImage: "location")
-                                Text(homeLocationSummary)
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
-                            }
+                    NavigationLink {
+                        HomeLocationSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Home location", systemImage: "location")
+                            Text(homeLocationSummary)
+                                .font(HerbFont.bodyItalic(size: 12))
+                                .foregroundStyle(HerbColor.inkSoft)
                         }
-                    } else {
-                        statusRow("Home location", homeLocationSummary)
                     }
                     NavigationLink {
                         NotificationsSettingsView()
@@ -307,6 +303,20 @@ struct SettingsContent: View {
                     }
                 } header: {
                     Rubric(text: "changelog")
+                }
+
+                Section {
+                    Text("Data sources")
+                        .font(HerbFont.smallCaps(size: 10))
+                        .tracking(1.4)
+                        .foregroundStyle(HerbColor.sepia)
+                    Text("USDA ARS Plant Hardiness Zone Map (2023)")
+                    Text("U.S. Census Bureau")
+                    Text("Frost dates estimated from the hardiness zone")
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.inkSoft)
+                } header: {
+                    Rubric(text: "about")
                 }
 
                 Section {

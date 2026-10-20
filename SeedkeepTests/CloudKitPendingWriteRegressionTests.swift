@@ -629,8 +629,8 @@ struct CloudKitPendingWriteRegressionTests {
         #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
     }
 
-    @Test("flag OFF seed-photo upload persists the returned row without a destructive refresh")
-    func flagOffSeedPhotoUploadPersistsReturnedRowWithoutRefresh() async throws {
+    @Test("flag OFF refuses a seed-photo upload before any server request (N2)")
+    func flagOffSeedPhotoUploadIsRefusedBeforeAnyRequest() async throws {
         let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
         defer { Self.restoreCloudKitFlag(previous) }
         FeatureFlags.setCloudKitHouseholdSync(false)
@@ -650,22 +650,21 @@ struct CloudKitPendingWriteRegressionTests {
             container: container
         )
 
-        try await engine.uploadPhoto(
-            seedID: "legacy-seed",
-            role: .extra,
-            jpegData: Data("jpeg".utf8),
-            householdID: "legacy-household"
-        )
+        // N2: the server is retired, so the legacy branch refuses before it makes a request.
+        do {
+            try await engine.uploadPhoto(
+                seedID: "legacy-seed",
+                role: .extra,
+                jpegData: Data("jpeg".utf8),
+                householdID: "legacy-household"
+            )
+            Issue.record("a retired server upload must not succeed")
+        } catch let error as SeedkeepError {
+            #expect(error.code == "photo_upload_unavailable")
+        }
 
-        let photo = try #require(
-            ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>()).first)
-        #expect(photo.id == "legacy-photo-created")
-        #expect(photo.seedID == "legacy-seed")
-        #expect(photo.householdID == "legacy-household")
-        #expect(photo.r2Key == "photos/legacy.jpg")
-        #expect(CatalogRouterMockURLProtocol.capturedMethodPaths().count == 1)
-        #expect(CatalogRouterMockURLProtocol.capturedMethodPaths().first?.method == "POST")
-        #expect(CatalogRouterMockURLProtocol.capturedMethodPaths().first?.path == "/api/seeds/legacy-seed/photos")
+        #expect(CatalogRouterMockURLProtocol.capturedPaths().isEmpty)
+        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>()).isEmpty)
     }
 
     @Test("flag OFF preserves the server photo byte path")

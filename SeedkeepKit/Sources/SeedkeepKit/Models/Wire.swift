@@ -531,6 +531,54 @@ public enum WireResponses {
         public let hardiness_zone_min: Int?
         public let hardiness_zone_max: Int?
         public let self_confidence: Double?
+
+        /// Public so an on-device or BYOK extraction can fill these fields without a server
+        /// response (N2). Parameters mirror the stored properties above.
+        public init(
+            common_name: String? = nil,
+            scientific_name: String? = nil,
+            variety: String? = nil,
+            company: String? = nil,
+            instructions: String? = nil,
+            days_to_germinate_min: Int? = nil,
+            days_to_germinate_max: Int? = nil,
+            days_to_maturity_min: Int? = nil,
+            days_to_maturity_max: Int? = nil,
+            soil_temp_min_f: Int? = nil,
+            soil_temp_max_f: Int? = nil,
+            seed_depth_inches: Double? = nil,
+            plant_spacing_inches: Int? = nil,
+            row_spacing_inches: Int? = nil,
+            sun_requirement: String? = nil,
+            frost_tolerance: String? = nil,
+            sow_method: String? = nil,
+            life_cycle: String? = nil,
+            hardiness_zone_min: Int? = nil,
+            hardiness_zone_max: Int? = nil,
+            self_confidence: Double? = nil
+        ) {
+            self.common_name = common_name
+            self.scientific_name = scientific_name
+            self.variety = variety
+            self.company = company
+            self.instructions = instructions
+            self.days_to_germinate_min = days_to_germinate_min
+            self.days_to_germinate_max = days_to_germinate_max
+            self.days_to_maturity_min = days_to_maturity_min
+            self.days_to_maturity_max = days_to_maturity_max
+            self.soil_temp_min_f = soil_temp_min_f
+            self.soil_temp_max_f = soil_temp_max_f
+            self.seed_depth_inches = seed_depth_inches
+            self.plant_spacing_inches = plant_spacing_inches
+            self.row_spacing_inches = row_spacing_inches
+            self.sun_requirement = sun_requirement
+            self.frost_tolerance = frost_tolerance
+            self.sow_method = sow_method
+            self.life_cycle = life_cycle
+            self.hardiness_zone_min = hardiness_zone_min
+            self.hardiness_zone_max = hardiness_zone_max
+            self.self_confidence = self_confidence
+        }
     }
 
     public struct ExtractionReview: Codable, Sendable, Equatable {

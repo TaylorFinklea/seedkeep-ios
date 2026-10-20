@@ -54,6 +54,7 @@ struct AppEnvironmentGateTests {
                        checkpoints: checkpoints, cleanup: {
             defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: env.scanStagingRoot)
         })
     }
 
@@ -64,6 +65,17 @@ struct AppEnvironmentGateTests {
         context.insert(LocalJournalRecoveryItem(id: "rec_1", scopeKey: "scope", snapshotJSON: "{}",
                                                 detectedAt: 1, status: "pending"))
         try context.save()
+    }
+
+    /// Stages one scan photo under the environment's staging root, as a scan in progress would.
+    private static func stageScan(_ env: AppEnvironment, household: String) throws -> UUID {
+        let scanID = UUID()
+        try ScanPhotoStaging.write(
+            Data("front".utf8), side: .front, scanID: scanID,
+            scope: ScanPhotoStaging.Scope(userRecordName: "_any", householdID: household),
+            root: env.scanStagingRoot
+        )
+        return scanID
     }
 
     private static func counts(_ container: ModelContainer) throws -> (seeds: Int, recovery: Int) {
@@ -82,6 +94,8 @@ struct AppEnvironmentGateTests {
         defer { h.cleanup() }
         try Self.insertGardenAndRecoveryItem(h.container, household: "hh_h")
         await h.env.auth.restoreSession()
+        let scanID = try Self.stageScan(h.env, household: "hh_h")
+        let epochBefore = h.env.scanSessionEpoch
         guard case .choosingGarden(let choice) = h.env.auth.state else {
             Issue.record("expected the chooser, got \(h.env.auth.state)")
             return
@@ -98,6 +112,9 @@ struct AppEnvironmentGateTests {
         let after = try Self.counts(h.container)
         #expect(after.seeds == 0, "the discarded garden's rows go")
         #expect(after.recovery == 1, "device-only journal recovery items stay")
+        #expect(ScanPhotoStaging.manifest(for: scanID, root: h.env.scanStagingRoot) == nil,
+                "the discarded garden's staged scan photos go (N2)")
+        #expect(h.env.scanSessionEpoch > epochBefore, "open scan and save sheets are invalidated (V1)")
     }
 
     @Test("a different iCloud user's wipe removes journal recovery items too")
@@ -106,6 +123,8 @@ struct AppEnvironmentGateTests {
         let h = try Self.makeHarness("full", provider: provider, cache: (Self.userA, "hh_a"))
         defer { h.cleanup() }
         try Self.insertGardenAndRecoveryItem(h.container, household: "hh_a")
+        let scanID = try Self.stageScan(h.env, household: "hh_a")
+        let epochBefore = h.env.scanSessionEpoch
 
         await h.env.auth.restoreSession()
 
@@ -117,6 +136,9 @@ struct AppEnvironmentGateTests {
         let after = try Self.counts(h.container)
         #expect(after.seeds == 0)
         #expect(after.recovery == 0, "another user's device-only data must not survive")
+        #expect(ScanPhotoStaging.manifest(for: scanID, root: h.env.scanStagingRoot) == nil,
+                "another user's staged scan photos must not survive (N2)")
+        #expect(h.env.scanSessionEpoch > epochBefore, "open scan and save sheets are invalidated (V1)")
     }
 
     // MARK: - CloudKit gate

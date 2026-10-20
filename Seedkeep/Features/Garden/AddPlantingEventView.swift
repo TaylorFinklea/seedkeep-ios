@@ -41,11 +41,14 @@ struct AddPlantingEventView: View {
     @State private var saving = false
     @State private var error: String?
 
-    /// Cached recommendation for the currently selected seed's catalog ID.
-    @State private var localRecommendation: LocalRecommendation?
-
     /// WeatherKit-refined recommendation for the currently selected seed.
     @State private var refinedRecommendation: RefinedRecommendation?
+
+    /// The planning window for the selected seed, computed on this device. Read on every render, so it follows the
+    /// day, the seed's growing info and the home location.
+    private var localRecommendation: PlantingRecommendation? {
+        selectedSeed.flatMap { appEnv.recommendations.recommendation(for: $0) }
+    }
 
     var body: some View {
         NavigationStack {
@@ -67,10 +70,9 @@ struct AddPlantingEventView: View {
                 if selectedBedID == nil { selectedBedID = bedID }
                 if selectedSeedID == nil { selectedSeedID = prefillSeedID }
                 if let date = prefillDate { plannedFor = date }
-                Task { await refreshRecommendationForSelection() }
             }
-            .onChange(of: selectedSeedID) { _, _ in
-                Task { await refreshRecommendationForSelection() }
+            .task(id: refinementKey) {
+                await refreshRefinement()
             }
         }
     }
@@ -118,8 +120,7 @@ struct AddPlantingEventView: View {
     /// (matching `parseYYYYMMDD` and `yyyymmdd(_:)`); comparison is at local
     /// day granularity so the window check agrees with what the DatePicker saves.
     private var outOfWindowMessage: String? {
-        guard !ServerRetirement.isRetired,
-              let rec = localRecommendation,
+        guard let rec = localRecommendation,
               let startStr = rec.rangeStart,
               let endStr = rec.rangeEnd,
               let start = parseYYYYMMDD(startStr),
@@ -173,17 +174,17 @@ struct AddPlantingEventView: View {
     }
 
     /// Recommendation section. Shows `RecommendationPanel` (which conveys
-    /// both the planting window and any frost-risk verdict) when the selected
-    /// seed has a catalog link. Includes a "Use recommended date" affordance
-    /// that sets the DatePicker to the recommendation's `rangeStart`.
+    /// both the planting window and any frost-risk verdict) when a seed is
+    /// selected. Includes a "Use recommended date" affordance that sets the
+    /// DatePicker to the recommendation's `rangeStart`.
     ///
     /// The frost-warning concern from the old `frostWarningSection` is now
     /// communicated by the panel's verdict (e.g. `too_early` when the user
-    /// is before the window, which the server derives from the home ZIP's
-    /// frost dates). No separate frost-date logic is needed client-side.
+    /// is before the window, which is computed from the home ZIP's frost
+    /// dates). No separate frost-date logic is needed client-side.
     @ViewBuilder
     private var recommendationSection: some View {
-        if !ServerRetirement.isRetired, selectedCatalogID != nil {
+        if selectedSeed != nil {
             Section {
                 if appEnv.recommendations.needsHomeLocation {
                     RecommendationPanel.needsLocation
@@ -191,7 +192,8 @@ struct AddPlantingEventView: View {
                     RecommendationPanel(
                         recommendation: localRecommendation,
                         refined: refinedRecommendation,
-                        userDate: plannedFor
+                        userDate: plannedFor,
+                        hasGrowingInfo: selectedSeed?.growingInfo?.hasAny == true
                     )
                     if let start = localRecommendation?.rangeStart,
                        let date = parseYYYYMMDD(start) {
@@ -204,7 +206,7 @@ struct AddPlantingEventView: View {
             } header: {
                 Rubric(text: "planting window")
             } footer: {
-                Text("Server-computed from this seed's catalog entry and your garden location.")
+                Text("Computed on this device from the seed's growing info and your home location.")
             }
         }
     }
@@ -271,10 +273,10 @@ struct AddPlantingEventView: View {
         return activeBeds.first(where: { $0.id == id })
     }
 
-    /// The catalog ID of the currently selected seed, or nil if none.
-    private var selectedCatalogID: String? {
+    /// The currently selected seed, or nil if none.
+    private var selectedSeed: LocalSeed? {
         guard let seedID = selectedSeedID else { return nil }
-        return activeSeeds.first(where: { $0.id == seedID })?.catalogID
+        return activeSeeds.first(where: { $0.id == seedID })
     }
 
     private var activeBeds: [LocalBed] {
@@ -354,31 +356,31 @@ struct AddPlantingEventView: View {
 
     // MARK: - Recommendation fetch
 
+    /// The inputs the refined window depends on. A change to any of them restarts the refinement.
+    private var refinementKey: String {
+        selectedSeed.map { appEnv.recommendations.refinementKey(for: $0) } ?? ""
+    }
+
+    /// Applies WeatherKit refinement when coordinates are available. Growing-info fields come from the selected
+    /// seed's own snapshot.
     @MainActor
-    private func refreshRecommendationForSelection() async {
-        guard !ServerRetirement.isRetired else { return }
-        guard let catalogID = selectedCatalogID else {
-            localRecommendation = nil
-            refinedRecommendation = nil
-            return
-        }
-        await appEnv.recommendations.refresh(catalogSeedID: catalogID)
-        localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
-        // Apply WeatherKit refinement when coordinates are available.
-        // Growing-info fields come from the selected seed's local snapshot.
-        if let lat = appEnv.preferences.cachedLatitude,
-           let lon = appEnv.preferences.cachedLongitude {
-            let growingInfo: GrowingInfoSnapshot? = seeds
-                .first(where: { $0.id == selectedSeedID })
-                .flatMap { $0.growingInfo }
-            refinedRecommendation = await appEnv.recommendations.refinedRecommendation(
-                for: catalogID,
-                householdLat: lat,
-                householdLon: lon,
-                frostTolerance: growingInfo?.frost_tolerance,
-                soilTempMaxF: growingInfo?.soil_temp_max_f
-            )
-        }
+    private func refreshRefinement() async {
+        refinedRecommendation = nil
+        guard let seed = selectedSeed,
+              let baseline = localRecommendation,
+              let lat = appEnv.preferences.cachedLatitude,
+              let lon = appEnv.preferences.cachedLongitude else { return }
+        let growingInfo = RecommendationStore.effectiveGrowingInfo(for: seed)
+        let refined = await appEnv.recommendations.refinedRecommendation(
+            baseline: baseline,
+            householdLat: lat,
+            householdLon: lon,
+            frostTolerance: growingInfo?.frost_tolerance,
+            soilTempMaxF: growingInfo?.soil_temp_max_f
+        )
+        // The inputs may have changed while the forecast loaded.
+        guard !Task.isCancelled else { return }
+        refinedRecommendation = refined
     }
 
     // MARK: - Date helpers

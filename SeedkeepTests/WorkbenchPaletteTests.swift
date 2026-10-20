@@ -24,7 +24,7 @@ struct WorkbenchPaletteTests {
 
         #expect(titleMatch.contains { $0.id == "action:newSeed" })
         #expect(hintMatch.contains { $0.id == "action:newSeed" })
-        #expect(groupMatches.map(\.id) == ["action:exportCSV", "action:focusSearch", "action:newSeed"])
+        #expect(groupMatches.map(\.id) == ["action:exportCSV", "action:focusSearch", "action:newSeed", "action:randomPick"])
     }
 
     @Test("ties sort Actions, Go to, then Seeds and alphabetically within each group")
@@ -33,10 +33,12 @@ struct WorkbenchPaletteTests {
 
         let ids = CommandPaletteSearch.results(query: "", rows: rows).map(\.id)
         #expect(ids == [
-            "action:exportCSV", "action:focusSearch", "action:newSeed",
-            "route:garden", "route:journal", "route:seeds", "route:settings", "route:today",
-            "seed:alpha"
+            "action:exportCSV", "action:focusSearch", "action:newSeed", "action:randomPick",
+            "route:garden", "route:journal", "route:seeds", "route:settings", "route:today"
         ])
+        // Seeds come after Actions and Go to, alphabetically.
+        let seedIDs = CommandPaletteSearch.results(query: "a", rows: rows).map(\.id).filter { $0.hasPrefix("seed:") }
+        #expect(seedIDs == ["seed:alpha"])
     }
 
     @Test("results are capped at nine")
@@ -79,8 +81,8 @@ struct WorkbenchPaletteTests {
     func emptyQueryReturnsDefaults() {
         let rows = [seedRow(id: "alpha", name: "Alpha"), seedRow(id: "beta", name: "Beta")]
         let expected = [
-            "action:exportCSV", "action:focusSearch", "action:newSeed",
-            "route:garden", "route:journal", "route:seeds", "route:settings", "route:today", "seed:alpha"
+            "action:exportCSV", "action:focusSearch", "action:newSeed", "action:randomPick",
+            "route:garden", "route:journal", "route:seeds", "route:settings", "route:today"
         ]
 
         #expect(CommandPaletteSearch.results(query: "", rows: rows).map(\.id) == expected)

@@ -12,7 +12,7 @@ import SwiftData
 /// // Full recommendation (refined overrides baseline when present)
 /// RecommendationPanel(recommendation: rec, refined: refined, userDate: plannedFor)
 ///
-/// // Nil (loading/unfetched) state
+/// // Nil state: the seed has no growing info to plan from
 /// RecommendationPanel(recommendation: nil, refined: nil, userDate: nil)
 ///
 /// // No-location state — show guidance to set garden location
@@ -22,11 +22,14 @@ struct RecommendationPanel: View {
 
     // MARK: Inputs
 
-    let recommendation: LocalRecommendation?
+    let recommendation: PlantingRecommendation?
     let refined: RefinedRecommendation?
     /// When non-nil and within the 60-day score span, a vertical "Your date"
     /// marker is drawn on the gradient bar.
     let userDate: Date?
+    /// True when the seed has growing info, even if none of it is a field the engine reads. Words the
+    /// note shown when there is no recommendation.
+    var hasGrowingInfo = false
 
     // MARK: Body
 
@@ -34,16 +37,17 @@ struct RecommendationPanel: View {
         if let rec = recommendation {
             filledPanel(rec)
         } else {
-            loadingPlaceholder
+            noGrowingInfo
         }
     }
 
     // MARK: - Filled panel
 
     @ViewBuilder
-    private func filledPanel(_ rec: LocalRecommendation) -> some View {
+    private func filledPanel(_ rec: PlantingRecommendation) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             verdictBadge(for: rec)
+            confidenceRow(for: rec)
             windowDates(for: rec)
             gradientBar(for: rec)
             weatherNoteRow
@@ -53,7 +57,7 @@ struct RecommendationPanel: View {
 
     // MARK: - Verdict badge
 
-    private func verdictBadge(for rec: LocalRecommendation) -> some View {
+    private func verdictBadge(for rec: PlantingRecommendation) -> some View {
         let effectiveVerdict = refined?.verdict ?? rec.verdict
         let info = VerdictInfo(raw: effectiveVerdict)
         let herbColor = herbVerdictColor(for: effectiveVerdict)
@@ -67,18 +71,6 @@ struct RecommendationPanel: View {
                 .foregroundStyle(HerbColor.ink)
                 .textCase(.uppercase)
             Spacer()
-            if rec.source == "ai" {
-                HStack(spacing: 4) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 9))
-                        .foregroundStyle(HerbColor.sepia)
-                    Text("AI")
-                        .font(HerbFont.smallCaps(size: 9))
-                        .tracking(1.2)
-                        .foregroundStyle(HerbColor.sepia)
-                        .textCase(.uppercase)
-                }
-            }
         }
     }
 
@@ -96,7 +88,7 @@ struct RecommendationPanel: View {
     // MARK: - Window dates
 
     @ViewBuilder
-    private func windowDates(for rec: LocalRecommendation) -> some View {
+    private func windowDates(for rec: PlantingRecommendation) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             if let start = rec.rangeStart, let end = rec.rangeEnd {
                 let startStr = formattedDate(start) ?? start
@@ -111,9 +103,10 @@ struct RecommendationPanel: View {
                         .foregroundStyle(HerbColor.ink)
                 }
             } else if rec.rangeStart == nil && rec.rangeEnd == nil {
-                Text("No outdoor window computed")
+                Text(Self.noWindowNote(for: rec.reason))
                     .font(HerbFont.bodyItalic(size: 12))
                     .foregroundStyle(HerbColor.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let iStart = rec.indoorStart, let iEnd = rec.indoorEnd {
@@ -135,7 +128,7 @@ struct RecommendationPanel: View {
     // MARK: - 60-day gradient bar
 
     @ViewBuilder
-    private func gradientBar(for rec: LocalRecommendation) -> some View {
+    private func gradientBar(for rec: PlantingRecommendation) -> some View {
         let scores = refined?.dailyScores ?? rec.dailyScores
         let anchorStr = refined?.scoresAnchorDate ?? rec.scoresAnchorDate
 
@@ -184,10 +177,57 @@ struct RecommendationPanel: View {
         }
     }
 
+    // MARK: - Confidence
+
+    /// A window the rule had little to go on for is still shown, with its confidence.
+    @ViewBuilder
+    private func confidenceRow(for rec: PlantingRecommendation) -> some View {
+        if let note = Self.confidenceNote(for: rec) {
+            Text(note)
+                .font(HerbFont.bodyItalic(size: 11))
+                .foregroundStyle(HerbColor.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The low-confidence note, shown only when a window exists but growing info fields are
+    /// missing. A missing window explains itself through `noWindowNote(for:)` instead.
+    static func confidenceNote(for rec: PlantingRecommendation) -> String? {
+        guard rec.reason == .incompleteInfo else { return nil }
+        return "Low confidence (\(Int((rec.confidence * 100).rounded()))%): the growing info for this seed is incomplete."
+    }
+
+    /// Why the engine computed no outdoor window, worded from its reason.
+    static func noWindowNote(for reason: PlantingRecommendation.Reason?) -> String {
+        switch reason {
+        case .seasonTooShort:
+            return "No window: the season here is too short for this seed to mature before the first frost."
+        case .missingMaturity:
+            return "No window: this seed has no days to maturity, so there is no latest planting date."
+        case .unreadableClimate:
+            return "No window: the home location's frost dates couldn't be read."
+        case .incompleteInfo, .none:
+            return "No outdoor window computed"
+        }
+    }
+
+    /// Why a seed has no recommendation (with a home location set): no growing info at all, or growing
+    /// info with none of the fields the engine reads.
+    static func noRecommendationNote(hasGrowingInfo: Bool) -> String {
+        hasGrowingInfo
+            ? "This seed's growing info doesn't include a frost tolerance, sowing method or days to maturity, so there's no planting window yet."
+            : "No growing info for this seed."
+    }
+
+    /// The verdict's label. "unknown" is final on the device, so it reads "No window".
+    static func verdictLabel(for raw: String) -> String {
+        VerdictInfo(raw: raw).label
+    }
+
     // MARK: - Reasoning
 
     @ViewBuilder
-    private func reasoningRow(for rec: LocalRecommendation) -> some View {
+    private func reasoningRow(for rec: PlantingRecommendation) -> some View {
         if let reasoning = rec.reasoning, !reasoning.isEmpty {
             Text(reasoning)
                 .font(HerbFont.bodyItalic(size: 11))
@@ -196,15 +236,12 @@ struct RecommendationPanel: View {
         }
     }
 
-    // MARK: - Loading placeholder
+    // MARK: - No growing info
 
-    private var loadingPlaceholder: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small).tint(HerbColor.sepia)
-            Text("Reading the planting window…")
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-        }
+    private var noGrowingInfo: some View {
+        Text(Self.noRecommendationNote(hasGrowingInfo: hasGrowingInfo))
+            .font(HerbFont.bodyItalic(size: 12))
+            .foregroundStyle(HerbColor.inkSoft)
     }
 
     // MARK: - Helpers
@@ -262,7 +299,8 @@ private struct VerdictInfo {
         case "too_early":  return "Too early"
         case "late":       return "Window closing"
         case "too_late":   return "Missed this year"
-        default:           return "Checking…"
+        // The device computes every window at once, so "unknown" is final, not pending.
+        default:           return "No window"
         }
     }
 
@@ -403,10 +441,9 @@ private func makeSampleRecommendation(
     rangeEnd: String? = nil,
     indoorStart: String? = nil,
     indoorEnd: String? = nil,
-    source: String = "ai",
     reasoning: String? = nil,
     scores: [Double]? = nil
-) -> LocalRecommendation {
+) -> PlantingRecommendation {
     let anchor = "2026-05-01"
     // Generate a plausible 60-day score curve when not specified
     let defaultScores: [Double] = (0..<60).map { i in
@@ -415,13 +452,8 @@ private func makeSampleRecommendation(
         let peak = 0.95 * exp(-pow(x - 27, 2) / 200)
         return min(max(peak, 0), 1)
     }
-    let json = (try? String(data: JSONEncoder().encode(scores ?? defaultScores), encoding: .utf8)) ?? "[]"
-
-    return LocalRecommendation(
-        catalogSeedID: "preview-\(verdict)",
-        locationSignature: "preview",
-        computedAt: Int64(Date().timeIntervalSince1970 * 1000),
-        source: source,
+    return PlantingRecommendation(
+        source: "rule",
         confidence: 0.85,
         verdict: verdict,
         rangeStart: rangeStart,
@@ -429,9 +461,8 @@ private func makeSampleRecommendation(
         indoorStart: indoorStart,
         indoorEnd: indoorEnd,
         scoresAnchorDate: anchor,
-        dailyScoresJSON: json,
-        reasoning: reasoning,
-        fetchedAt: Int64(Date().timeIntervalSince1970 * 1000)
+        dailyScores: scores ?? defaultScores,
+        reasoning: reasoning
     )
 }
 
@@ -442,7 +473,6 @@ private func makeSampleRecommendation(
         rangeEnd: "2026-07-01",
         indoorStart: "2026-03-15",
         indoorEnd: "2026-04-15",
-        source: "ai",
         reasoning: "Soil temperatures in your area typically reach optimal germination range by mid-May. The long season variety benefits from an early indoor start."
     )
     let refined = RefinedRecommendation(
@@ -465,7 +495,6 @@ private func makeSampleRecommendation(
 #Preview("Unknown verdict") {
     let rec = makeSampleRecommendation(
         verdict: "unknown",
-        source: "rule",
         scores: Array(repeating: 0.0, count: 60)
     )
     return Form {
@@ -480,7 +509,6 @@ private func makeSampleRecommendation(
         verdict: "too_early",
         rangeStart: "2026-06-10",
         rangeEnd: "2026-08-01",
-        source: "rule",
         reasoning: nil,
         scores: (0..<60).map { i in i < 30 ? 0.05 * Double(i) / 30.0 : 0.9 }
     )
@@ -511,8 +539,7 @@ private func makeSampleRecommendation(
     let rec = makeSampleRecommendation(
         verdict: "plant_soon",
         rangeStart: "2026-06-01",
-        rangeEnd: "2026-07-15",
-        source: "rule"
+        rangeEnd: "2026-07-15"
     )
     return ScrollView {
         RecommendationPanel(recommendation: rec, refined: nil, userDate: nil)

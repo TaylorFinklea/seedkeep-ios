@@ -93,13 +93,13 @@ struct CornerSuggestionsFlowTests {
 
         let recs: [PlantSuggestionRanker.RecommendationInput] = [
             PlantSuggestionRanker.RecommendationInput(
-                catalogSeedID: "cat_tomato",
+                seedID: "flow_tomato",
                 verdict: "plant_now",
                 rangeStart: "2026-05-01",
                 rangeEnd: "2026-07-01"
             ),
             PlantSuggestionRanker.RecommendationInput(
-                catalogSeedID: "cat_pepper",
+                seedID: "flow_pepper",
                 verdict: "plant_soon",
                 rangeStart: "2026-06-01",
                 rangeEnd: "2026-08-01"
@@ -161,11 +161,11 @@ struct CornerSuggestionsFlowTests {
         let seedInputs = [sunflower, fern]
         let recs: [PlantSuggestionRanker.RecommendationInput] = [
             PlantSuggestionRanker.RecommendationInput(
-                catalogSeedID: "cat_sun", verdict: "plant_now",
+                seedID: "sun_seed", verdict: "plant_now",
                 rangeStart: "2026-05-01", rangeEnd: "2026-07-01"
             ),
             PlantSuggestionRanker.RecommendationInput(
-                catalogSeedID: "cat_fern", verdict: "plant_now",
+                seedID: "fern_seed", verdict: "plant_now",
                 rangeStart: "2026-05-01", rangeEnd: "2026-07-01"
             ),
         ]

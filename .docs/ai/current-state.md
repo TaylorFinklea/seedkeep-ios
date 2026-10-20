@@ -1,5 +1,35 @@
 # Current State
 
+## Apple-only app — N2 complete (2026-10-20)
+
+N2 brings back, fully on the device, what N1 hid. On branch
+`redesign/n1-apple-only` after N1; local only.
+- **Home location:** ZIP only, looked up in a bundled table
+  (`Seedkeep/Resources/Climate/zip_climate.csv`, 33,751 ZIPs; zone frost dates
+  in `ZoneFrostDates.swift`; sources in `SOURCES.md`). Existing ZIPs get frost
+  dates filled in at launch.
+- **Planting recommendations:** the server's rule engine and projection ported
+  to Swift (`PlantingEngine`), keyed by seed and computed from each seed's
+  growing info and the local date. No AI fallback, no extension calendars.
+  Seeds without usable growing info show no window.
+- **Scanning:** extraction on device (or BYOK) saves locally; both packet
+  photos become the seed's photos. Staging is durable, scoped to the iCloud
+  user and garden, purged on any account or garden change, and resumed after a
+  verified launch. No barcode or catalog step.
+- **Random pick:** local, weighted by packet age, in the active garden; also
+  in the Workbench (Seeds toolbar, menu, ⌘K).
+- **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 1043 + 1, macOS
+  app 1058 + 1, on Xcode 27.1. **Reviews:** Opus 5.5 and GPT-6.1 Sol, three
+  rounds plus confirmations.
+- **Contract:** `.docs/ai/plans/2026-10-20-n2-on-device.md`.
+- **Still to do:**
+  - N2-E, "Delete Seedkeep data" plus handling a garden deleted elsewhere. The
+    contract draft was rejected by Sol and needs redesign (account-bound
+    retired gardens, no zone resurrection).
+  - The owner's real-account check on Mac and iPhone.
+  - N3: remove the server code, privacy policy and labels, retire legacy
+    accounts, and verify the zone-data redistribution terms.
+
 ## Apple-only app — N1 complete (2026-10-20)
 
 The app no longer needs the Seedkeep server (Fly has been stopped since

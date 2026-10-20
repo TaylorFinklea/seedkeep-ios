@@ -46,11 +46,8 @@ struct SeedsTableRowTests {
         )
     }
 
-    private static func recommendation(catalogID: String, verdict: String) -> LocalRecommendation {
-        LocalRecommendation(
-            catalogSeedID: catalogID,
-            locationSignature: "sig",
-            computedAt: 1,
+    private static func recommendation(verdict: String) -> PlantingRecommendation {
+        PlantingRecommendation(
             source: "rule",
             confidence: 1,
             verdict: verdict,
@@ -59,9 +56,8 @@ struct SeedsTableRowTests {
             indoorStart: nil,
             indoorEnd: nil,
             scoresAnchorDate: "2026-10-17",
-            dailyScoresJSON: "[]",
-            reasoning: nil,
-            fetchedAt: 1
+            dailyScores: [],
+            reasoning: nil
         )
     }
 
@@ -167,17 +163,17 @@ struct SeedsTableRowTests {
         #expect(rows.map(\.id) == ["live"])
     }
 
-    @Test("verdict is keyed by catalog id and worded as the app already words it")
+    @Test("verdict is keyed by seed id and worded as the app already words it")
     func verdictMapping() {
         let seeds = [
             Self.seed(id: "planted", catalogID: "cat_now"),
             Self.seed(id: "unknown", catalogID: "cat_odd"),
-            Self.seed(id: "none", catalogID: "cat_missing"),
+            Self.seed(id: "none"),
             Self.seed(id: "manual"),
         ]
         let recommendations = [
-            "cat_now": Self.recommendation(catalogID: "cat_now", verdict: "plant_now"),
-            "cat_odd": Self.recommendation(catalogID: "cat_odd", verdict: "mystery"),
+            "planted": Self.recommendation(verdict: "plant_now"),
+            "unknown": Self.recommendation(verdict: "mystery"),
         ]
         let rows = SeedTableRow.rows(seeds: seeds, locations: [], tags: [], recommendations: recommendations)
         let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
@@ -185,10 +181,10 @@ struct SeedsTableRowTests {
         #expect(byID["planted"]?.verdict == "plant_now")
         #expect(byID["planted"]?.verdictLabel == "Plant now")
         #expect(byID["unknown"]?.verdict == "mystery")
-        #expect(byID["unknown"]?.verdictLabel == "Checking…")
+        #expect(byID["unknown"]?.verdictLabel == "No window")
         #expect(byID["none"]?.verdict == nil)
         #expect(byID["none"]?.verdictLabel == "")
-        #expect(byID["manual"]?.verdict == nil, "a seed without a catalog link has no verdict")
+        #expect(byID["manual"]?.verdict == nil, "a seed with no planting window has no verdict")
     }
 
     @Test("verdict labels match the Library's wording")
@@ -198,6 +194,6 @@ struct SeedsTableRowTests {
         #expect(SeedTableRow.verdictLabel(for: "too_early") == "Too early")
         #expect(SeedTableRow.verdictLabel(for: "late") == "Window closing")
         #expect(SeedTableRow.verdictLabel(for: "too_late") == "Missed this year")
-        #expect(SeedTableRow.verdictLabel(for: "anything else") == "Checking…")
+        #expect(SeedTableRow.verdictLabel(for: "anything else") == "No window")
     }
 }

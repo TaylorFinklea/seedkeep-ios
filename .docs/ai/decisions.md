@@ -275,6 +275,19 @@
 
 **Rationale**: CloudKit already held the data. Making the iCloud account the identity removes the last server dependency without a schema change and without touching existing users' data.
 
+## 2026-10-20 — On-device climate, recommendations and scanning (N2)
+
+**Context**: With the server retired (N1), home location, planting windows, packet scanning and random pick had no backend.
+
+**Decision**:
+- Bundle a ZIP → coordinates + USDA zone table (built from the server's `zip_locations.csv` by `scripts/build-climate-resources.py`) and a zone → frost-date table. Home location is ZIP only, offline, stored per device.
+- Port the server's rule baseline and projection to Swift exactly, computed on read per seed from its growing-info snapshot and the user's local date. Drop the AI fallback and the unreviewed extension calendars.
+- Scans save locally; both packet photos become seed photos with stable IDs, through scoped, resumable staging.
+
+**Alternatives considered**: CoreLocation (needs a permission prompt; ZIP is enough); keeping the server catalog for barcode lookup (needs a server); persisting recommendations in `LocalRecommendation` (stale by design; it stays unused until N3 removes it).
+
+**Rationale**: Everything these features need fits on the device. The same inputs give the same windows as the server, without hosting.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in

@@ -1,4 +1,5 @@
 import Foundation
+import SeedkeepKit
 
 /// BYOK (bring-your-own-key) extractor. Sends the front + back photos
 /// directly to the user's chosen LLM provider — Anthropic preferred,
@@ -33,6 +34,34 @@ public struct BYOKExtractor: Sendable {
 
         public let selfConfidence: Double
         public let modelID: String
+
+        /// The fields in the wire shape the scan review reads. Only the provider the user chose
+        /// receives the photos; nothing goes to our server (N2).
+        public var extractionFields: WireResponses.ExtractionFields {
+            WireResponses.ExtractionFields(
+                common_name: commonName,
+                scientific_name: scientificName,
+                variety: variety,
+                company: company,
+                instructions: instructions,
+                days_to_germinate_min: daysToGerminateMin,
+                days_to_germinate_max: daysToGerminateMax,
+                days_to_maturity_min: daysToMaturityMin,
+                days_to_maturity_max: daysToMaturityMax,
+                soil_temp_min_f: soilTempMinF,
+                soil_temp_max_f: soilTempMaxF,
+                seed_depth_inches: seedDepthInches,
+                plant_spacing_inches: plantSpacingInches,
+                row_spacing_inches: rowSpacingInches,
+                sun_requirement: sunRequirement,
+                frost_tolerance: frostTolerance,
+                sow_method: sowMethod,
+                life_cycle: lifeCycle,
+                hardiness_zone_min: hardinessZoneMin,
+                hardiness_zone_max: hardinessZoneMax,
+                self_confidence: selfConfidence
+            )
+        }
     }
 
     public enum Failure: Error, LocalizedError {

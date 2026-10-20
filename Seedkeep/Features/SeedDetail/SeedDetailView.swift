@@ -38,12 +38,8 @@ struct SeedDetailView: View {
     @State private var uploadError: String?
     @State private var showPlanEvent = false
 
-    /// Cached recommendation for this seed's catalog entry. Loaded
-    /// asynchronously in the `.task(id:)` alongside the catalog fetch.
-    @State private var localRecommendation: LocalRecommendation?
-
-    /// WeatherKit-refined recommendation, computed after the baseline loads
-    /// when the household's lat/lon are available.
+    /// WeatherKit-refined recommendation, computed in the `.task(id:)` after
+    /// the baseline when the household's lat/lon are available.
     @State private var refinedRecommendation: RefinedRecommendation?
 
     /// Local edit buffers for the Identity section. Mirrored from the seed
@@ -64,14 +60,20 @@ struct SeedDetailView: View {
     /// True while the catalog-feedback sheet is presented (Phase 4 D).
     @State private var showCatalogFeedback = false
 
+    /// Oldest capture first, so the first photo is the cover. The ID breaks a tie, so the order
+    /// never depends on fetch order (N2: a scan's front is captured before its back).
+    static let photoSort: [SortDescriptor<LocalSeedPhoto>] = [
+        SortDescriptor(\.capturedAt, order: .forward),
+        SortDescriptor(\.id, order: .forward),
+    ]
+
     init(seedID: String) {
         self.seedID = seedID
         let id = seedID
         _seedQuery = Query(filter: #Predicate<LocalSeed> { $0.id == id })
         _photoQuery = Query(
             filter: #Predicate<LocalSeedPhoto> { $0.seedID == id },
-            sort: \.capturedAt,
-            order: .forward
+            sort: Self.photoSort
         )
     }
 
@@ -122,24 +124,26 @@ struct SeedDetailView: View {
                                 try? appEnv.sync.setLocalGrowingInfo(seedID: seed.id, snapshot: snap)
                             }
                         }
-                        // Refresh the planting-window recommendation from the server
-                        // and read back the cached result for the panel.
-                        if !ServerRetirement.isRetired {
-                            await appEnv.recommendations.refresh(catalogSeedID: catalogID)
-                            localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
-                        }
-                        // Apply WeatherKit refinement when coordinates are available.
-                        if let lat = appEnv.preferences.cachedLatitude,
-                           let lon = appEnv.preferences.cachedLongitude {
-                            let growingInfo = effectiveGrowingInfo(seed)
-                            refinedRecommendation = await appEnv.recommendations.refinedRecommendation(
-                                for: catalogID,
-                                householdLat: lat,
-                                householdLon: lon,
-                                frostTolerance: growingInfo?.frost_tolerance,
-                                soilTempMaxF: growingInfo?.soil_temp_max_f
-                            )
-                        }
+                    }
+                }
+                .task(id: appEnv.recommendations.refinementKey(for: seed)) {
+                    // Apply WeatherKit refinement when coordinates are available. The task is keyed by the
+                    // inputs, so a change to the growing info, the home location or the day refines again.
+                    refinedRecommendation = nil
+                    if let baseline = appEnv.recommendations.recommendation(for: seed),
+                       let lat = appEnv.preferences.cachedLatitude,
+                       let lon = appEnv.preferences.cachedLongitude {
+                        let growingInfo = effectiveGrowingInfo(seed)
+                        let refined = await appEnv.recommendations.refinedRecommendation(
+                            baseline: baseline,
+                            householdLat: lat,
+                            householdLon: lon,
+                            frostTolerance: growingInfo?.frost_tolerance,
+                            soilTempMaxF: growingInfo?.soil_temp_max_f
+                        )
+                        // The inputs may have changed while the forecast loaded.
+                        guard !Task.isCancelled else { return }
+                        refinedRecommendation = refined
                     }
                 }
             } else {
@@ -286,12 +290,14 @@ struct SeedDetailView: View {
                 }
             }
             HStack {
+                // Read here, not inside the picker's label closure, which is checked as a Sendable closure.
+                let uploading = uploadingPhoto
                 PhotosPicker(
                     selection: $pickedPhoto,
                     matching: .images,
                     photoLibrary: .shared()
                 ) {
-                    Label(uploadingPhoto ? "Uploading…" : "Add photo", systemImage: "photo.badge.plus")
+                    Label(uploading ? "Uploading…" : "Add photo", systemImage: "photo.badge.plus")
                 }
                 .disabled(uploadingPhoto)
                 if uploadingPhoto {
@@ -465,9 +471,7 @@ struct SeedDetailView: View {
     /// and fall back to the freshly-fetched catalog while it's loading or
     /// for legacy seeds without a snapshot.
     private func effectiveGrowingInfo(_ seed: LocalSeed) -> GrowingInfoSnapshot? {
-        if let snap = seed.growingInfo, snap.hasAny { return snap }
-        guard let catalog else { return nil }
-        return Self.snapshot(from: catalog)
+        RecommendationStore.effectiveGrowingInfo(for: seed, catalogFallback: catalog.map(Self.snapshot(from:)))
     }
 
     fileprivate static func snapshot(from c: CatalogSeedDTO) -> GrowingInfoSnapshot {
@@ -823,22 +827,20 @@ struct SeedDetailView: View {
             Text("Add a sow, transplant, harvest, or note tied to this seed and (optionally) a bed.")
         }
 
-        // Planting-window recommendation — only shown when the seed has a
-        // catalog link (manually-entered seeds have no server recommendation).
-        if !ServerRetirement.isRetired, seed.catalogID != nil {
-            Section {
-                if appEnv.recommendations.needsHomeLocation {
-                    RecommendationPanel.needsLocation
-                } else {
-                    RecommendationPanel(
-                        recommendation: localRecommendation,
-                        refined: refinedRecommendation,
-                        userDate: nil
-                    )
-                }
-            } header: {
-                Rubric(text: "planting window")
+        // Planting-window recommendation, computed on this device from the seed's growing info.
+        Section {
+            if appEnv.recommendations.needsHomeLocation {
+                RecommendationPanel.needsLocation
+            } else {
+                RecommendationPanel(
+                    recommendation: appEnv.recommendations.recommendation(for: seed),
+                    refined: refinedRecommendation,
+                    userDate: nil,
+                    hasGrowingInfo: seed.growingInfo?.hasAny == true
+                )
             }
+        } header: {
+            Rubric(text: "planting window")
         }
     }
 

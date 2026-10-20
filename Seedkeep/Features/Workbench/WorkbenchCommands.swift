@@ -89,6 +89,8 @@ struct WorkbenchCommands: Commands {
             Button("Export CSV…") { WorkbenchCommandAction.exportCSV.perform(on: model) }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!WorkbenchCommandAvailability.hasModel(model))
+            Button("Pick a Random Seed") { WorkbenchCommandAction.randomPick.perform(on: model) }
+                .disabled(!WorkbenchCommandAvailability.hasModel(model))
             Button("Delete Selected Seeds…") { WorkbenchCommandAction.delete.perform(on: model) }
                 .disabled(!WorkbenchCommandAvailability.canDelete(model: model))
             #if os(iOS)
@@ -123,7 +125,7 @@ struct WorkbenchCommands: Commands {
 
 @MainActor
 enum WorkbenchCommandAction {
-    case newSeed, find, exportCSV, delete, undo, redo, togglePalette
+    case newSeed, find, exportCSV, delete, undo, redo, togglePalette, randomPick
     case go(WorkbenchRoute)
 
     func perform(on model: WorkbenchModel?) {
@@ -132,6 +134,7 @@ enum WorkbenchCommandAction {
         case .newSeed: model.request(.newSeed)
         case .find: model.request(.focusSearch)
         case .exportCSV: model.request(.exportCSV)
+        case .randomPick: model.request(.randomPick)
         case .delete:
             guard WorkbenchCommandAvailability.canDelete(model: model) else { return }
             model.request(.deleteSelection)

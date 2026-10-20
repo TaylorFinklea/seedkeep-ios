@@ -33,9 +33,9 @@ struct CornerSuggestionsViewModelTests {
         )
     }
 
-    private func rec(catalogID: String, verdict: String) -> PlantSuggestionRanker.RecommendationInput {
+    private func rec(seedID: String, verdict: String) -> PlantSuggestionRanker.RecommendationInput {
         PlantSuggestionRanker.RecommendationInput(
-            catalogSeedID: catalogID,
+            seedID: seedID,
             verdict: verdict,
             rangeStart: "2026-05-01",
             rangeEnd: "2026-07-01"
@@ -51,8 +51,8 @@ struct CornerSuggestionsViewModelTests {
             seed(id: "s2", displayName: "Pepper", catalogID: "cat2"),
         ]
         let recs = [
-            rec(catalogID: "cat1", verdict: "plant_now"),
-            rec(catalogID: "cat2", verdict: "plant_soon"),
+            rec(seedID: "s1", verdict: "plant_now"),
+            rec(seedID: "s2", verdict: "plant_soon"),
         ]
         let analyzeCues = CornerCues(exposure: .fullSun, openness: .open)
 
@@ -89,8 +89,8 @@ struct CornerSuggestionsViewModelTests {
         )
 
         let recs = [
-            rec(catalogID: "cat_sun", verdict: "plant_now"),
-            rec(catalogID: "cat_fern", verdict: "plant_now"),
+            rec(seedID: "sunny", verdict: "plant_now"),
+            rec(seedID: "shady", verdict: "plant_now"),
         ]
         var fetchCount = 0
 
@@ -190,5 +190,34 @@ struct CornerSuggestionsViewModelTests {
 
         #expect(vm.cues == .unknown)
         #expect(!vm.isLoading)
+    }
+
+    @Test("with no home ZIP the note is the set-location prompt, even for seeds with catalog links")
+    func noHomeLocationNote() async {
+        let seeds = [seed(id: "s1", displayName: "Bean", catalogID: "cat1")]
+        let vm = CornerSuggestionsViewModel(
+            analyze: { _ in .unknown },
+            fetchSeeds: { seeds },
+            fetchRecommendations: { _ in [] },
+            hasHomeLocation: { false }
+        )
+
+        await vm.capture(image: makeImage())
+
+        #expect(vm.staleness == .noLocation)
+    }
+
+    @Test("seeds without a catalog link and without windows still get the no-windows note")
+    func noWindowsNoteIgnoresCatalogLinks() async {
+        let seeds = [seed(id: "s1", displayName: "Bean", catalogID: nil)]
+        let vm = CornerSuggestionsViewModel(
+            analyze: { _ in .unknown },
+            fetchSeeds: { seeds },
+            fetchRecommendations: { _ in [] }
+        )
+
+        await vm.capture(image: makeImage())
+
+        #expect(vm.staleness == .staleRecs)
     }
 }

@@ -37,7 +37,7 @@ struct PlantSuggestion: Equatable {
 /// Tie-break: verdict rank descending, then display name ascending.
 enum PlantSuggestionRanker {
 
-    // MARK: - Input types (lightweight structs the caller builds from SwiftData / LocalRecommendation)
+    // MARK: - Input types (lightweight structs the caller builds from SwiftData and the on-device recommendations)
 
     struct SeedInput: Equatable {
         let id: String
@@ -52,7 +52,8 @@ enum PlantSuggestionRanker {
     }
 
     struct RecommendationInput: Equatable {
-        let catalogSeedID: String
+        /// The owned seed this window belongs to, matched to `SeedInput.id`.
+        let seedID: String
         let verdict: String
         let rangeStart: String?
         let rangeEnd: String?
@@ -72,13 +73,14 @@ enum PlantSuggestionRanker {
         guard !seeds.isEmpty else { return [] }
 
         let recMap: [String: RecommendationInput] = Dictionary(
-            recommendations.map { ($0.catalogSeedID, $0) },
+            recommendations.map { ($0.seedID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let currentYear = Calendar.current.component(.year, from: today)
+        // The packet year is a Gregorian year, whatever calendar the user picked.
+        let currentYear = Calendar(identifier: .gregorian).component(.year, from: today)
 
         let suggestions = seeds.map { seed in
-            buildSuggestion(seed: seed, rec: seed.catalogID.flatMap { recMap[$0] },
+            buildSuggestion(seed: seed, rec: recMap[seed.id],
                             cues: cues, currentYear: currentYear)
         }
 

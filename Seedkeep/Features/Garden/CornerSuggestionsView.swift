@@ -36,8 +36,11 @@ final class CornerSuggestionsViewModel {
 
     var analyze: (PlatformImage) async -> CornerCues
     var fetchSeeds: () -> [PlantSuggestionRanker.SeedInput]
+    /// Takes the owned seed IDs and returns one window per seed that has one.
     var fetchRecommendations: ([String]) async -> [PlantSuggestionRanker.RecommendationInput]
     var today: () -> Date
+    /// True when a home ZIP has its climate cached. Without one no seed has a window.
+    var hasHomeLocation: () -> Bool
 
     enum StalenessNote: Equatable {
         case none
@@ -51,12 +54,14 @@ final class CornerSuggestionsViewModel {
         analyze: @escaping (PlatformImage) async -> CornerCues,
         fetchSeeds: @escaping () -> [PlantSuggestionRanker.SeedInput],
         fetchRecommendations: @escaping ([String]) async -> [PlantSuggestionRanker.RecommendationInput],
-        today: @escaping () -> Date = { Date() }
+        today: @escaping () -> Date = { Date() },
+        hasHomeLocation: @escaping () -> Bool = { true }
     ) {
         self.analyze = analyze
         self.fetchSeeds = fetchSeeds
         self.fetchRecommendations = fetchRecommendations
         self.today = today
+        self.hasHomeLocation = hasHomeLocation
     }
 
     // MARK: - Actions
@@ -85,11 +90,18 @@ final class CornerSuggestionsViewModel {
 
     private func refreshSuggestions() async {
         let seeds = fetchSeeds()
-        let catalogIDs = seeds.compactMap(\.catalogID)
-        let recs = await fetchRecommendations(catalogIDs)
+        let recs = await fetchRecommendations(seeds.map(\.id))
         cachedRecs = recs
-        if recs.isEmpty && !catalogIDs.isEmpty {
+        // Windows are computed on the device from each seed's growing info and the home climate (N2), so the
+        // note keys on those, not on catalog links: no home ZIP asks for one; seeds with no window at all say so.
+        if seeds.isEmpty {
+            staleness = .none
+        } else if !hasHomeLocation() {
+            staleness = .noLocation
+        } else if recs.isEmpty {
             staleness = .staleRecs
+        } else {
+            staleness = .none
         }
         suggestions = PlantSuggestionRanker.rank(seeds: seeds, recommendations: recs, cues: cues, today: today())
     }
@@ -194,12 +206,14 @@ struct CornerSuggestionsView: View {
                 Spacer()
             }
 
-            if viewModel.staleness == .staleRecs {
+            if viewModel.staleness == .noLocation {
+                RecommendationPanel.needsLocation
+            } else if viewModel.staleness == .staleRecs {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.circle")
                         .font(.caption)
                         .foregroundStyle(HerbColor.ochre)
-                    Text("Planting windows may be stale — ranking on season + library.")
+                    Text("No planting windows for these seeds yet — ranking on season + library.")
                         .font(HerbFont.bodyItalic(size: 11))
                         .foregroundStyle(HerbColor.inkSoft)
                 }
@@ -367,7 +381,7 @@ private struct SuggestionCard: View {
         case "too_early":  return "Too early"
         case "late":       return "Window closing"
         case "too_late":   return "Missed this year"
-        default:           return "Checking…"
+        default:           return "No window"
         }
     }
 

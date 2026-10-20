@@ -16,6 +16,7 @@ struct CommandPaletteItem: Identifiable, Equatable {
             case .exportCSV: identity = "exportCSV"
             case .focusSearch: identity = "focusSearch"
             case .deleteSelection: identity = "deleteSelection"
+            case .randomPick: identity = "randomPick"
             }
             return "action:\(identity)"
         case .route(let route): return "route:\(route.rawValue)"
@@ -29,7 +30,8 @@ enum CommandPaletteSearch {
         var items: [CommandPaletteItem] = [
             .init(title: "New seed", hint: "Create a seed", group: "Actions", kind: .action(.newSeed)),
             .init(title: "Export CSV", hint: "Export selected or visible seeds", group: "Actions", kind: .action(.exportCSV)),
-            .init(title: "Find", hint: "Search seeds", group: "Actions", kind: .action(.focusSearch))
+            .init(title: "Find", hint: "Search seeds", group: "Actions", kind: .action(.focusSearch)),
+            .init(title: "Random seed", hint: "Pick an active seed at random", group: "Actions", kind: .action(.randomPick))
         ]
         items += WorkbenchRoute.allCases.map { .init(title: $0.title, hint: "Go to \($0.title)", group: "Go to", kind: .route($0)) }
         items += rows.map { .init(title: $0.name, hint: [$0.variety, $0.type, $0.company].filter { !$0.isEmpty }.joined(separator: " · "), group: "Seeds", kind: .seed($0.id)) }

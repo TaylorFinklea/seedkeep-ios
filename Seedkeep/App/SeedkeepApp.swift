@@ -146,6 +146,8 @@ struct RootView: View {
             case .signedIn:
                 signedInRoot
                     .task(id: snapshotID(auth.state)) {
+                        // N2: a cut-short scan save finishes once the identity is confirmed.
+                        await appEnv.resumeStagedScansIfNeeded()
                         // A share tapped on a fresh device is adopted before any solo sync.
                         await appEnv.processPendingShare()
                         await appEnv.syncIfPossible()
@@ -158,7 +160,11 @@ struct RootView: View {
                     // unverified never cancels work already under way.
                     .onChange(of: auth.isIdentityVerified) { _, verified in
                         guard verified else { return }
-                        Task { await appEnv.processPendingShare(); await appEnv.syncIfPossible() }
+                        Task {
+                            await appEnv.resumeStagedScansIfNeeded()
+                            await appEnv.processPendingShare()
+                            await appEnv.syncIfPossible()
+                        }
                     }
                     .onChange(of: scenePhase) { _, newPhase in
                         // Foregrounding re-runs the full sync + tick

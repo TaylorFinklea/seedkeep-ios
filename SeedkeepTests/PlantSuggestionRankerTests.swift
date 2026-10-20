@@ -29,13 +29,13 @@ struct PlantSuggestionRankerTests {
     }
 
     private func rec(
-        catalogID: String = "cat1",
+        seedID: String = "s1",
         verdict: String,
         rangeStart: String? = "2026-05-01",
         rangeEnd: String? = "2026-07-01"
     ) -> PlantSuggestionRanker.RecommendationInput {
         PlantSuggestionRanker.RecommendationInput(
-            catalogSeedID: catalogID,
+            seedID: seedID,
             verdict: verdict,
             rangeStart: rangeStart,
             rangeEnd: rangeEnd
@@ -62,8 +62,8 @@ struct PlantSuggestionRankerTests {
             seed(id: "s2", displayName: "B", catalogID: "cat2"),
         ]
         let recs = [
-            rec(catalogID: "cat1", verdict: "plant_soon"),
-            rec(catalogID: "cat2", verdict: "plant_now"),
+            rec(seedID: "s1", verdict: "plant_soon"),
+            rec(seedID: "s2", verdict: "plant_now"),
         ]
         let result = PlantSuggestionRanker.rank(seeds: seeds, recommendations: recs, cues: unknownCues, today: today)
         #expect(result.first?.seedID == "s2")
@@ -82,7 +82,7 @@ struct PlantSuggestionRankerTests {
         allSeeds.append(noCatalogSeed)
 
         let recs = allVerdicts.enumerated().map { idx, v in
-            rec(catalogID: "cat\(idx)", verdict: v)
+            rec(seedID: "s\(idx)", verdict: v)
         }
 
         let result = PlantSuggestionRanker.rank(seeds: allSeeds, recommendations: recs, cues: unknownCues, today: today)
@@ -295,7 +295,7 @@ struct PlantSuggestionRankerTests {
             seed(id: "s\(i)", displayName: "Seed \(i)", catalogID: "cat\(i)")
         }
         let recs = (1...5).map { i in
-            rec(catalogID: "cat\(i)", verdict: "plant_soon")
+            rec(seedID: "s\(i)", verdict: "plant_soon")
         }
         let r1 = PlantSuggestionRanker.rank(seeds: seeds, recommendations: recs, cues: unknownCues, today: today)
         let r2 = PlantSuggestionRanker.rank(seeds: seeds, recommendations: recs, cues: unknownCues, today: today)
@@ -310,8 +310,8 @@ struct PlantSuggestionRankerTests {
         let shadeSeed = seed(id: "shady", displayName: "Fern", catalogID: "cat_fern", sunRequirement: "shade")
 
         let recs = [
-            rec(catalogID: "cat_sun", verdict: "plant_now"),
-            rec(catalogID: "cat_fern", verdict: "plant_now"),
+            rec(seedID: "sunny", verdict: "plant_now"),
+            rec(seedID: "shady", verdict: "plant_now"),
         ]
         let cues = CornerCues(exposure: .fullSun, openness: .unknown)
         let result = PlantSuggestionRanker.rank(seeds: [fullSunSeed, shadeSeed], recommendations: recs, cues: cues, today: today)
@@ -326,13 +326,22 @@ struct PlantSuggestionRankerTests {
         let smallSeed = seed(id: "small", displayName: "Carrot", catalogID: "cat_small", plantSpacingInches: 6)
 
         let recs = [
-            rec(catalogID: "cat_large", verdict: "plant_now"),
-            rec(catalogID: "cat_small", verdict: "plant_now"),
+            rec(seedID: "large", verdict: "plant_now"),
+            rec(seedID: "small", verdict: "plant_now"),
         ]
         let cues = CornerCues(exposure: .unknown, openness: .crowded)
         let result = PlantSuggestionRanker.rank(seeds: [largeSeed, smallSeed], recommendations: recs, cues: cues, today: today)
 
         // Pumpkin gets -5 openness nudge, carrot gets 0.
         #expect(result[0].seedID == "small")
+    }
+
+    @Test("a seed without a catalog link is ranked by its own window, matched by seed ID")
+    func manualSeedUsesOwnWindow() {
+        let manual = seed(id: "manual", displayName: "Homegrown", catalogID: nil)
+        let recs = [rec(seedID: "manual", verdict: "plant_now")]
+        let result = PlantSuggestionRanker.rank(seeds: [manual], recommendations: recs, cues: unknownCues, today: today)
+        #expect(result.first?.verdict == "plant_now")
+        #expect(result.first?.hasNoWindowData == false)
     }
 }

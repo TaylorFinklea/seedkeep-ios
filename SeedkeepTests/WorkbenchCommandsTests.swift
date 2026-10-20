@@ -4,14 +4,15 @@ import Testing
 
 @Suite("Workbench commands")
 struct WorkbenchCommandsTests {
-    @Test("New Seed, Find, Export, and Delete queue one request and route to Seeds")
+    @Test("New Seed, Find, Export, Delete, and Random Pick queue one request and route to Seeds")
     @MainActor
     func requestCommandsQueueTheirEffects() {
         let cases: [(WorkbenchCommandAction, SeedsRequest)] = [
             (.newSeed, .newSeed),
             (.find, .focusSearch),
             (.exportCSV, .exportCSV),
-            (.delete, .deleteSelection)
+            (.delete, .deleteSelection),
+            (.randomPick, .randomPick)
         ]
 
         for (action, request) in cases {

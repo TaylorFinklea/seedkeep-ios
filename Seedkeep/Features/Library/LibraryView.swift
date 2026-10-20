@@ -75,13 +75,11 @@ struct LibraryView: View {
                     }
                     .accessibilityLabel("Library options")
                 }
-                if !ServerRetirement.isRetired {
-                    ToolbarItem(placement: .platformTrailing) {
-                        Button { showingRandom = true } label: { Image(systemName: "shuffle") }
-                            .accessibilityLabel("Random pick")
-                    }
+                ToolbarItem(placement: .platformTrailing) {
+                    Button { showingRandom = true } label: { Image(systemName: "shuffle") }
+                        .accessibilityLabel("Random pick")
                 }
-                if !ServerRetirement.isRetired && PlatformCapabilities.supportsCameraScanning {
+                if PlatformCapabilities.supportsCameraScanning {
                     ToolbarItem(placement: .platformTrailing) {
                         Button { showingScan = true } label: { Image(systemName: "viewfinder") }
                             .accessibilityLabel("Scan packet")
@@ -98,12 +96,8 @@ struct LibraryView: View {
             .fullScreenCover(isPresented: $showingScan) {
                 ScanFlow { result in
                     switch result {
-                    case .catalogHit(let barcode, let cat):
-                        scanPrefill = .catalog(barcode: barcode, cat)
-                    case .extracted(let extraction, let barcode):
-                        scanPrefill = .extraction(extraction, barcode: barcode)
-                    case .preExtracted(let pre, let barcode):
-                        scanPrefill = .preExtraction(pre, barcode: barcode)
+                    case .localExtraction(let scanID, let fields, let binding):
+                        scanPrefill = .localExtraction(scanID: scanID, fields: fields, binding: binding)
                     }
                 }
             }
@@ -198,9 +192,7 @@ struct ScanPrefillBox: Identifiable {
     let prefill: AddSeedView.Prefill
     var id: String {
         switch prefill {
-        case .catalog(_, let cat): return "catalog-\(cat.id)"
-        case .extraction(let r, _): return "extraction-\(r.extraction_id)"
-        case .preExtraction(let r, _): return "pre-extraction-\(r.extraction_id)"
+        case .localExtraction(let scanID, _, _): return "scan-\(scanID.uuidString)"
         }
     }
 }
@@ -243,12 +235,6 @@ private struct SpecimenGrid: View {
             } else {
                 grid(filtered)
             }
-        }
-        .task(id: seeds.map(\.id).joined()) {
-            guard !ServerRetirement.isRetired else { return }
-            let catalogIDs = seeds.compactMap(\.catalogID)
-            guard !catalogIDs.isEmpty else { return }
-            await appEnv.recommendations.bulkRefresh(catalogSeedIDs: catalogIDs)
         }
     }
 
@@ -399,7 +385,6 @@ private struct SpecimenCard: View {
                 HStack(spacing: 4) {
                     // Verdict dot — only shown when a cached recommendation
                     // exists for this seed. Mirrors `SeedRow.verdictDotColor`.
-                    let _ = appEnv.recommendations.updateEpoch
                     if let dotColor = verdictDotColor {
                         Circle()
                             .fill(dotColor)
@@ -462,14 +447,10 @@ private struct SpecimenCard: View {
     }
 
     /// Color for the verdict dot beside the provenance line. Returns nil when
-    /// the seed has no catalog link, no cached recommendation, or the verdict
-    /// is unknown/absent — in that case no dot is shown. Mirrors the wiring
-    /// in `SeedRow.verdictDotColor`.
+    /// the seed has no planting window: no growing info, or no home location.
+    /// Mirrors the wiring in `SeedRow.verdictDotColor`.
     private var verdictDotColor: Color? {
-        guard !ServerRetirement.isRetired else { return nil }
-        guard let catalogID = seed.catalogID,
-              let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
-        else { return nil }
+        guard let verdict = appEnv.recommendations.recommendation(for: seed)?.verdict else { return nil }
         return HerbColor.verdictForeground(for: verdict)
     }
 }

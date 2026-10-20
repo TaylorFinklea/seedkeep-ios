@@ -1,87 +1,64 @@
 import SwiftUI
-import SeedkeepKit
 
-/// Lets the user enter their 5-digit US ZIP code so the server can resolve
-/// it to a USDA hardiness zone, lat/lon, and average frost dates. The
-/// resolved values are cached in `AppPreferences` so they're available on
-/// cold launch without a network round-trip.
+/// Lets the user enter their 5-digit US ZIP code. The ZIP is looked up in the climate table bundled with the app,
+/// offline, as the user types it. Save caches the zone, the frost dates and the coordinates in `AppPreferences`.
 struct HomeLocationSettingsView: View {
     @Environment(AppEnvironment.self) private var appEnv
 
     @State private var zipText: String = ""
-    @State private var saveState: SaveState = .idle
+    @State private var lookup: Lookup = .none
 
-    private enum SaveState {
-        case idle
-        case loading
-        case success(HouseholdLocationDTO)
-        case error(String)
+    private enum Lookup: Equatable {
+        case none
+        case found(HomeClimate)
+        case unknown
     }
 
     var body: some View {
         Form {
-            if ServerRetirement.isRetired {
-                Section {
-                    LabeledContent("ZIP", value: appEnv.preferences.homeZip ?? "Not set")
-                    if let zone = appEnv.preferences.cachedUsdaZone {
-                        LabeledContent("USDA zone", value: "Zone \(zone)")
-                    }
-                } header: {
-                    Rubric(text: "saved location")
-                }
-            } else {
-                Section {
-                    TextField("12345", text: $zipText)
-                        #if os(iOS)
-                        .keyboardType(.numberPad)
-                        #endif
-                        .onChange(of: zipText) { _, new in
-                            // Strip non-digit characters and cap at 5.
-                            let digits = new.filter(\.isNumber)
-                            if digits != new || new.count > 5 {
-                                zipText = String(digits.prefix(5))
-                            }
-                            // Reset feedback when the user edits the field.
-                            if case .success = saveState { saveState = .idle }
-                            if case .error = saveState { saveState = .idle }
+            Section {
+                TextField("12345", text: $zipText)
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
+                    .onChange(of: zipText) { _, new in
+                        // Strip non-digit characters and cap at 5.
+                        let digits = new.filter(\.isNumber)
+                        if digits != new || new.count > 5 {
+                            zipText = String(digits.prefix(5))
                         }
+                        // A result for the previous entry is no longer the ZIP on screen.
+                        lookup = .none
+                    }
+            } header: {
+                Rubric(text: "zip code")
+            } footer: {
+                Text("Enter your home ZIP code. Seedkeep uses it to look up your USDA hardiness zone and average frost dates on this device.")
+                    .font(HerbFont.bodyItalic(size: 12))
+                    .foregroundStyle(HerbColor.inkSoft)
+            }
+
+            switch lookup {
+            case .none:
+                EmptyView()
+            case .found(let climate):
+                Section {
+                    LabeledContent("ZIP", value: climate.zip)
+                    LabeledContent("USDA zone", value: "Zone \(climate.usdaZone)")
+                    LabeledContent("Avg last frost", value: frostLabel(climate.avgLastFrost))
+                    LabeledContent("Avg first frost", value: frostLabel(climate.avgFirstFrost))
                 } header: {
-                    Rubric(text: "zip code")
+                    Rubric(text: "location")
                 } footer: {
-                    Text("Enter your home ZIP code. Seedkeep uses it to look up your USDA hardiness zone and average frost dates.")
+                    Text("Frost dates are estimates for your hardiness zone, not measurements for your ZIP.")
                         .font(HerbFont.bodyItalic(size: 12))
                         .foregroundStyle(HerbColor.inkSoft)
                 }
-
-                if case .loading = saveState {
-                    Section {
-                        HStack {
-                            ProgressView()
-                                .controlSize(.small)
-                                .herbProgressStyle()
-                            Text("Looking up…")
-                                .foregroundStyle(HerbColor.inkSoft)
-                        }
-                    }
-                }
-
-                if case .success(let location) = saveState {
-                    Section {
-                        LabeledContent("ZIP", value: location.zip)
-                        LabeledContent("USDA zone", value: "Zone \(location.usdaZone)")
-                        LabeledContent("Avg last frost", value: frostLabel(location.avgLastFrost))
-                        LabeledContent("Avg first frost", value: frostLabel(location.avgFirstFrost))
-                    } header: {
-                        Rubric(text: "location resolved")
-                    }
-                }
-
-                if case .error(let message) = saveState {
-                    Section {
-                        Text(message)
-                            .font(HerbFont.bodyItalic(size: 12))
-                            .foregroundStyle(HerbColor.rose)
-                    }
+            case .unknown:
+                Section {
+                    Text("We don't have climate data for that ZIP.")
+                        .font(HerbFont.bodyItalic(size: 12))
+                        .foregroundStyle(HerbColor.rose)
                 }
             }
         }
@@ -91,12 +68,13 @@ struct HomeLocationSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-            if !ServerRetirement.isRetired {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
-                        .disabled(!canSave)
-                }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") { Task { await save() } }
+                    .disabled(!canSave)
             }
+        }
+        .task(id: zipText) {
+            await lookUp(zipText)
         }
         .onAppear {
             if zipText.isEmpty {
@@ -105,39 +83,31 @@ struct HomeLocationSettingsView: View {
         }
     }
 
+    /// Looks the ZIP up off the main actor. The first lookup loads the bundled table, which is the only slow step.
+    private func lookUp(_ zip: String) async {
+        guard zip.count == 5 else {
+            lookup = .none
+            return
+        }
+        let climate = await Task.detached { ClimateLookup.climate(forZip: zip) }.value
+        guard !Task.isCancelled else { return }
+        lookup = climate.map { .found($0) } ?? .unknown
+    }
+
+    /// Only a ZIP that resolves and differs from the saved one can be saved.
     private var canSave: Bool {
-        if case .loading = saveState { return false }
-        return zipText.count == 5
+        guard case .found(let climate) = lookup, climate.zip == zipText else { return false }
+        return climate != appEnv.preferences.homeClimate
     }
 
     private func save() async {
-        saveState = .loading
-        do {
-            let location = try await appEnv.client.setHouseholdLocation(zip: zipText)
-            appEnv.preferences.homeZip = location.zip
-            appEnv.preferences.cachedUsdaZone = location.usdaZone
-            appEnv.preferences.cachedLatitude = location.latitude
-            appEnv.preferences.cachedLongitude = location.longitude
-            appEnv.recommendations.needsHomeLocation = false
-            // Phase 4C — coord generation bump + cache clear + refresh.
-            await appEnv.weatherWarnings.invalidateLocation()
-            saveState = .success(location)
-        } catch let err as SeedkeepError {
-            switch err.code {
-            case "invalid_zip":
-                saveState = .error("That ZIP isn't a valid 5-digit code.")
-            case "unknown_zip":
-                saveState = .error("We don't have data for that ZIP yet.")
-            default:
-                saveState = .error("\(err.code): \(err.message)")
-            }
-        } catch {
-            saveState = .error(error.localizedDescription)
-        }
+        guard case .found(let climate) = lookup, climate.zip == zipText else { return }
+        appEnv.preferences.saveHomeClimate(climate)
+        // Phase 4C — coord generation bump + cache clear + refresh.
+        await appEnv.weatherWarnings.invalidateLocation()
     }
 
-    /// Converts a "MM-DD" frost date string from the server into a
-    /// human-readable label like "Apr 1".
+    /// Converts a "MM-DD" frost date into a human-readable label like "Apr 1".
     private func frostLabel(_ mmdd: String) -> String {
         let parts = mmdd.split(separator: "-")
         guard parts.count == 2,

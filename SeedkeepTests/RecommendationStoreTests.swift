@@ -1,301 +1,223 @@
-import Foundation
-import SwiftData
 import Testing
+import Foundation
+import Observation
 @testable import Seedkeep
-import SeedkeepKit
 
-/// Contract coverage for the recommendation client/store seam.
-///
-/// The production store deliberately degrades to its cached SwiftData value
-/// when the recommendation service is unavailable. These tests keep that
-/// behavior observable without adding a second transport protocol: the
-/// existing SeedkeepClient.Configuration URLSession injection routes through
-/// the private suite-local RecommendationRouterMockURLProtocol fixture.
+// The store computes windows on read, from the seed's growing info and the home climate. Nothing here touches the
+// network: the store has no client, and the WeatherKit path is covered by `WeatherKitRefinerTests`.
+
 @MainActor
-@Suite("RecommendationStore — request, persistence, pending, and error contracts", .serialized)
+@Suite("RecommendationStore — on-device planting windows", .serialized)
 struct RecommendationStoreTests {
+    private let zone7b = HomeClimate(
+        zip: "10001", latitude: 40.75074, longitude: -73.99653,
+        usdaZone: "7b", avgLastFrost: "04-01", avgFirstFrost: "11-08"
+    )
 
-    private static let baseURL = URL(string: "https://test.local")!
+    private let tenderDirect = GrowingInfoSnapshot(
+        frost_tolerance: "tender",
+        sow_method: "direct",
+        days_to_maturity_min: 60,
+        days_to_maturity_max: 80
+    )
 
-    private static func makeStore(
-        routes: [String: Data] = [:],
-        sequences: [String: [Data]] = [:],
-        fallbackBody: Data = Data(),
-        fallbackStatus: Int = 200
-    ) -> (RecommendationStore, ModelContainer) {
-        let session = RecommendationRouterMockURLProtocol.makeSession(
-            routes: routes,
-            sequences: sequences,
-            fallbackBody: fallbackBody,
-            fallbackStatus: fallbackStatus
-        )
-        let client = SeedkeepClient(
-            configuration: .init(baseURL: baseURL, session: session),
-            bearerToken: "recommendation-test-token"
-        )
-        let container = makeTestContainer(name: "recommendation-store-\(UUID().uuidString)")
-        return (RecommendationStore(client: client, container: container), container)
+    private func makeStore() -> (RecommendationStore, AppPreferences, UserDefaults, String) {
+        let suiteName = "RecommendationStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://example.invalid")!)
+        return (RecommendationStore(preferences: prefs), prefs, defaults, suiteName)
     }
 
-    private static func recommendation(
-        id: String,
-        verdict: String = "plant_now",
-        computedAt: Int64 = 1_725_000_000_000
-    ) -> [String: Any] {
-        [
-            "catalogSeedId": id,
-            "locationSignature": "zip:66204",
-            "computedAt": computedAt,
-            "source": "rule",
-            "confidence": 0.92,
-            "verdict": verdict,
-            "recommendedRange": ["start": "2026-09-04", "end": "2026-09-18"],
-            "indoorRange": NSNull(),
-            "dailyScores": [
-                "anchorDate": "2026-09-01",
-                "scores": [0.9, 0.8, 0.7]
-            ],
-            "reasoning": "Warm soil and a clear planting window.",
-            "inputsUsed": ["location", "forecast"]
-        ]
-    }
-
-    private static func successEnvelope(_ value: Any) -> Data {
-        try! JSONSerialization.data(withJSONObject: ["ok": true, "data": value])
-    }
-
-    private static func failureEnvelope(code: String, message: String) -> Data {
-        try! JSONSerialization.data(withJSONObject: [
-            "ok": false,
-            "error": ["code": code, "message": message]
-        ])
-    }
-
-    private static func persistedRecommendation(
-        _ container: ModelContainer,
-        id: String
-    ) throws -> LocalRecommendation? {
-        let context = ModelContext(container)
-        let descriptor = FetchDescriptor<LocalRecommendation>(
-            predicate: #Predicate { $0.catalogSeedID == id }
+    private func seed(id: String = "seed-1", growingInfo: GrowingInfoSnapshot?) -> LocalSeed {
+        LocalSeed(
+            id: id,
+            householdID: "garden",
+            state: .active,
+            packetCount: 1,
+            source: .store,
+            customName: "Test seed",
+            growingInfo: growingInfo,
+            createdAt: 1,
+            updatedAt: 1
         )
-        return try context.fetch(descriptor).first
     }
 
-    @Test("single recommendation request decodes DTO and persists one SwiftData row")
-    func singleRefreshPersistsDTO() async throws {
-        let response = Self.successEnvelope(Self.recommendation(id: "cat-tomato"))
-        let (store, container) = Self.makeStore(
-            routes: ["GET /api/recommendations/cat-tomato": response]
-        )
+    // MARK: - Home location
 
-        await store.refresh(catalogSeedID: "cat-tomato")
-
-        let requests = RecommendationRouterMockURLProtocol.capturedMethodPaths()
-        #expect(requests.count == 1)
-        #expect(requests.first?.method == "GET")
-        #expect(requests.first?.path == "/api/recommendations/cat-tomato")
-        let persisted = try #require(try Self.persistedRecommendation(container, id: "cat-tomato"))
-        #expect(persisted.verdict == "plant_now")
-        #expect(persisted.locationSignature == "zip:66204")
-        #expect(persisted.dailyScores == [0.9, 0.8, 0.7])
-        #expect(store.updateEpoch == 1)
-    }
-
-    @Test("refresh upserts a changed DTO instead of duplicating the catalog row")
-    func refreshUpsertsExistingRow() async throws {
-        let first = Self.successEnvelope(Self.recommendation(
-            id: "cat-pepper", verdict: "plant_soon", computedAt: 1
-        ))
-        let second = Self.successEnvelope(Self.recommendation(
-            id: "cat-pepper", verdict: "plant_now", computedAt: 2
-        ))
-        let (store, container) = Self.makeStore(
-            sequences: ["/api/recommendations/cat-pepper": [first, second]]
-        )
-
-        await store.refresh(catalogSeedID: "cat-pepper")
-        await store.refresh(catalogSeedID: "cat-pepper")
-
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<LocalRecommendation>(
-            predicate: #Predicate { $0.catalogSeedID == "cat-pepper" }
-        ))
-        #expect(rows.count == 1)
-        #expect(rows.first?.verdict == "plant_now")
-        #expect(rows.first?.computedAt == 2)
-        #expect(store.updateEpoch == 2)
-    }
-
-    @Test("bulk refresh retries IDs returned as pending on the next call")
-    func bulkRefreshCarriesPendingIDsForward() async throws {
-        let first = Self.successEnvelope([
-            "recommendations": [Self.recommendation(id: "cat-tomato")],
-            "pending": ["cat-pepper"]
-        ])
-        let second = Self.successEnvelope([
-            "recommendations": [Self.recommendation(id: "cat-pepper", verdict: "plant_soon")],
-            "pending": []
-        ])
-        let (store, container) = Self.makeStore(
-            sequences: ["/api/recommendations/bulk": [first, second]]
-        )
-
-        await store.bulkRefresh(catalogSeedIDs: ["cat-tomato"])
-        await store.bulkRefresh(catalogSeedIDs: [])
-
-        let requests = RecommendationRouterMockURLProtocol.capturedMethodPaths()
-        #expect(requests.count == 2)
-        #expect(requests.allSatisfy {
-            $0.method == "POST" && $0.path == "/api/recommendations/bulk"
-        })
-        let bodies = RecommendationRouterMockURLProtocol.capturedBodies()
-        let firstIDs = try #require(try Self.ids(from: bodies[0]))
-        let secondIDs = try #require(try Self.ids(from: bodies[1]))
-        #expect(Set(firstIDs) == ["cat-tomato"])
-        #expect(Set(secondIDs) == ["cat-pepper"])
-        let pepper = try Self.persistedRecommendation(container, id: "cat-pepper")
-        #expect(pepper?.verdict == "plant_soon")
-    }
-
-    @Test("no_household_location sets the location prompt and does not persist a partial row")
-    func missingLocationIsObservableAndNonPersistent() async throws {
-        let response = Self.failureEnvelope(
-            code: "no_household_location",
-            message: "Set a home location first."
-        )
-        let (store, container) = Self.makeStore(
-            routes: ["GET /api/recommendations/cat-bean": response],
-            fallbackStatus: 400
-        )
-
-        await store.refresh(catalogSeedID: "cat-bean")
-
+    @Test("needsHomeLocation is true until a climate is cached, then false")
+    func needsHomeLocationFollowsClimate() {
+        let (store, prefs, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         #expect(store.needsHomeLocation)
-        #expect(store.updateEpoch == 0)
-        let persisted = try Self.persistedRecommendation(container, id: "cat-bean")
-        #expect(persisted == nil)
-    }
 
-    @Test("server errors leave cached recommendation untouched")
-    func serverErrorDoesNotEraseCachedValue() async throws {
-        let cached = Self.successEnvelope(Self.recommendation(id: "cat-squash"))
-        let failure = Self.failureEnvelope(code: "service_unavailable", message: "Try again later.")
-        let (store, container) = Self.makeStore(
-            sequences: ["/api/recommendations/cat-squash": [cached, failure]],
-            fallbackStatus: 503
-        )
-
-        await store.refresh(catalogSeedID: "cat-squash")
-        await store.refresh(catalogSeedID: "cat-squash")
-
-        let persisted = try #require(try Self.persistedRecommendation(container, id: "cat-squash"))
-        #expect(persisted.verdict == "plant_now")
-        #expect(store.updateEpoch == 1)
+        prefs.saveHomeClimate(zone7b)
         #expect(!store.needsHomeLocation)
     }
 
-    private static func ids(from body: Data?) throws -> [String]? {
-        let body = try #require(body)
-        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        return object["catalogSeedIds"] as? [String]
+    // MARK: - Window
+
+    @Test("no home climate means no window")
+    func noClimateNoWindow() {
+        let (store, _, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        #expect(store.recommendation(for: seed(growingInfo: tenderDirect)) == nil)
+    }
+
+    @Test("a seed without growing info has no window")
+    func noGrowingInfoNoWindow() {
+        let (store, prefs, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        prefs.saveHomeClimate(zone7b)
+        #expect(store.recommendation(for: seed(growingInfo: nil)) == nil)
+    }
+
+    @Test("growing info with no field the engine reads has no window")
+    func noRuleInputNoWindow() {
+        let (store, prefs, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        prefs.saveHomeClimate(zone7b)
+        let nameOnly = GrowingInfoSnapshot(scientific_name: "Solanum lycopersicum")
+        #expect(store.recommendation(for: seed(growingInfo: nameOnly)) == nil)
+    }
+
+    @Test("a seed with growing info and a climate gets the engine's window for today")
+    func windowMatchesEngine() throws {
+        let (store, prefs, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        prefs.saveHomeClimate(zone7b)
+
+        let rec = try #require(store.recommendation(for: seed(growingInfo: tenderDirect)))
+        let expected = PlantingEngine.recommend(
+            growingInfo: tenderDirect, climate: zone7b, today: PlantingEngine.localToday()
+        )
+        #expect(rec == expected)
+        // A tender crop opens on the zone's last frost, which is April 1 in this climate.
+        #expect(rec.rangeStart?.hasSuffix("-04-01") == true)
+        #expect(rec.source == "rule")
+    }
+
+    @Test("editing the seed's growing info recomputes its window")
+    func growingInfoChangeRecomputes() throws {
+        let (store, prefs, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        prefs.saveHomeClimate(zone7b)
+        let item = seed(growingInfo: tenderDirect)
+        let first = try #require(store.recommendation(for: item))
+
+        var hardy = tenderDirect
+        hardy.frost_tolerance = "hardy"
+        item.growingInfo = hardy
+        let second = try #require(store.recommendation(for: item))
+
+        #expect(first.rangeStart != second.rangeStart)
+        #expect(second == PlantingEngine.recommend(growingInfo: hardy, climate: zone7b, today: PlantingEngine.localToday()))
+    }
+
+    @Test("changing the home climate recomputes the window")
+    func climateChangeRecomputes() throws {
+        let (store, prefs, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        prefs.saveHomeClimate(zone7b)
+        let item = seed(growingInfo: tenderDirect)
+        let first = try #require(store.recommendation(for: item))
+
+        let zone3 = HomeClimate(
+            zip: "55001", latitude: 45.0, longitude: -92.9,
+            usdaZone: "3b", avgLastFrost: "05-25", avgFirstFrost: "09-08"
+        )
+        prefs.saveHomeClimate(zone3)
+        let second = try #require(store.recommendation(for: item))
+
+        #expect(first.rangeStart != second.rangeStart)
+        #expect(second == PlantingEngine.recommend(growingInfo: tenderDirect, climate: zone3, today: PlantingEngine.localToday()))
+    }
+
+    @Test("the fallback growing info is used only when the seed has none")
+    func fallbackOnlyWhenSeedHasNone() {
+        let own = GrowingInfoSnapshot(frost_tolerance: "hardy")
+        let fallback = GrowingInfoSnapshot(frost_tolerance: "tender")
+
+        #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: own), catalogFallback: fallback) == own)
+        #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: nil), catalogFallback: fallback) == fallback)
+        #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: nil)) == nil)
+    }
+
+    @Test("an empty snapshot counts as no growing info")
+    func emptySnapshotIsNoGrowingInfo() {
+        #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: GrowingInfoSnapshot())) == nil)
+    }
+
+    // MARK: - Rule input
+
+    @Test("each field the engine reads counts as a rule input")
+    func ruleInputFields() {
+        #expect(!RecommendationStore.hasRuleInput(GrowingInfoSnapshot(scientific_name: "x")))
+        #expect(RecommendationStore.hasRuleInput(GrowingInfoSnapshot(frost_tolerance: "hardy")))
+        #expect(RecommendationStore.hasRuleInput(GrowingInfoSnapshot(sow_method: "direct")))
+        #expect(RecommendationStore.hasRuleInput(GrowingInfoSnapshot(soil_temp_min_f: 60)))
+        #expect(RecommendationStore.hasRuleInput(GrowingInfoSnapshot(days_to_maturity_min: 60)))
+        #expect(RecommendationStore.hasRuleInput(GrowingInfoSnapshot(days_to_maturity_max: 80)))
+        #expect(RecommendationStore.hasRuleInput(GrowingInfoSnapshot(hardiness_zone_min: 3)))
+        #expect(RecommendationStore.hasRuleInput(GrowingInfoSnapshot(hardiness_zone_max: 11)))
+    }
+
+    // MARK: - Forecast key
+
+    @Test("the forecast key rounds coordinates to two decimals")
+    func forecastKeyRounds() {
+        let today = (year: 2026, month: 5, day: 20)
+        let a = RecommendationStore.forecastKey(latitude: 40.7512, longitude: -73.9949, today: today)
+        let b = RecommendationStore.forecastKey(latitude: 40.7499, longitude: -73.9901, today: today)
+        #expect(a == b)
+        #expect(a.latitude == 40.75)
+        #expect(a.longitude == -73.99)
+    }
+
+    @Test("a coordinate change or a new local day gives a different forecast key")
+    func forecastKeyChanges() {
+        let today = (year: 2026, month: 5, day: 20)
+        let base = RecommendationStore.forecastKey(latitude: 40.75, longitude: -73.99, today: today)
+        let moved = RecommendationStore.forecastKey(latitude: 40.80, longitude: -73.99, today: today)
+        let nextDay = RecommendationStore.forecastKey(latitude: 40.75, longitude: -73.99, today: (2026, 5, 21))
+        #expect(base != moved)
+        #expect(base != nextDay)
+    }
+
+    // MARK: - Memo and day refresh (N2 review O10)
+
+    @Test("a seed with nothing to plan from is memoized as no window, and gaining growing info recomputes")
+    func emptyMemoRecomputesOnChange() throws {
+        let (store, prefs, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        prefs.saveHomeClimate(zone7b)
+        let item = seed(growingInfo: nil)
+        #expect(store.recommendation(for: item) == nil)
+        #expect(store.recommendation(for: item) == nil)
+
+        item.growingInfo = tenderDirect
+
+        #expect(try #require(store.recommendation(for: item)).source == "rule")
+    }
+
+    @Test("refreshToday on the same local day changes nothing observable; a new day does")
+    func refreshTodayOnlyOnChange() {
+        let (store, _, defaults, suiteName) = makeStore()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let now = Date()
+
+        let sameDay = ChangeFlag()
+        withObservationTracking { _ = store.today } onChange: { sameDay.fired = true }
+        store.refreshToday(now: now)
+        #expect(!sameDay.fired)
+
+        let nextDay = ChangeFlag()
+        withObservationTracking { _ = store.today } onChange: { nextDay.fired = true }
+        store.refreshToday(now: now.addingTimeInterval(3 * 24 * 60 * 60))
+        #expect(nextDay.fired)
     }
 }
 
-/// A suite-local URLProtocol fixture keeps recommendation request state isolated
-/// from the URLProtocol fixtures used by unrelated test suites.
-private final class RecommendationRouterMockURLProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) private static var routes: [String: Data] = [:]
-    nonisolated(unsafe) private static var sequences: [String: [Data]] = [:]
-    nonisolated(unsafe) private static var sequenceCursors: [String: Int] = [:]
-    nonisolated(unsafe) private static var fallbackBody = Data()
-    nonisolated(unsafe) private static var fallbackStatus = 200
-    nonisolated(unsafe) private static var capturedRequests: [URLRequest] = []
-    private static let lock = NSLock()
-
-    static func makeSession(
-        routes: [String: Data],
-        sequences: [String: [Data]],
-        fallbackBody: Data,
-        fallbackStatus: Int
-    ) -> URLSession {
-        lock.lock()
-        Self.routes = routes
-        Self.sequences = sequences
-        Self.sequenceCursors = [:]
-        Self.fallbackBody = fallbackBody
-        Self.fallbackStatus = fallbackStatus
-        Self.capturedRequests = []
-        lock.unlock()
-
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [Self.self]
-        return URLSession(configuration: config)
-    }
-
-    static func capturedMethodPaths() -> [(method: String, path: String)] {
-        lock.lock()
-        defer { lock.unlock() }
-        return capturedRequests.map {
-            (method: $0.httpMethod ?? "", path: $0.url?.path ?? "")
-        }
-    }
-
-    static func capturedBodies() -> [Data?] {
-        lock.lock()
-        defer { lock.unlock() }
-        return capturedRequests.map(\.httpBody)
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        Self.lock.lock()
-        var capturedRequest = request
-        if capturedRequest.httpBody == nil, let stream = capturedRequest.httpBodyStream {
-            stream.open()
-            var bytes = [UInt8](repeating: 0, count: 4_096)
-            var body = Data()
-            while stream.hasBytesAvailable {
-                let count = stream.read(&bytes, maxLength: bytes.count)
-                guard count > 0 else { break }
-                body.append(bytes, count: count)
-            }
-            stream.close()
-            capturedRequest.httpBody = body
-        }
-        Self.capturedRequests.append(capturedRequest)
-
-        let path = request.url?.path ?? ""
-        let method = request.httpMethod ?? "GET"
-        let body: Data
-        if let sequence = Self.sequences[path], !sequence.isEmpty {
-            let cursor = Self.sequenceCursors[path] ?? 0
-            let index = min(cursor, sequence.count - 1)
-            body = sequence[index]
-            Self.sequenceCursors[path] = cursor + 1
-        } else if let methodRoute = Self.routes["\(method) \(path)"] {
-            body = methodRoute
-        } else if let route = Self.routes[path] {
-            body = route
-        } else {
-            body = Self.fallbackBody
-        }
-        let status = Self.fallbackStatus
-        Self.lock.unlock()
-
-        let url = request.url ?? URL(string: "https://test.local")!
-        let response = HTTPURLResponse(
-            url: url,
-            statusCode: status,
-            httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
-        )!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: body)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-
-    override func stopLoading() {}
+/// Records an observation change from `withObservationTracking`'s Sendable callback.
+private final class ChangeFlag: @unchecked Sendable {
+    var fired = false
 }

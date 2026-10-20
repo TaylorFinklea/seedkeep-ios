@@ -66,7 +66,7 @@ public final class AppEnvironment {
         // AppEnvironment instance exists so the wipe can ALSO tear down the CloudKit coordinator
         // (state token + per-record synced-state file + migration marker), not just SwiftData. See
         // wireSignOutEraser().
-        let recommendations = RecommendationStore(client: client, container: container)
+        let recommendations = RecommendationStore(preferences: prefs)
         let journal = JournalStore(client: client, container: container)
         let assistant = AIAssistantCoordinator(client: client, container: container)
         assistant.wireSync(sync)
@@ -132,7 +132,8 @@ public final class AppEnvironment {
         defaults: UserDefaults,
         container: ModelContainer,
         durableStateDirectory: URL,
-        checkpointStore: AccountDeletionCheckpointStore
+        checkpointStore: AccountDeletionCheckpointStore,
+        scanStagingRoot: URL? = nil
     ) -> AppEnvironment {
         let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://seedkeep.invalid")!)
         let client = makeServerClient(baseURL: prefs.bundleDefault)
@@ -153,7 +154,7 @@ public final class AppEnvironment {
         )
         let env = AppEnvironment(
             client: client, auth: auth, container: container,
-            sync: sync, recommendations: RecommendationStore(client: client, container: container),
+            sync: sync, recommendations: RecommendationStore(preferences: prefs),
             journal: JournalStore(client: client, container: container), assistant: assistant,
             preferences: prefs, apiKeys: APIKeyStore(service: "app.seedkeep.tests.\(UUID().uuidString)"),
             subscriptions: SubscriptionManager(client: client),
@@ -161,6 +162,8 @@ public final class AppEnvironment {
             stateDefaults: defaults,
             durableStateDirectory: durableStateDirectory,
             checkpointStore: checkpointStore,
+            scanStagingRoot: scanStagingRoot ?? FileManager.default.temporaryDirectory
+                .appendingPathComponent("scan-staging-\(UUID().uuidString)", isDirectory: true),
             startsBackgroundServices: false
         )
         env.clearAppNotifications = {}
@@ -182,6 +185,7 @@ public final class AppEnvironment {
         stateDefaults: UserDefaults = .standard,
         durableStateDirectory: URL = HouseholdCloudCoordinator.householdSyncDirURL(),
         checkpointStore: AccountDeletionCheckpointStore = AccountDeletionCheckpointStore(),
+        scanStagingRoot: URL = ScanPhotoStaging.rootURL(),
         startsBackgroundServices: Bool = true
     ) {
         self.client = client
@@ -198,6 +202,7 @@ public final class AppEnvironment {
         self.stateDefaults = stateDefaults
         self.durableStateDirectory = durableStateDirectory
         self.checkpointStore = checkpointStore
+        self.scanStagingRoot = scanStagingRoot
         // N1 quarantine starts closed: count leftover deletion checkpoints now (a cheap file
         // count), so no task ordering can see CloudKit allowed before they are counted.
         self.pausedDeletionCheckpointCount = AccountDeletionQuarantine.pausedCheckpointCount(using: checkpointStore)
@@ -225,6 +230,11 @@ public final class AppEnvironment {
         if startsBackgroundServices {
             Task { await weatherWarnings.start() }
         }
+        // N2 — a home ZIP saved before frost dates were cached gets them from the bundled table.
+        // Live launches only: the unit-test host never writes the shared preferences.
+        if startsBackgroundServices, FeatureFlags.canRunLiveAppStartup {
+            Task { await preferences.backfillFrostDates() }
+        }
         // Phase 4D — catalog-corrections orchestrator. Observes
         // `.catalogCorrectionsChanged` posted by `SyncEngine` and
         // schedules outcome pings (with cross-device dedup via the
@@ -248,6 +258,9 @@ public final class AppEnvironment {
         auth.wireLocalDataEraser { [weak self] in
             guard let self else { return }
             try self.sync.eraseAllLocalData()
+            // N2: staged packet photos belong to the previous account. Open scan and save sheets stop
+            // first (V1). Checked, like the rest.
+            try self.purgeScanStaging()
             self.clearAppNotifications()
             // N1: every scope's CloudKit state, even with no coordinator built yet (launch).
             try self.resetHouseholdCloudState(wipingHouseholdRows: false)
@@ -268,6 +281,9 @@ public final class AppEnvironment {
         auth.wireGardenSwitchEraser { [weak self] in
             guard let self else { return }
             try self.resetHouseholdCloudState(wipingHouseholdRows: true)
+            // N2: staged packet photos belong to the discarded garden. Open scan and save sheets stop
+            // first (V1).
+            try self.purgeScanStaging()
         }
         // N1: a shared garden found or chosen at resolution gets the same fresh start as an
         // accepted share (`bootParticipant`): a full re-fetch, never a cursor from an earlier join.
@@ -293,6 +309,49 @@ public final class AppEnvironment {
                 Task { @MainActor in await self?.auth.revalidateAfterAccountChange() }
             }
         }
+    }
+
+    /// N2: where scan photos are staged (`ScanPhotoStaging.rootURL()` live; a temporary directory in
+    /// tests). Every local-data eraser purges it.
+    @ObservationIgnored let scanStagingRoot: URL
+    @ObservationIgnored private var didResumeStagedScans = false
+
+    /// N2 (V1): bumped by every local-data eraser before it purges scan staging. An open scan or save
+    /// sheet bound to an older epoch stops and discards its scan.
+    private(set) var scanSessionEpoch = 0
+
+    /// What a scan or save sheet binds to when it starts: the signed-in user, the active garden and
+    /// the scan epoch. nil while signed out.
+    var scanBinding: ScanPhotoStaging.ScanBinding? {
+        guard case .signedIn(let user, _) = auth.state, let householdID = activeGardenHouseholdID else { return nil }
+        return ScanPhotoStaging.ScanBinding(
+            scope: ScanPhotoStaging.Scope(userRecordName: user.id, householdID: householdID),
+            epoch: scanSessionEpoch
+        )
+    }
+
+    /// Invalidates every open scan and save sheet, then deletes all staged scan photos. Throws when
+    /// the staging cannot be removed.
+    func purgeScanStaging() throws {
+        scanSessionEpoch += 1
+        try ScanPhotoStaging.purgeAll(root: scanStagingRoot)
+    }
+
+    /// N2: finishes any scan save that was cut short, and drops staging from scans that never saved
+    /// or belong to another account or garden. Runs once per launch, only after the iCloud identity
+    /// is confirmed (`.signedIn`, verified), so it is scoped to that user and the active garden.
+    /// Local work only, so it needs no network. Never in the unit-test host.
+    func resumeStagedScansIfNeeded() async {
+        guard FeatureFlags.canRunLiveAppStartup, !didResumeStagedScans, auth.isIdentityVerified,
+              case .signedIn(let user, _) = auth.state,
+              let householdID = activeGardenHouseholdID else { return }
+        didResumeStagedScans = true
+        await ScanSave.resumeStagedScans(
+            writer: sync,
+            container: container,
+            scope: ScanPhotoStaging.Scope(userRecordName: user.id, householdID: householdID),
+            root: scanStagingRoot
+        )
     }
 
     @ObservationIgnored private var accountChangeObserver: (any NSObjectProtocol)?
@@ -674,6 +733,7 @@ public final class AppEnvironment {
             if let existing = cloudCoordinator, cloudCoordinatorKey == key { return existing }
             let coordinator = HouseholdCloudCoordinator.participant(ownerZoneID: marker.zoneID, container: container)
             coordinator.isCloudKitAllowed = { [weak self] in self?.canUseCloudKit ?? false }
+            coordinator.purgeScanStaging = { [weak self] in try self?.purgeScanStaging() }
             cloudCoordinator = coordinator
             cloudCoordinatorKey = key
             return coordinator
@@ -688,6 +748,7 @@ public final class AppEnvironment {
             container: container
         )
         coordinator.isCloudKitAllowed = { [weak self] in self?.canUseCloudKit ?? false }
+        coordinator.purgeScanStaging = { [weak self] in try self?.purgeScanStaging() }
         cloudCoordinator = coordinator
         cloudCoordinatorKey = key
         return coordinator

@@ -106,6 +106,17 @@ final class HouseholdCloudCoordinator {
     /// push on the next allowed sync.
     @ObservationIgnored
     var isCloudKitAllowed: @MainActor () -> Bool = { true }
+    /// N2: removes every staged scan photo. An account sign-out or switch purges them with the rest
+    /// of the account's data; a failure throws into the wipe-retry machinery. `AppEnvironment` sets
+    /// it on every coordinator it builds; the default does nothing, so a coordinator built in a unit
+    /// test never touches the real staging folder.
+    @ObservationIgnored
+    var purgeScanStaging: @MainActor () throws -> Void = {}
+    /// True once the current wipe purged scan staging (V5). A retry of the same wipe skips the purge,
+    /// so a scan started under the new identity after the account event survives. A retry carried
+    /// over from an earlier launch (cleanup marker) also skips it: the N1 erasers purge staging on
+    /// any account change.
+    @ObservationIgnored private var scanStagingPurgedForWipe = false
 
     init(
         engine: HouseholdRecordSyncing,
@@ -146,6 +157,7 @@ final class HouseholdCloudCoordinator {
                 : Self.ownerUnavailablePhotoStateURL(householdID: householdID))
         if let cleanupMarkerURL, FileManager.default.fileExists(atPath: cleanupMarkerURL.path) {
             requiresWipeRetry = true
+            scanStagingPurgedForWipe = true
             lastErrorDetail = "Pending CloudKit account cleanup from a previous launch."
             lastHumanizedError = "CloudKit account cleanup is incomplete — tap Sync now to retry."
         }
@@ -646,6 +658,8 @@ final class HouseholdCloudCoordinator {
     /// an account SWITCH additionally rebuilds this coordinator (different householdID → fresh state
     /// token + synced-state file in `AppEnvironment.ensureCloudCoordinator`).
     func wipeAndClear() {
+        // A fresh wipe purges scan staging again; a retry of the same wipe does not (V5).
+        if !requiresWipeRetry { scanStagingPurgedForWipe = false }
         var markerError: Error?
         if let cleanupMarkerURL {
             do { try Self.markAccountCleanupPending(at: cleanupMarkerURL) }
@@ -665,6 +679,11 @@ final class HouseholdCloudCoordinator {
         }
 
         do {
+            // N2: staged scan photos go first, once per wipe (V5).
+            if !scanStagingPurgedForWipe {
+                try purgeScanStaging()
+                scanStagingPurgedForWipe = true
+            }
             try wipeOperation(container)
             let context = ModelContext(container)
             let activeScopeID = scopeID
