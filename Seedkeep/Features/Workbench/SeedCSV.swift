@@ -13,7 +13,7 @@ enum SeedCSV {
 
     static let byteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]
 
-    static func make(_ rows: [SeedTableRow]) -> String {
+    static func make(_ rows: [SeedTableRow], includeRecommendationWindow: Bool = true) -> String {
         var output = record(columns)
         for row in rows {
             output += record([
@@ -27,15 +27,15 @@ enum SeedCSV {
                 text(row.locationName),
                 text(row.tagsText),
                 text(row.notes),
-                text(row.verdictLabel),
+                includeRecommendationWindow ? text(row.verdictLabel) : "",
             ])
         }
         return output
     }
 
     /// The exported file: the byte order mark, then the CSV as UTF-8.
-    static func data(for rows: [SeedTableRow]) -> Data {
-        Data(byteOrderMark + Array(make(rows).utf8))
+    static func data(for rows: [SeedTableRow], includeRecommendationWindow: Bool = true) -> Data {
+        Data(byteOrderMark + Array(make(rows, includeRecommendationWindow: includeRecommendationWindow).utf8))
     }
 
     /// Base name for the exporter, `seedkeep-seeds-YYYY-MM-DD`. The system adds `.csv` from the

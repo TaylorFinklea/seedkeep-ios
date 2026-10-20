@@ -92,6 +92,9 @@ struct GardenChoice: Equatable, Sendable {
         /// are any other shared gardens; `ownGarden` is offered. Leaving it discards this
         /// device's copy of the shared garden, after confirmation.
         case sharedGardenUnavailable(zoneName: String)
+        /// One garden is shared with the user and they also own one: candidates = the shared zone;
+        /// ownGarden = their own garden.
+        case sharedOrOwnGarden
     }
 
     let reason: Reason

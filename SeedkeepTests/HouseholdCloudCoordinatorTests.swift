@@ -2133,4 +2133,239 @@ struct HouseholdCloudCoordinatorTests {
                     "wipeAndClear must purge every lifetime's bytes for this household on account switch")
         }
     }
+
+    // MARK: - N1 review fixes (F8, F1)
+
+    @Test("a debounced push armed before CloudKit was paused does not push; the next allowed sync does")
+    func debouncedSaveSkipsWhileCloudKitPaused() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        coordinator.pushDebounceIntervalNanoseconds = 1_000_000
+        await coordinator.sync()
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1,
+                               source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+
+        @MainActor final class Gate { var allowed = true }
+        let gate = Gate()
+        coordinator.isCloudKitAllowed = { gate.allowed }
+        await coordinator.save()
+        gate.allowed = false   // paused after the push was armed, before it fires
+        await coordinator.awaitPendingImmediacy()
+
+        #expect(!engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" },
+                "a paused identity must not reach CloudKit")
+        #expect(await coordinator.sync() == false, "sync refuses while paused")
+        #expect(!engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" })
+
+        gate.allowed = true
+        #expect(await coordinator.sync())
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" },
+                "the skipped change pushes on the next allowed sync")
+    }
+
+    @Test("resetAllDurableState removes every scope's sync files, migration markers and photo bytes")
+    func resetAllDurableStateClearsEverything() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ResetDurableState-\(UUID().uuidString)", isDirectory: true)
+        let suite = "HouseholdCloudCoordinatorTests.reset.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let token = directory.appendingPathComponent("engine-state-production-hh_a.json")
+        let marker = directory.appendingPathComponent("engine-state-production-hh_a.json.cleanup-pending")
+        let synced = directory.appendingPathComponent("synced-state-shared-abc.json")
+        for file in [token, marker, synced] { try Data("x".utf8).write(to: file) }
+        var photos: [URL] = []
+        for lifetime in PhotoByteStore.Lifetime.allCases {
+            let photoDir = directory.appendingPathComponent(lifetime.rawValue, isDirectory: true)
+                .appendingPathComponent("production/hh_a", isDirectory: true)
+            try fileManager.createDirectory(at: photoDir, withIntermediateDirectories: true)
+            let photo = photoDir.appendingPathComponent("seedPhoto_p1.abc.jpg")
+            try Data("jpeg".utf8).write(to: photo)
+            photos.append(photo)
+        }
+        defaults.set(true, forKey: "\(HouseholdCloudCoordinator.migratedKeyPrefix)production.hh_a")
+        defaults.set(true, forKey: "\(HouseholdCloudCoordinator.migratedKeyPrefix)production.hh_b")
+        defaults.set("kept", forKey: "seedkeep.notif.frost")
+
+        try HouseholdCloudCoordinator.resetAllDurableState(directory: directory, defaults: defaults)
+
+        for file in [token, marker, synced] + photos {
+            #expect(!fileManager.fileExists(atPath: file.path), "\(file.lastPathComponent) must go")
+        }
+        #expect(try fileManager.contentsOfDirectory(atPath: directory.path).isEmpty)
+        #expect(defaults.object(forKey: "\(HouseholdCloudCoordinator.migratedKeyPrefix)production.hh_a") == nil)
+        #expect(defaults.object(forKey: "\(HouseholdCloudCoordinator.migratedKeyPrefix)production.hh_b") == nil)
+        #expect(defaults.string(forKey: "seedkeep.notif.frost") == "kept", "unrelated settings stay")
+    }
+
+    // MARK: - N1 round 3 (T1, T3, R3, R7)
+
+    @MainActor final class Allowance { var allowed = true }
+
+    @Test("a pass paused mid-fetch sends nothing, keeps local and fetched changes, and is not a success")
+    func pausedMidPassStopsBeforePush() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        let allowance = Allowance()
+        coordinator.isCloudKitAllowed = { allowance.allowed }
+        await coordinator.sync()
+        #expect(coordinator.lastPassCompleted)
+        let drainsBefore = engine.sendUntilDrainedCallCount
+
+        let setup = ModelContext(container)
+        setup.insert(LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 1,
+                               source: .store, createdAt: 1, updatedAt: 500))
+        try setup.save()
+        engine.pendingFetch = ([remoteSeed(id: "r1", householdID: hid, name: "Remote", updatedAt: 9)], [])
+        let gate = FetchGate()
+        engine.fetchGate = gate
+        let pass = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+        allowance.allowed = false   // the account changes while CloudKit answers
+        await gate.release()
+        _ = await pass.value
+
+        #expect(!coordinator.lastPassCompleted, "a stopped pass is not a success")
+        #expect(coordinator.lastHumanizedError == nil, "and not a failure either")
+        #expect(engine.sendUntilDrainedCallCount == drainsBefore, "no send starts while paused")
+        #expect(!engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" })
+        let remoteID = "r1"
+        #expect(try ModelContext(container).fetch(
+            FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == remoteID })).count == 1,
+            "a batch already fetched for this account is still projected")
+
+        engine.fetchGate = nil
+        allowance.allowed = true
+        await coordinator.sync()
+
+        #expect(coordinator.lastPassCompleted)
+        #expect(engine.savedRecords.contains { $0.recordID.recordName == "seed:s1" },
+                "the local change pushes on the next allowed pass")
+        #expect(try ModelContext(container).fetch(
+            FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == remoteID })).count == 1,
+            "the fetched row is projected exactly once")
+    }
+
+    @Test("a send confirmed while paused still projects CloudKit's merged result")
+    func pausedDuringConfirmedSendProjectsMerge() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let container = makeContainer()
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: container, householdID: hid)
+        let allowance = Allowance()
+        coordinator.isCloudKitAllowed = { allowance.allowed }
+
+        let setup = ModelContext(container)
+        let local = LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 5,
+                              source: .store, createdAt: 1, updatedAt: 500)
+        local.customName = "Local"
+        setup.insert(local)
+        try setup.save()
+        // CloudKit confirms the push as a MERGED serverRecordChanged result it will never resend.
+        engine.pendingSentProjection = [remoteSeed(id: "s1", householdID: hid, name: "Merged", updatedAt: 900)]
+        let gate = DrainGate()
+        engine.drainGate = gate
+        let pass = Task { await coordinator.sync() }
+        await gate.waitUntilStarted()
+        allowance.allowed = false   // the account changes while the send is in flight
+        await gate.release()
+        _ = await pass.value
+
+        #expect(fetchSeed(ModelContext(container), "s1")?.customName == "Merged",
+                "the confirmed merge is projected even though CloudKit is now paused")
+    }
+
+    @Test("the migration executor starts no send while paused and keeps what it staged")
+    func migrationExecutorPaused() async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let input = HouseholdMigrationPlanner.Input(
+            householdID: hid, householdName: "H", householdCreatedAt: 1, householdUpdatedAt: 1,
+            seeds: [LocalSeed(id: "s1", householdID: hid, state: .active, packetCount: 3, source: .store, createdAt: 1, updatedAt: 2)])
+        let plan = HouseholdMigrationPlanner.plan(input, completedAt: 100)
+
+        let pausedEngine = FakeEngine()
+        await #expect(throws: HouseholdMigrationExecutor.Paused.self) {
+            try await HouseholdMigrationExecutor.run(
+                into: pausedEngine, zoneID: zoneID(hid), householdID: hid, plan: plan, canSend: { false })
+        }
+        #expect(pausedEngine.savedRecords.isEmpty)
+        #expect(pausedEngine.sendUntilDrainedCallCount == 0)
+
+        // Paused after staging: the staged records stay pending; no send starts.
+        let stagedEngine = FakeEngine()
+        let allowance = Allowance()
+        var checks = 0
+        await #expect(throws: HouseholdMigrationExecutor.Paused.self) {
+            try await HouseholdMigrationExecutor.run(
+                into: stagedEngine, zoneID: zoneID(hid), householdID: hid, plan: plan,
+                canSend: {
+                    checks += 1
+                    if checks > 1 { allowance.allowed = false }
+                    return allowance.allowed
+                })
+        }
+        #expect(stagedEngine.savedRecords.count == plan.count)
+        #expect(stagedEngine.sendUntilDrainedCallCount == 0)
+    }
+
+    @Test("a cancelled CloudKit operation is quiet: no banner, not a completed pass", arguments: [
+        "cancellation", "operationCancelled",
+    ])
+    func cancellationIsQuiet(_ kind: String) async throws {
+        let hid = "hh-\(UUID().uuidString)"
+        let engine = FakeEngine()
+        let coordinator = makeCoordinator(engine: engine, container: makeContainer(), householdID: hid)
+        engine.fetchError = kind == "cancellation" ? CancellationError() : CKError(.operationCancelled)
+        engine.fetchFailuresRemaining = 1
+
+        await coordinator.sync()
+
+        #expect(coordinator.lastHumanizedError == nil)
+        #expect(coordinator.lastErrorDetail == nil)
+        #expect(!coordinator.lastPassCompleted)
+        #expect(coordinator.lastSyncedAt == nil)
+    }
+
+    @Test("resetAllDurableState keeps TransferWorkspace bytes while deletions are quarantined")
+    func resetKeepsTransferWorkspace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ResetKeepTransfer-\(UUID().uuidString)", isDirectory: true)
+        let suite = "HouseholdCloudCoordinatorTests.keepTransfer.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        var photos: [PhotoByteStore.Lifetime: URL] = [:]
+        for lifetime in PhotoByteStore.Lifetime.allCases {
+            let photoDir = directory.appendingPathComponent(lifetime.rawValue, isDirectory: true)
+                .appendingPathComponent("production/hh_a", isDirectory: true)
+            try FileManager.default.createDirectory(at: photoDir, withIntermediateDirectories: true)
+            let photo = photoDir.appendingPathComponent("seedPhoto_p1.abc.jpg")
+            try Data("jpeg".utf8).write(to: photo)
+            photos[lifetime] = photo
+        }
+        let token = directory.appendingPathComponent("engine-state-production-hh_a.json")
+        try Data("x".utf8).write(to: token)
+
+        try HouseholdCloudCoordinator.resetAllDurableState(
+            directory: directory, defaults: defaults, keepingTransferWorkspace: true)
+
+        #expect(FileManager.default.fileExists(atPath: photos[.transferWorkspace]!.path))
+        #expect(!FileManager.default.fileExists(atPath: photos[.pendingUploads]!.path))
+        #expect(!FileManager.default.fileExists(atPath: photos[.cache]!.path))
+        #expect(!FileManager.default.fileExists(atPath: token.path))
+    }
 }

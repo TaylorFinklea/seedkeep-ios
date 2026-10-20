@@ -144,6 +144,22 @@ struct PhotoByteStore: Sendable {
         }
     }
 
+    /// Purge every household's bytes across all three lifetimes (N1: an identity switch or a
+    /// garden discard, where the households on disk are not known). `root` is the
+    /// `HouseholdSync` directory. `keepingTransferWorkspace` leaves the account-deletion transfer
+    /// bytes in place (while deletion checkpoints are quarantined). THROWS — see `removeAll`.
+    static func purgeAll(
+        under root: URL = HouseholdCloudCoordinator.householdSyncDir(),
+        keepingTransferWorkspace: Bool = false
+    ) throws {
+        for lifetime in Lifetime.allCases where !(keepingTransferWorkspace && lifetime == .transferWorkspace) {
+            let directory = root.appendingPathComponent(lifetime.rawValue, isDirectory: true)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+        }
+    }
+
     // MARK: - Paths — mirrors `HouseholdCloudCoordinator`'s durable-path derivation exactly (same
     // Application Support / HouseholdSync root, same `cloudKitEnvironmentTag` namespacing) rather
     // than inventing a new location scheme.

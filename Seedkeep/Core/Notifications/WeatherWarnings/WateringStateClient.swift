@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import SeedkeepKit
 
 /// Phase 4C — household-scoped server ledger for the watering reminder.
@@ -62,6 +63,52 @@ struct SystemWateringStateClient: WateringStateClient {
             return .success(dto.lastWateringNotificationAt)
         } catch {
             return .failure(error)
+        }
+    }
+}
+
+/// Device-local watering reminder history used while the Seedkeep server is retired.
+/// Each garden keeps an independent monotonic timestamp in UserDefaults.
+struct LocalWateringStateClient: WateringStateClient {
+    private let store: WateringStateDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.store = WateringStateDefaults(defaults: defaults)
+    }
+
+    func get(householdID: String) async -> Result<Date?, Error> {
+        .success(store.get(householdID: householdID))
+    }
+
+    func put(householdID: String, scheduledFor: Date) async -> Result<Date?, Error> {
+        .success(store.put(householdID: householdID, scheduledFor: scheduledFor))
+    }
+}
+
+/// UserDefaults access is serialized so concurrent weather refreshes cannot
+/// overwrite a later watering timestamp with an earlier one.
+private final class WateringStateDefaults: @unchecked Sendable {
+    private let defaults: UserDefaults
+    private static let lock = Mutex(())
+    private static let keyPrefix = "seedkeep.watering.lastFire."
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    func get(householdID: String) -> Date? {
+        Self.lock.withLock { _ in
+            defaults.object(forKey: Self.keyPrefix + householdID) as? Date
+        }
+    }
+
+    func put(householdID: String, scheduledFor: Date) -> Date {
+        Self.lock.withLock { _ in
+            let key = Self.keyPrefix + householdID
+            let current = defaults.object(forKey: key) as? Date
+            let latest = max(current ?? .distantPast, scheduledFor)
+            defaults.set(latest, forKey: key)
+            return latest
         }
     }
 }

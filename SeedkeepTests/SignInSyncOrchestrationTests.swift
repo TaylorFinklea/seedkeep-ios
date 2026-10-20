@@ -4,11 +4,10 @@ import SwiftData
 @testable import Seedkeep
 import SeedkeepKit
 
-/// E2E integration tests for the adoptBearerToken → syncAll orchestration (M5).
+/// E2E integration tests for the identity → syncAll orchestration (M5).
 ///
-/// Tests the post-exchange path only. `exchangeAppleToken` uses
-/// `URLSession.shared` and is device-only; these tests cover the contract
-/// that begins AFTER the token is in hand.
+/// N1: identity resolution is iCloud-only (`FakeCloudIdentityProvider` here); the sync half
+/// still exercises the legacy server feeds, which stay testable until N3 removes them.
 @MainActor
 @Suite("Sign-in + sync orchestration (M5)", .serialized)
 struct SignInSyncOrchestrationTests {
@@ -31,9 +30,9 @@ struct SignInSyncOrchestrationTests {
         #"{"ok":true,"data":{"items":[],"cursor":0,"has_more":false}}"#.utf8
     )
 
-    // MARK: - Test 1: adoptBearerToken → full syncAll succeeds
+    // MARK: - Test 1: identity resolution → full syncAll succeeds
 
-    @Test("adoptBearerToken → syncAll: auth state signedIn + stubbed rows persisted")
+    @Test("restoreSession → syncAll: auth state signedIn + stubbed rows persisted")
     func adoptTokenThenSyncAll() async throws {
         let container = Self.makeContainer("adoptTokenSync")
         let defaults = Self.makeDefaults("adoptTokenSync")
@@ -97,22 +96,10 @@ struct SignInSyncOrchestrationTests {
         }
         """.utf8)
 
-        // Build auth client with identity stubs.
-        let authSession = SyncOrchAuthMockURLProtocol.makeSession(routes: [
-            "GET /api/me": Data("""
-            {"ok":true,"data":{"user":{"id":"u_orch","name":"Grower","email":"g@example.com"}}}
-            """.utf8),
-            "POST /api/households": Data("""
-            {"ok":true,"data":{"household":{"id":"\(Self.householdID)","name":"My household","created_at":1,"updated_at":1},"role":"owner"}}
-            """.utf8)
-        ])
-        let authClient = SeedkeepClient(
-            configuration: .init(
-                baseURL: URL(string: "https://test.local")!,
-                session: authSession
-            )
-        )
-        let auth = AuthController(client: authClient, tokenStore: tokenStore, defaults: defaults)
+        // N1: the iCloud account resolves the identity; the fake provider lists one owned garden.
+        let provider = FakeCloudIdentityProvider(
+            recordName: "_u_orch", owned: [FakeCloudIdentityProvider.zone(Self.householdID)], shared: [])
+        let auth = AuthController(identity: provider, tokenStore: tokenStore, defaults: defaults)
 
         // Build sync client with feed stubs.
         let syncSession = SyncOrchSyncMockURLProtocol.makeSession(
@@ -132,14 +119,13 @@ struct SignInSyncOrchestrationTests {
         )
         let engine = SyncEngine(client: syncClient, container: container)
 
-        // Call adoptBearerToken (post-exchange path).
-        await auth.adoptBearerToken("tok_orch")
+        await auth.restoreSession()
 
         guard case .signedIn(let user, let household) = auth.state else {
-            Issue.record("expected signedIn after adoptBearerToken, got \(String(describing: auth.state))")
+            Issue.record("expected signedIn after restoreSession, got \(String(describing: auth.state))")
             return
         }
-        #expect(user.id == "u_orch")
+        #expect(user.id == "_u_orch")
         #expect(household.id == Self.householdID)
 
         // Now run syncAll against the household we just resolved.
@@ -249,47 +235,6 @@ struct SignInSyncOrchestrationTests {
         // in a way that prevented lastError from being set.
         // (Verified indirectly: lastError set → sweep completed past flush.)
     }
-}
-
-// MARK: - URLProtocol: auth identity stubs (SyncOrchAuthMockURLProtocol)
-
-/// Method-qualified routing for the AuthController's /api/me and
-/// /api/households calls. Separate class from sync stubs so suites running
-/// concurrently don't corrupt each other's static state.
-final class SyncOrchAuthMockURLProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var routes: [String: Data] = [:]
-    static let lock = NSLock()
-
-    static func makeSession(routes: [String: Data]) -> URLSession {
-        lock.lock()
-        defer { lock.unlock() }
-        Self.routes = routes
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [SyncOrchAuthMockURLProtocol.self]
-        return URLSession(configuration: config)
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        Self.lock.lock()
-        let key = "\(request.httpMethod ?? "GET") \(request.url?.path ?? "")"
-        let body = Self.routes[key] ?? Data(
-            #"{"ok":false,"error":{"code":"not_found","message":"unstubbed auth route"}}"#.utf8
-        )
-        Self.lock.unlock()
-        let url = request.url ?? URL(string: "https://test.local")!
-        let response = HTTPURLResponse(
-            url: url, statusCode: 200, httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
-        )!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: body)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-
-    override func stopLoading() {}
 }
 
 // MARK: - URLProtocol: sync feed stubs (SyncOrchSyncMockURLProtocol)

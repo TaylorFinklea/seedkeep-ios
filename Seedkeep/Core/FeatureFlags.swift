@@ -30,21 +30,21 @@ enum FeatureFlags {
     /// CloudKit is active. See the 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
     /// (additive, reversible); flipping OFF returns to server sync.
     static let cloudKitHouseholdSyncKey = "seedkeep.flag.cloudKitHouseholdSync"
-    /// DEFAULT ON (2026-06-29 cutover): CloudKit is now the default household-sync path. Resolution:
-    ///   1. a value the user EXPLICITLY set (Settings toggle, on or off) is always honored — kill-switch;
-    ///   2. under the explicitly test-scoped ON compilation condition, XCTest uses the shipping
-    ///      default; otherwise XCTest keeps the legacy OFF default deterministic;
-    ///   3. outside XCTest, the default is ON.
+    /// ALWAYS ON outside XCTest (N1, 2026-10-20): the Seedkeep server is retired, so CloudKit is
+    /// the only sync path. A stored explicit `false` from the old kill-switch is ignored there;
+    /// turning it off would leave the app with no sync at all. Under XCTest the two lanes stay
+    /// until N3:
+    ///   1. a value a test EXPLICITLY set is honored;
+    ///   2. under the explicitly test-scoped ON compilation condition, the shipping default (ON);
+    ///      otherwise the legacy OFF default, deterministic.
     static var cloudKitHouseholdSyncEnabled: Bool {
+        guard isRunningUnitTests else { return true }
         if let explicit = UserDefaults.standard.object(forKey: cloudKitHouseholdSyncKey) as? Bool { return explicit }
-        if isRunningUnitTests {
-            #if SEEDKEEP_TEST_CLOUDKIT_ON
-            return true
-            #else
-            return false
-            #endif
-        }
+        #if SEEDKEEP_TEST_CLOUDKIT_ON
         return true
+        #else
+        return false
+        #endif
     }
     static func setCloudKitHouseholdSync(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)

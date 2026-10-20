@@ -24,6 +24,11 @@ enum HouseholdMigrationExecutor {
         var written: Int
     }
 
+    /// N1: `canSend` said no (CloudKit paused). Nothing new was sent; anything staged stays
+    /// pending. If the graph was staged, its receipt is in the engine's store, so the next run
+    /// reports `alreadyMigrated` and the coordinator's `pushDirty` drains what was staged.
+    struct Paused: Error {}
+
     /// Write `plan` into `zoneID` through `engine`, gated by the `migrated:<householdID>` receipt.
     @discardableResult
     static func run(
@@ -32,7 +37,8 @@ enum HouseholdMigrationExecutor {
         householdID: String,
         plan: [CloudKitRecordValue],
         drain: Bool = true,
-        prepareRecord: (CKRecord) throws -> CKRecord = { $0 }
+        prepareRecord: (CKRecord) throws -> CKRecord = { $0 },
+        canSend: @MainActor () -> Bool = { true }
     ) async throws -> Result {
         let receiptID = CKRecord.ID(
             recordName: SeedkeepRecordNames.migrationReceipt(householdID), zoneID: zoneID)
@@ -45,8 +51,12 @@ enum HouseholdMigrationExecutor {
         let prepared = try plan.map {
             try prepareRecord(SeedkeepRecordCodec.encode($0, zoneID: zoneID))
         }
+        guard await canSend() else { throw Paused() }
         for record in prepared { engine.save(record) }
-        if drain { try await engine.sendUntilDrained(maxPasses: 6) }
+        if drain {
+            guard await canSend() else { throw Paused() }
+            try await engine.sendUntilDrained(maxPasses: 6)
+        }
         return Result(alreadyMigrated: false, written: prepared.count)
     }
 }

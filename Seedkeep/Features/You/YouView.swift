@@ -3,12 +3,11 @@ import SwiftUI
 import SwiftData
 import SeedkeepKit
 
-/// Identity tab — restyled as "House". Who I am, who is my household,
-/// sign out. Locations, tags, and household-invite flow live in Settings.
+/// Identity tab — restyled as "House". Who I am (the iCloud account) and
+/// who is my household. Locations, tags, and household-invite flow live in Settings.
 struct YouView: View {
     @Environment(AuthController.self) private var auth
     @Environment(AppEnvironment.self) private var appEnv
-    @State private var showSignOutConfirm = false
     @State private var showDeletionFlow = false
     @State private var selectedContribution: ContributionSelection?
 
@@ -34,10 +33,10 @@ struct YouView: View {
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                     }
-                    if case .signedIn(let user, let household) = auth.state {
+                    if case .signedIn(_, let household) = auth.state {
                         Section {
-                            LabeledContent("Email") { Text(user.email ?? "no email yet").font(HerbFont.body(size: 14)) }
-                            LabeledContent("Name") { Text(user.name ?? "no name yet").font(HerbFont.bodyEmph(size: 14)) }
+                            // N1: the iCloud account is the identity; there is no Seedkeep account.
+                            LabeledContent("Account") { Text("iCloud account").font(HerbFont.body(size: 14)) }
                         } header: {
                             Rubric(text: "steward")
                         }
@@ -56,39 +55,28 @@ struct YouView: View {
                     } header: {
                         Rubric(text: "the order")
                     }
-                    contributionsSection
-                    Section {
-                        Button(role: .destructive) {
-                            showSignOutConfirm = true
-                        } label: {
-                            Text("Sign out")
-                        }
-                        Button(role: .destructive) {
-                            // Opens the flow. It does NOT delete. Everything
-                            // this tap can do lives in `presentFromYou()`,
-                            // where a test can reach it — a SwiftUI body
-                            // cannot be, which is exactly how a direct
-                            // `DELETE /api/me` hid here before.
-                            appEnv.accountDeletionFlow.presentFromYou()
-                            showDeletionFlow = true
-                        } label: {
-                            Text("Delete account")
+                    if !ServerRetirement.isRetired {
+                        contributionsSection
+                    }
+                    // N1: account deletion talks to the retired server; hidden until N2's
+                    // "Delete Seedkeep data" replaces it.
+                    if !ServerRetirement.isRetired {
+                        Section {
+                            Button(role: .destructive) {
+                                // Opens the flow. It does NOT delete. Everything
+                                // this tap can do lives in `presentFromYou()`,
+                                // where a test can reach it — a SwiftUI body
+                                // cannot be, which is exactly how a direct
+                                // `DELETE /api/me` hid here before.
+                                appEnv.accountDeletionFlow.presentFromYou()
+                                showDeletionFlow = true
+                            } label: {
+                                Text("Delete account")
+                            }
                         }
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .confirmationDialog(
-                    "Sign out of Seedkeep?",
-                    isPresented: $showSignOutConfirm,
-                    titleVisibility: .visible
-                ) {
-                    Button("Sign Out", role: .destructive) {
-                        Task { await auth.signOut() }
-                    }
-                    Button("Cancel", role: .cancel) { }
-                } message: {
-                    Text("You'll need to sign in again to sync your library.")
-                }
                 .sheet(isPresented: $showDeletionFlow) {
                     AccountDeletionFlowView(model: appEnv.accountDeletionFlow)
                 }

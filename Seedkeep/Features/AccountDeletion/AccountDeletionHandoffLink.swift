@@ -171,6 +171,7 @@ enum AccountDeletionRootRoute: Equatable {
         isSignedIn: Bool,
         hasHandoffInProgress: Bool
     ) -> AccountDeletionRootRoute {
+        guard !ServerRetirement.isRetired else { return .none }
         guard isSignedIn else { return .none }
         if let pendingLink { return .acceptHandoff(pendingLink) }
         return hasHandoffInProgress ? .resumeHandoff : .none

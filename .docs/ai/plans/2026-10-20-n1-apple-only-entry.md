@@ -445,3 +445,39 @@ deletion-coordinator wiring.
   and the network log for `seedkeep-server.fly.dev`; both must stay empty.
   The owner's real-account check comes after N2.
 - Opus and Sol review the merged N1 diff before commit.
+
+---
+
+## Review outcome (2026-10-20)
+
+Opus 5.5 and GPT-6.1 Sol reviewed the merged slices over four rounds. Beyond
+the contract, the shipped N1 adds:
+- **Erasers.** A full eraser that resets every CloudKit durable scope even
+  with no coordinator built (sync files, photo bytes, migration markers). A
+  separate garden-switch eraser for chooser discards that keeps
+  `LocalJournalRecoveryItem`.
+- **Chooser.** A `.sharedOrOwnGarden` choice instead of auto-joining a lone
+  shared garden when the user also owns one. A non-destructive Retry. A
+  discard is refused without confirmation. A tap during revalidation
+  re-resolves.
+- **Pausing.**
+  - The account-change observer pauses synchronously.
+  - Coordinator passes, startup, migration and sends stop at each boundary
+    while paused. Projection of an already-fetched batch or a confirmed send
+    stays epoch-only, so nothing confirmed is lost.
+  - A paused pass is not a success (`lastPassCompleted`).
+  - The deletion quarantine is counted in `init`.
+- **Share adoption:**
+  - Per-epoch counters, so a stale adoption never blocks the new account.
+  - A sync held back for an adoption runs once the adoption ends.
+  - Accepts are bounded (30 s) and tracked per share in
+    `InFlightOperations`, with an age limit.
+  - Deposits are tagged so a different-user wipe drops only the previous
+    user's shares.
+- **Local deletes** work while paused (static scope IDs). "Leave shared
+  garden" refuses while paused.
+- **Tests.** `AppEnvironment.makeForTesting` plus `AppEnvironmentGateTests`,
+  replacing the source-text gate tests.
+
+**Residual:** CKSyncEngine's own internal send passes inside one
+`sendUntilDrained` call can't be gated between themselves.

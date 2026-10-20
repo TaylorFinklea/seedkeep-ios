@@ -75,11 +75,13 @@ struct LibraryView: View {
                     }
                     .accessibilityLabel("Library options")
                 }
-                ToolbarItem(placement: .platformTrailing) {
-                    Button { showingRandom = true } label: { Image(systemName: "shuffle") }
-                        .accessibilityLabel("Random pick")
+                if !ServerRetirement.isRetired {
+                    ToolbarItem(placement: .platformTrailing) {
+                        Button { showingRandom = true } label: { Image(systemName: "shuffle") }
+                            .accessibilityLabel("Random pick")
+                    }
                 }
-                if PlatformCapabilities.supportsCameraScanning {
+                if !ServerRetirement.isRetired && PlatformCapabilities.supportsCameraScanning {
                     ToolbarItem(placement: .platformTrailing) {
                         Button { showingScan = true } label: { Image(systemName: "viewfinder") }
                             .accessibilityLabel("Scan packet")
@@ -243,6 +245,7 @@ private struct SpecimenGrid: View {
             }
         }
         .task(id: seeds.map(\.id).joined()) {
+            guard !ServerRetirement.isRetired else { return }
             let catalogIDs = seeds.compactMap(\.catalogID)
             guard !catalogIDs.isEmpty else { return }
             await appEnv.recommendations.bulkRefresh(catalogSeedIDs: catalogIDs)
@@ -463,6 +466,7 @@ private struct SpecimenCard: View {
     /// is unknown/absent — in that case no dot is shown. Mirrors the wiring
     /// in `SeedRow.verdictDotColor`.
     private var verdictDotColor: Color? {
+        guard !ServerRetirement.isRetired else { return nil }
         guard let catalogID = seed.catalogID,
               let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
         else { return nil }

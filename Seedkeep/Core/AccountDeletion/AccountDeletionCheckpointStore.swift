@@ -249,6 +249,19 @@ struct AccountDeletionCheckpointStore: Sendable {
         }
     }
 
+    /// Counts checkpoint files without decoding them. A damaged checkpoint still
+    /// pauses CloudKit because its deletion state cannot be safely inferred.
+    func checkpointFileCount() -> Int {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+
+        guard FileManager.default.fileExists(atPath: directory.path) else { return 0 }
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else {
+            return 1
+        }
+        return names.filter { $0.hasPrefix("checkpoint-") && $0.hasSuffix(".json") }.count
+    }
+
     /// Replaces the user's checkpoint and returns the lease for the next
     /// write.
     ///
@@ -349,5 +362,15 @@ struct AccountDeletionCheckpointStore: Sendable {
             throw Failure.userMismatch(expected: userID, found: checkpoint.userID)
         }
         return checkpoint
+    }
+}
+
+/// Read-only launch quarantine seam. It snapshots the on-disk checkpoint count
+/// without constructing the deletion coordinator or changing local data.
+enum AccountDeletionQuarantine {
+    static func pausedCheckpointCount(
+        using store: AccountDeletionCheckpointStore = AccountDeletionCheckpointStore()
+    ) -> Int {
+        store.checkpointFileCount()
     }
 }

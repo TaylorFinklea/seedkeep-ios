@@ -1,11 +1,8 @@
 import SwiftUI
 
 /// Lets the user pick which AI extraction path they want for new seeds.
-/// Three tiers — Free (on-device), BYOK (their own key), Hosted
-/// (subscription). The picker is a *preference*; the server is the
-/// authority on whether the user is actually entitled to Hosted (via
-/// their Apple IAP receipt). The cached tier is rendered alongside so
-/// the user understands the truth.
+/// Free and BYOK remain available on this device. Hosted is shown only
+/// while its server-backed subscription service is available.
 struct AIProviderSettingsView: View {
     @Environment(AppEnvironment.self) private var appEnv
 
@@ -40,7 +37,7 @@ struct AIProviderSettingsView: View {
                 Rubric(text: "provider")
             }
 
-            if AppPreferences.isHostedTierEnabled {
+            if !ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled {
                 Section {
                     LabeledContent("Server-reported tier") {
                         Text(appEnv.preferences.cachedTier ?? "(unknown)")
@@ -87,17 +84,21 @@ struct AIProviderSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .task {
-            if AppPreferences.isHostedTierEnabled { await refresh() }
+            if !ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled {
+                await refresh()
+            }
         }
     }
 
     private var availableProviders: [AppPreferences.AIProvider] {
         AppPreferences.AIProvider.allCases.filter { provider in
-            AppPreferences.isHostedTierEnabled || provider != .hosted
+            (!ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled)
+                || provider != .hosted
         }
     }
 
     private func refresh() async {
+        guard !ServerRetirement.isRetired else { return }
         refreshing = true
         defer { refreshing = false }
         await appEnv.refreshTier()

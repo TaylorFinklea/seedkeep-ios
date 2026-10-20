@@ -1,5 +1,27 @@
 # Current State
 
+## Apple-only app — N1 complete (2026-10-20)
+
+The app no longer needs the Seedkeep server (Fly has been stopped since
+2026-10-15). On branch `redesign/n1-apple-only`, stacked on R1; local only.
+- The iCloud account is the identity; there is no sign-in screen. Existing
+  installs rebind to their CloudKit garden in place, with no wipe.
+- New screens: "Sign in to iCloud" (and restricted / couldn't verify), and a
+  garden chooser for ambiguous accounts.
+- No request reaches the server: a refusing transport, gated callers, and
+  server-only features hidden (scan, catalog, recommendations, random pick,
+  home-location editing, account deletion). N2 brings back what can run on
+  the device.
+- **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 916 + 1, macOS
+  app 931 + 1, on Xcode 27.1.
+- **Reviews:** Opus 5.5 and GPT-6.1 Sol, four rounds plus confirmations.
+- **Contract:** `.docs/ai/plans/2026-10-20-n1-apple-only-entry.md`.
+- **Not verified:** live CloudKit identity and garden discovery with a real
+  account; that is the owner's device check after N2.
+- **Known flake:** `SeedsTableModelTests` "1,000 seeds under 50 ms" fails on
+  the iOS simulator under heavy machine load; its code path is unchanged
+  since R1.
+
 ## Native Workbench redesign — R1 complete (2026-10-18)
 
 R1 is on branch `redesign/r1-shell-seeds`, commit `16ec7b9`. It stacks on M0

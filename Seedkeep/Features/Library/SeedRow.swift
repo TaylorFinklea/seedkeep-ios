@@ -82,6 +82,7 @@ struct SeedRow: View {
     /// seed has no catalog link, no cached recommendation, or the verdict is
     /// unknown/absent — in that case no dot is shown.
     private var verdictDotColor: Color? {
+        guard !ServerRetirement.isRetired else { return nil }
         guard let catalogID = seed.catalogID,
               let verdict = appEnv.recommendations.recommendation(for: catalogID)?.verdict
         else { return nil }

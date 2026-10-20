@@ -8,6 +8,9 @@ import Foundation
 final class PendingShareDrainQueue<Element> {
     struct Entry {
         let value: Element
+        /// Deposited while signed in (N1): such entries belong to that user and go on a
+        /// different-user wipe; one delivered before any identity resolved is kept.
+        var underResolvedIdentity = true
         var failures = 0
         var nextAttempt = Date.distantPast
         var didSurfaceError = false
@@ -18,8 +21,11 @@ final class PendingShareDrainQueue<Element> {
     var isEmpty: Bool { entries.isEmpty }
     var count: Int { entries.count }
 
-    func deposit(_ value: Element) { entries.append(Entry(value: value)) }
+    func deposit(_ value: Element, underResolvedIdentity: Bool = true) {
+        entries.append(Entry(value: value, underResolvedIdentity: underResolvedIdentity))
+    }
     func take() -> Element? { takeEligible(now: .now)?.value }
+    func removeResolvedDeposits() { entries.removeAll { $0.underResolvedIdentity } }
 
     fileprivate func takeEligible(now: Date) -> Entry? {
         guard let index = entries.firstIndex(where: { $0.nextAttempt <= now }) else { return nil }
@@ -97,6 +103,7 @@ enum MacPendingShareRetryPolicy {
 
     static func isTransient(_ error: Error) -> Bool {
         if error is PendingShareWipeRetryError || error is PendingShareAuthChangedError { return true }
+        if error is LiveCloudIdentityProvider.TimedOut { return true }   // a bounded accept that timed out
         guard let error = error as? CKError else { return false }
         switch error.code {
         case .networkUnavailable, .networkFailure, .serviceUnavailable, .requestRateLimited, .zoneBusy:
@@ -132,7 +139,12 @@ final class MacPendingShareQueue {
     var count: Int { queue.count }
     var isEmpty: Bool { queue.isEmpty }
 
-    func deposit(_ metadata: CKShare.Metadata) { queue.deposit(metadata) }
+    func deposit(_ metadata: CKShare.Metadata, underResolvedIdentity: Bool) {
+        queue.deposit(metadata, underResolvedIdentity: underResolvedIdentity)
+    }
+    /// N1: a different iCloud user must never adopt the previous user's pending shares; ones that
+    /// arrived before any identity resolved stay.
+    func removeResolvedDeposits() { queue.removeResolvedDeposits() }
 
     func drain(
         isSignedIn: @MainActor () -> Bool,

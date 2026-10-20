@@ -118,7 +118,8 @@ struct AddPlantingEventView: View {
     /// (matching `parseYYYYMMDD` and `yyyymmdd(_:)`); comparison is at local
     /// day granularity so the window check agrees with what the DatePicker saves.
     private var outOfWindowMessage: String? {
-        guard let rec = localRecommendation,
+        guard !ServerRetirement.isRetired,
+              let rec = localRecommendation,
               let startStr = rec.rangeStart,
               let endStr = rec.rangeEnd,
               let start = parseYYYYMMDD(startStr),
@@ -182,7 +183,7 @@ struct AddPlantingEventView: View {
     /// frost dates). No separate frost-date logic is needed client-side.
     @ViewBuilder
     private var recommendationSection: some View {
-        if selectedCatalogID != nil {
+        if !ServerRetirement.isRetired, selectedCatalogID != nil {
             Section {
                 if appEnv.recommendations.needsHomeLocation {
                     RecommendationPanel.needsLocation
@@ -355,6 +356,7 @@ struct AddPlantingEventView: View {
 
     @MainActor
     private func refreshRecommendationForSelection() async {
+        guard !ServerRetirement.isRetired else { return }
         guard let catalogID = selectedCatalogID else {
             localRecommendation = nil
             refinedRecommendation = nil

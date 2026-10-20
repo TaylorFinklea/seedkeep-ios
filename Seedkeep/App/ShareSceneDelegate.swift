@@ -16,7 +16,11 @@ final class ShareSceneDelegate: NSObject, UIWindowSceneDelegate {
         options connectionOptions: UIScene.ConnectionOptions
     ) {
         if let metadata = connectionOptions.cloudKitShareMetadata {
-            Task { @MainActor in PendingShareInbox.shared.deposit(metadata) }
+            Task { @MainActor in
+                let environment = (UIApplication.shared.delegate as? SeedkeepAppDelegate)?.environment
+                PendingShareInbox.shared.deposit(
+                    metadata, underResolvedIdentity: environment?.canDrainPendingShares ?? false)
+            }
         }
         // Cold-launch invite links: this custom scene delegate replaces SwiftUI's, which can suppress
         // .onOpenURL / .onContinueUserActivity — so forward both ways' URLs to the invite router.
@@ -49,8 +53,9 @@ final class ShareSceneDelegate: NSObject, UIWindowSceneDelegate {
         userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
     ) {
         Task { @MainActor in
-            PendingShareInbox.shared.deposit(cloudKitShareMetadata)
             let environment = (UIApplication.shared.delegate as? SeedkeepAppDelegate)?.environment
+            PendingShareInbox.shared.deposit(
+                cloudKitShareMetadata, underResolvedIdentity: environment?.canDrainPendingShares ?? false)
             await environment?.processPendingShare()
         }
     }

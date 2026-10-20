@@ -114,7 +114,7 @@ struct SeedDetailView: View {
                     // local snapshot for seeds saved before snapshots
                     // existed. Failures are silent — the section falls back
                     // to the local snapshot (or hides entirely).
-                    if let catalogID = seed.catalogID {
+                    if !ServerRetirement.isRetired, let catalogID = seed.catalogID {
                         catalog = try? await appEnv.client.catalogByID(catalogID)
                         if seed.growingInfo == nil, let cat = catalog {
                             let snap = Self.snapshot(from: cat)
@@ -124,8 +124,10 @@ struct SeedDetailView: View {
                         }
                         // Refresh the planting-window recommendation from the server
                         // and read back the cached result for the panel.
-                        await appEnv.recommendations.refresh(catalogSeedID: catalogID)
-                        localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
+                        if !ServerRetirement.isRetired {
+                            await appEnv.recommendations.refresh(catalogSeedID: catalogID)
+                            localRecommendation = appEnv.recommendations.recommendation(for: catalogID)
+                        }
                         // Apply WeatherKit refinement when coordinates are available.
                         if let lat = appEnv.preferences.cachedLatitude,
                            let lon = appEnv.preferences.cachedLongitude {
@@ -429,7 +431,7 @@ struct SeedDetailView: View {
                 // Phase 4 D — let the user flag a correction. Only
                 // surface for catalog-linked seeds, since the queue
                 // submits a `catalog_seed_id`.
-                if seed.catalogID != nil {
+                if !ServerRetirement.isRetired, seed.catalogID != nil {
                     Button {
                         showCatalogFeedback = true
                     } label: {
@@ -823,7 +825,7 @@ struct SeedDetailView: View {
 
         // Planting-window recommendation — only shown when the seed has a
         // catalog link (manually-entered seeds have no server recommendation).
-        if seed.catalogID != nil {
+        if !ServerRetirement.isRetired, seed.catalogID != nil {
             Section {
                 if appEnv.recommendations.needsHomeLocation {
                     RecommendationPanel.needsLocation

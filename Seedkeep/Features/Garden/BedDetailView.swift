@@ -217,6 +217,7 @@ struct BedDetailView: View {
     /// sentinel so we don't keep retrying.
     @MainActor
     private func refreshCatalogsForEvents() async {
+        guard !ServerRetirement.isRetired else { return }
         var catalogIDs: Set<String> = []
         for event in allEvents {
             guard let seedID = event.seedID,

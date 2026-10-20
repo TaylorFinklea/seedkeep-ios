@@ -8,7 +8,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     var environment: AppEnvironment?
 
     func application(_ application: NSApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
-        MacPendingShareQueue.shared.deposit(metadata)
+        MacPendingShareQueue.shared.deposit(
+            metadata, underResolvedIdentity: environment?.canDrainPendingShares ?? false)
         Task { @MainActor in await processPendingShares() }
     }
 
@@ -16,7 +17,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in await processPendingShares() }
     }
 
-    /// A share can only be drained after restore has resolved the authenticated identity.
+    /// A share can only be drained after restore has resolved the iCloud identity (`.signedIn`);
+    /// `AppEnvironment.processPendingShare` also waits for a confirmed one (`canUseCloudKit`).
     func processPendingShares() async {
         guard let environment, case .signedIn = environment.auth.state else { return }
         await environment.processPendingShare()

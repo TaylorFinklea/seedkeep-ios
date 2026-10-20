@@ -1518,28 +1518,28 @@ struct AccountDeletionRootRouteTests {
                                                 hasHandoffInProgress: false) == .none)
     }
 
-    @Test("the same held link presents the moment the user signs in")
-    func signingInPresentsTheHeldLink() {
+    @Test("retired handoff links never present after sign-in")
+    func signingInDoesNotPresentTheHeldLink() {
         #expect(AccountDeletionRootRoute.decide(pendingLink: link,
                                                 isSignedIn: true,
                                                 hasHandoffInProgress: false)
-                == .acceptHandoff(link))
+                == .none)
     }
 
-    @Test("a handoff already accepted presents a token-free resume surface")
-    func acceptedHandoffResumesWithoutALink() {
+    @Test("a handoff checkpoint never presents a resume surface")
+    func acceptedHandoffDoesNotResume() {
         #expect(AccountDeletionRootRoute.decide(pendingLink: nil,
                                                 isSignedIn: true,
                                                 hasHandoffInProgress: true)
-                == .resumeHandoff)
+                == .none)
     }
 
-    @Test("a fresh link wins over a resume, and a signed-out device gets neither")
-    func precedenceAndSignedOutSuppression() {
+    @Test("retired links and a signed-out device resolve to no route")
+    func retiredLinksAndSignedOutDeviceHaveNoRoute() {
         #expect(AccountDeletionRootRoute.decide(pendingLink: link,
                                                 isSignedIn: true,
                                                 hasHandoffInProgress: true)
-                == .acceptHandoff(link))
+                == .none)
         #expect(AccountDeletionRootRoute.decide(pendingLink: nil,
                                                 isSignedIn: false,
                                                 hasHandoffInProgress: true) == .none)

@@ -39,7 +39,9 @@ public final class SubscriptionManager {
 
     public init(client: SeedkeepClient) {
         self.client = client
-        startTransactionListener()
+        if !ServerRetirement.isRetired {
+            startTransactionListener()
+        }
     }
     // The listener task captures `self` weakly so it exits naturally
     // when the manager deinits. We don't add a deinit because the

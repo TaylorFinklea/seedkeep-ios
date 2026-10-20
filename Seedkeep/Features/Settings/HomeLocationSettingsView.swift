@@ -20,57 +20,68 @@ struct HomeLocationSettingsView: View {
 
     var body: some View {
         Form {
-            Section {
-                TextField("12345", text: $zipText)
-                    #if os(iOS)
-                    .keyboardType(.numberPad)
-                    #endif
-                    .onChange(of: zipText) { _, new in
-                        // Strip non-digit characters and cap at 5.
-                        let digits = new.filter(\.isNumber)
-                        if digits != new || new.count > 5 {
-                            zipText = String(digits.prefix(5))
-                        }
-                        // Reset feedback when the user edits the field.
-                        if case .success = saveState { saveState = .idle }
-                        if case .error = saveState { saveState = .idle }
-                    }
-            } header: {
-                Rubric(text: "zip code")
-            } footer: {
-                Text("Enter your home ZIP code. Seedkeep uses it to look up your USDA hardiness zone and average frost dates.")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
-            }
-
-            if case .loading = saveState {
+            if ServerRetirement.isRetired {
                 Section {
-                    HStack {
-                        ProgressView()
-                            .controlSize(.small)
-                            .herbProgressStyle()
-                        Text("Looking up…")
-                            .foregroundStyle(HerbColor.inkSoft)
+                    LabeledContent("ZIP", value: appEnv.preferences.homeZip ?? "Not set")
+                    if let zone = appEnv.preferences.cachedUsdaZone {
+                        LabeledContent("USDA zone", value: "Zone \(zone)")
                     }
-                }
-            }
-
-            if case .success(let location) = saveState {
-                Section {
-                    LabeledContent("ZIP", value: location.zip)
-                    LabeledContent("USDA zone", value: "Zone \(location.usdaZone)")
-                    LabeledContent("Avg last frost", value: frostLabel(location.avgLastFrost))
-                    LabeledContent("Avg first frost", value: frostLabel(location.avgFirstFrost))
                 } header: {
-                    Rubric(text: "location resolved")
+                    Rubric(text: "saved location")
                 }
-            }
-
-            if case .error(let message) = saveState {
+            } else {
                 Section {
-                    Text(message)
+                    TextField("12345", text: $zipText)
+                        #if os(iOS)
+                        .keyboardType(.numberPad)
+                        #endif
+                        .onChange(of: zipText) { _, new in
+                            // Strip non-digit characters and cap at 5.
+                            let digits = new.filter(\.isNumber)
+                            if digits != new || new.count > 5 {
+                                zipText = String(digits.prefix(5))
+                            }
+                            // Reset feedback when the user edits the field.
+                            if case .success = saveState { saveState = .idle }
+                            if case .error = saveState { saveState = .idle }
+                        }
+                } header: {
+                    Rubric(text: "zip code")
+                } footer: {
+                    Text("Enter your home ZIP code. Seedkeep uses it to look up your USDA hardiness zone and average frost dates.")
                         .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.rose)
+                        .foregroundStyle(HerbColor.inkSoft)
+                }
+
+                if case .loading = saveState {
+                    Section {
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                                .herbProgressStyle()
+                            Text("Looking up…")
+                                .foregroundStyle(HerbColor.inkSoft)
+                        }
+                    }
+                }
+
+                if case .success(let location) = saveState {
+                    Section {
+                        LabeledContent("ZIP", value: location.zip)
+                        LabeledContent("USDA zone", value: "Zone \(location.usdaZone)")
+                        LabeledContent("Avg last frost", value: frostLabel(location.avgLastFrost))
+                        LabeledContent("Avg first frost", value: frostLabel(location.avgFirstFrost))
+                    } header: {
+                        Rubric(text: "location resolved")
+                    }
+                }
+
+                if case .error(let message) = saveState {
+                    Section {
+                        Text(message)
+                            .font(HerbFont.bodyItalic(size: 12))
+                            .foregroundStyle(HerbColor.rose)
+                    }
                 }
             }
         }
@@ -80,9 +91,11 @@ struct HomeLocationSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { Task { await save() } }
-                    .disabled(!canSave)
+            if !ServerRetirement.isRetired {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .disabled(!canSave)
+                }
             }
         }
         .onAppear {

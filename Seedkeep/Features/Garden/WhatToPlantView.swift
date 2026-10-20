@@ -28,117 +28,129 @@ struct WhatToPlantView: View {
     private let today = Calendar.current.startOfDay(for: Date())
 
     var body: some View {
-        List {
-            // Track updateEpoch so SwiftUI re-renders after each upsert batch.
-            let _ = appEnv.recommendations.updateEpoch
-            if appEnv.recommendations.needsHomeLocation {
-                Section {
-                    RecommendationPanel.needsLocation
-                }
+        Group {
+            if ServerRetirement.isRetired {
+                ContentUnavailableView(
+                    "Planting recommendations are unavailable",
+                    systemImage: "calendar",
+                    description: Text("Recommendations will return with an on-device version.")
+                )
             } else {
-                let grouped = groupedSeeds()
-
-                if !grouped.plantNow.isEmpty {
-                    Section {
-                        ForEach(grouped.plantNow, id: \.seed.id) { row in
-                            plantRow(row)
+                List {
+                    // Track updateEpoch so SwiftUI re-renders after each upsert batch.
+                    let _ = appEnv.recommendations.updateEpoch
+                    if appEnv.recommendations.needsHomeLocation {
+                        Section {
+                            RecommendationPanel.needsLocation
                         }
-                    } header: {
-                        Rubric(text: "plant now")
-                    }
-                }
+                    } else {
+                        let grouped = groupedSeeds()
 
-                if !grouped.plantSoon.isEmpty {
-                    Section {
-                        ForEach(grouped.plantSoon, id: \.seed.id) { row in
-                            plantRow(row)
+                        if !grouped.plantNow.isEmpty {
+                            Section {
+                                ForEach(grouped.plantNow, id: \.seed.id) { row in
+                                    plantRow(row)
+                                }
+                            } header: {
+                                Rubric(text: "plant now")
+                            }
                         }
-                    } header: {
-                        Rubric(text: "plant soon")
-                    }
-                }
 
-                if !grouped.laterAndMissed.isEmpty {
-                    Section {
-                        DisclosureGroup("Later & missed (\(grouped.laterAndMissed.count))",
-                                        isExpanded: $showLaterGroup) {
-                            ForEach(grouped.laterAndMissed, id: \.seed.id) { row in
-                                plantRow(row)
+                        if !grouped.plantSoon.isEmpty {
+                            Section {
+                                ForEach(grouped.plantSoon, id: \.seed.id) { row in
+                                    plantRow(row)
+                                }
+                            } header: {
+                                Rubric(text: "plant soon")
+                            }
+                        }
+
+                        if !grouped.laterAndMissed.isEmpty {
+                            Section {
+                                DisclosureGroup("Later & missed (\(grouped.laterAndMissed.count))",
+                                                isExpanded: $showLaterGroup) {
+                                    ForEach(grouped.laterAndMissed, id: \.seed.id) { row in
+                                        plantRow(row)
+                                    }
+                                }
+                            }
+                        }
+
+                        if grouped.plantNow.isEmpty && grouped.plantSoon.isEmpty
+                            && grouped.laterAndMissed.isEmpty {
+                            if appEnv.sync.isSyncing {
+                                VStack(spacing: 8) {
+                                    ProgressView()
+                                        .herbProgressStyle()
+                                        .controlSize(.small)
+                                    Text("turning the page…")
+                                        .font(HerbFont.bodyItalic(size: 12))
+                                        .foregroundStyle(HerbColor.inkSoft)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 48)
+                            } else {
+                                ContentUnavailableView(
+                                    "No recommendations yet",
+                                    systemImage: "leaf",
+                                    description: Text("Pull to refresh, or add catalog-linked seeds to your library.")
+                                )
                             }
                         }
                     }
                 }
-
-                if grouped.plantNow.isEmpty && grouped.plantSoon.isEmpty
-                    && grouped.laterAndMissed.isEmpty {
-                    if appEnv.sync.isSyncing {
-                        VStack(spacing: 8) {
-                            ProgressView()
-                                .herbProgressStyle()
-                                .controlSize(.small)
-                            Text("turning the page…")
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
-                                .multilineTextAlignment(.center)
+                .navigationTitle("What to plant")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .refreshable {
+                    guard !ServerRetirement.isRetired else { return }
+                    let ids = seeds.compactMap(\.catalogID)
+                    if !ids.isEmpty {
+                        await appEnv.recommendations.bulkRefresh(catalogSeedIDs: ids)
+                    }
+                }
+                .task {
+                    guard !ServerRetirement.isRetired else { return }
+                    let ids = seeds.compactMap(\.catalogID)
+                    guard !ids.isEmpty else { return }
+                    await appEnv.recommendations.bulkRefresh(catalogSeedIDs: ids)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .platformTrailing) {
+                        PhotosPicker(
+                            selection: $pickerItem,
+                            matching: .images,
+                            photoLibrary: .shared()
+                        ) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "camera.viewfinder")
+                                Text("Snap a corner")
+                                    .font(HerbFont.smallCaps(size: 10))
+                                    .tracking(1.2)
+                            }
+                            .foregroundStyle(HerbColor.sepia)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 48)
-                    } else {
-                        ContentUnavailableView(
-                            "No recommendations yet",
-                            systemImage: "leaf",
-                            description: Text("Pull to refresh, or add catalog-linked seeds to your library.")
-                        )
                     }
                 }
-            }
-        }
-        .navigationTitle("What to plant")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .refreshable {
-            let ids = seeds.compactMap(\.catalogID)
-            if !ids.isEmpty {
-                await appEnv.recommendations.bulkRefresh(catalogSeedIDs: ids)
-            }
-        }
-        .task {
-            let ids = seeds.compactMap(\.catalogID)
-            guard !ids.isEmpty else { return }
-            await appEnv.recommendations.bulkRefresh(catalogSeedIDs: ids)
-        }
-        .toolbar {
-            ToolbarItem(placement: .platformTrailing) {
-                PhotosPicker(
-                    selection: $pickerItem,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "camera.viewfinder")
-                        Text("Snap a corner")
-                            .font(HerbFont.smallCaps(size: 10))
-                            .tracking(1.2)
+                .onChange(of: pickerItem) { _, newItem in
+                    guard let newItem else { return }
+                    Task {
+                        if let data = try? await newItem.loadTransferable(type: Data.self),
+                           let image = PlatformImageCoding.image(data: data) {
+                            await launchCornerSuggestions(image: image)
+                        }
+                        pickerItem = nil
                     }
-                    .foregroundStyle(HerbColor.sepia)
                 }
-            }
-        }
-        .onChange(of: pickerItem) { _, newItem in
-            guard let newItem else { return }
-            Task {
-                if let data = try? await newItem.loadTransferable(type: Data.self),
-                   let image = PlatformImageCoding.image(data: data) {
-                    await launchCornerSuggestions(image: image)
+                .sheet(isPresented: $showCornerSuggestions) {
+                    if let vm = cornerViewModel {
+                        CornerSuggestionsView(viewModel: vm)
+                            .environment(appEnv)
+                    }
                 }
-                pickerItem = nil
-            }
-        }
-        .sheet(isPresented: $showCornerSuggestions) {
-            if let vm = cornerViewModel {
-                CornerSuggestionsView(viewModel: vm)
-                    .environment(appEnv)
             }
         }
     }
@@ -169,6 +181,7 @@ struct WhatToPlantView: View {
                 }
             },
             fetchRecommendations: { catalogIDs in
+                guard !ServerRetirement.isRetired else { return [] }
                 await recommendations.bulkRefresh(catalogSeedIDs: catalogIDs)
                 return catalogIDs.compactMap { catalogID in
                     guard let rec = recommendations.recommendation(for: catalogID) else { return nil }

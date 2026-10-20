@@ -68,20 +68,17 @@ struct SeedkeepApp: App {
             // off until they've been verified screen-by-screen.
             .preferredColorScheme(.light)
             .task {
+                // Hosted tests (iOS and Mac) share the developer's Keychain and CloudKit account.
+                // Keep startup entirely local so a test host never makes a live iCloud identity
+                // call, restores a real session, or mutates one.
+                guard FeatureFlags.canRunLiveAppStartup else { return }
                 #if os(macOS)
                 guard !Self.didRunStartup else { return }
                 Self.didRunStartup = true
-                // Hosted Mac tests share the developer's Keychain and CloudKit account. Keep
-                // startup entirely local so a test host cannot restore a real session or mutate it.
-                if !FeatureFlags.canRunLiveAppStartup { return }
                 #endif
                 appDelegate.environment = environment   // let the scene delegate drive participant adopt
-                // BEFORE restoring the session, and deliberately not gated
-                // on it: an account deletion that committed but whose
-                // response was lost took this device's session with it, so
-                // restore will 401 and every signed-in code path stays out
-                // of reach. The receipt lookup needs no credentials and is
-                // the only thing that can finish that deletion.
+                // BEFORE resolving the identity, and deliberately not gated on it: a leftover
+                // account-deletion checkpoint must be accounted for before anything can sync.
                 await environment.recoverCommittedAccountDeletion()
                 await environment.auth.restoreSession()
                 #if os(macOS)
@@ -124,36 +121,44 @@ struct RootView: View {
     @Binding var pendingInviteCode: String?
     @Binding var pendingHandoff: AccountDeletionHandoffLink?
     @State private var whatsNewRelease: ChangelogRelease?
-    /// Per-session acknowledgement that the successor-resume sheet was
-    /// closed. The checkpoint it comes from is durable, so without this the
-    /// sheet would reopen the instant it is dismissed.
-    @State private var resumeDismissed = false
-    /// The fingerprint of whichever handoff presentation is currently on
-    /// screen, recorded the moment it appears — the ONLY reliable way to
-    /// know what a later dismissal is closing, since a `.sheet(item:)`
-    /// setter always receives `nil` regardless of which item it was.
-    @State private var presentedHandoffID: String?
     @State private var workbenchModel = WorkbenchModel()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ZStack {
             switch auth.state {
-            case .signedOut, .failed:
-                SignInView()
+            case .signedOut:
+                // Never a dead end: resolve from here too. Single-flight makes this safe beside
+                // the startup task and other windows.
+                EntryProgressView()
+                    .task {
+                        guard FeatureFlags.canRunLiveAppStartup else { return }
+                        await auth.restoreSession()
+                    }
             case .authenticating:
-                ProgressView("Signing you in…")
-                    .progressViewStyle(.circular)
+                EntryProgressView()
+            case .needsICloud(let block):
+                CloudEntryView(reason: .blocked(block))
+            case .choosingGarden(let choice):
+                GardenChooserView(choice: choice)
+            case .failed(let message):
+                CloudEntryView(reason: .failed(message: message))
             case .signedIn:
                 signedInRoot
                     .task(id: snapshotID(auth.state)) {
-                        #if os(macOS)
+                        // A share tapped on a fresh device is adopted before any solo sync.
                         await appEnv.processPendingShare()
-                        #endif
                         await appEnv.syncIfPossible()
                     }
                     .task {
                         presentWhatsNewIfNeeded()
+                    }
+                    // Confirming the identity later, on the same household, must still adopt a
+                    // pending share and start CloudKit. Unstructured, so a later flip back to
+                    // unverified never cancels work already under way.
+                    .onChange(of: auth.isIdentityVerified) { _, verified in
+                        guard verified else { return }
+                        Task { await appEnv.processPendingShare(); await appEnv.syncIfPossible() }
                     }
                     .onChange(of: scenePhase) { _, newPhase in
                         // Foregrounding re-runs the full sync + tick
@@ -194,55 +199,10 @@ struct RootView: View {
                 signedOutInviteView(code: route.code)
             }
         }
-        // A shared-garden handoff, presented only once there is an account
-        // to accept it with. `AccountDeletionRootRoute` owns that decision
-        // — a modal over `SignInView` would hide the sign-in the link is
-        // waiting for, and the only way out of it would throw the
-        // capability away. A handoff already accepted on this device
-        // reopens the same surface with no token at all, which is the only
-        // way back in after the single-use link has been spent.
-        .sheet(item: Binding(
-            get: { handoffRoute.presentation },
-            set: { newValue in
-                guard newValue == nil else { return }
-                // `newValue` is always nil on dismiss, so the ONLY way to
-                // know which presentation just closed is what we recorded
-                // when it appeared. Comparing that recorded fingerprint —
-                // not "is pendingHandoff non-nil" — is what lets a
-                // rotated token that arrived while the old sheet was
-                // still up survive this dismissal
-                // (`AccountDeletionRootRoute.dismissalClearsPendingLink`).
-                if presentedHandoffID == AccountDeletionRootRoute.Presentation.resumeID {
-                    resumeDismissed = true
-                } else if AccountDeletionRootRoute.dismissalClearsPendingLink(
-                    dismissedID: presentedHandoffID, pendingLink: pendingHandoff) {
-                    pendingHandoff = nil
-                }
-                presentedHandoffID = nil
-            }
-        )) { presentation in
-            // The fingerprint is captured HERE, from the item SwiftUI is
-            // actually instantiating this content for — never from the
-            // parent's `handoffRoute` recomputing. A changed `Identifiable`
-            // id on `.sheet(item:)` tears the old content down and
-            // presents fresh content for the new id, so `onAppear` fires
-            // in the same relative order dismissal does: if a rotated
-            // link B replaces A while A is still on screen, A's teardown
-            // (and its `set(nil)`, still comparing against A's
-            // fingerprint) happens before B's `onAppear` overwrites it —
-            // exactly the ordering `AccountDeletionRootRoute
-            // .dismissalClearsPendingLink` depends on. Tracking the
-            // DESIRED route via `onChange` instead would update the
-            // fingerprint the instant the route recomputes, which can run
-            // ahead of what is actually still rendered.
-            AccountDeletionHandoffAcceptView(model: appEnv.accountDeletionFlow,
-                                             link: presentation.link)
-                .onAppear { presentedHandoffID = presentation.id }
-        }
-        .onChange(of: isSignedIn) { _, signedIn in
-            // Sign-in is what a held link and a relaunched successor
-            // checkpoint were both waiting for.
-            if signedIn { appEnv.accountDeletionFlow.reload() }
+        // N1: garden handoff links belonged to the retired server's account deletion. An incoming
+        // one only explains that; it is never inspected or accepted.
+        .sheet(item: $pendingHandoff) { _ in
+            handoffRetiredView
         }
     }
 
@@ -284,14 +244,6 @@ struct RootView: View {
         return false
     }
 
-    private var handoffRoute: AccountDeletionRootRoute {
-        AccountDeletionRootRoute.decide(
-            pendingLink: pendingHandoff,
-            isSignedIn: isSignedIn,
-            hasHandoffInProgress: !resumeDismissed
-                && appEnv.accountDeletionFlow.hasHandoffInProgress)
-    }
-
     @ViewBuilder
     private func signedOutInviteView(code: String) -> some View {
         // Retired invite links are a dead flow — don't prompt sign-in to redeem one.
@@ -299,6 +251,30 @@ struct RootView: View {
             InviteRetirementNotice()
             Button("OK") {
                 pendingInviteCode = nil
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(28)
+        .presentationDetents([.medium])
+    }
+
+    private var handoffRetiredView: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 12) {
+                Image(systemName: "link.badge.plus")
+                    .font(.system(size: 36))
+                    .foregroundStyle(WBColor.muted)
+                    .accessibilityHidden(true)
+                Text("Garden handoff links are no longer supported.")
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.ink)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 48)
+            Button("OK") {
+                pendingHandoff = nil
             }
             .buttonStyle(.bordered)
         }
@@ -329,6 +305,8 @@ struct RootView: View {
         case .signedIn(_, let household): return "signedIn:\(household.id)"
         case .signedOut: return "signedOut"
         case .authenticating: return "authenticating"
+        case .needsICloud(let block): return "needsICloud:\(block)"
+        case .choosingGarden(let choice): return "choosingGarden:\(choice.reason)"
         case .failed(let m): return "failed:\(m)"
         }
     }

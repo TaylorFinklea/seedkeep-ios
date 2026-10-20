@@ -88,7 +88,10 @@ struct AccountDeletionFlowTests {
         userID: String = "u_del"
     ) -> Harness {
         let sync = SyncEngine(client: client, container: container)
-        let auth = AuthController(client: client, tokenStore: tokenStore, defaults: defaults)
+        // N1: identity comes from iCloud; these tests drive only the deletion seam's signOut,
+        // so the fake provider is never consulted.
+        let auth = AuthController(identity: FakeCloudIdentityProvider(), tokenStore: tokenStore,
+                                  defaults: defaults)
         auth.wireLocalDataEraser { [sync] in
             try? sync.eraseAllLocalData()
         }
@@ -170,7 +173,8 @@ struct AccountDeletionFlowTests {
         {"user":{"id":"\(userID)","name":"Gardener","email":"g@example.com"},"household":{"id":"\(householdID)","name":"My household","created_at":1,"updated_at":1}}
         """
         _ = try JSONDecoder().decode(AuthController.CachedIdentity.self, from: Data(json.utf8))
-        defaults.set(Data(json.utf8), forKey: AuthController.identityCacheKey)
+        // A pre-N1 device: the server-era identity under the legacy key.
+        defaults.set(Data(json.utf8), forKey: AuthController.legacyIdentityCacheKey)
     }
 
     // MARK: - Happy-path: deleteAccount succeeds → signOut wipes everything

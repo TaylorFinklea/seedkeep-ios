@@ -55,6 +55,10 @@ final class HouseholdCloudCoordinator {
     private(set) var lastHumanizedError: String?
     /// Diagnostics surfaced in Settings ▸ Sync so the beta test isn't blind.
     private(set) var lastSyncedAt: Date?
+    /// N1: whether the last `sync()` pass ran to its end (success or a surfaced error). False for a
+    /// pass that stopped because CloudKit was paused or the account changed: such a pass is not a
+    /// success, and `lastHumanizedError` still belongs to an earlier pass.
+    private(set) var lastPassCompleted = false
     private(set) var accountStatusText: String?
     /// Raw error detail (CKError code / description) for the diagnostics row — distinct from the
     /// humanized banner string, mirroring SyncEngine.lastError. nil when the last pass succeeded.
@@ -96,6 +100,12 @@ final class HouseholdCloudCoordinator {
     /// unapplied batch) is exercisable without corrupting a real store. Always nil in production.
     @ObservationIgnored
     var projectionFaultForTesting: (() throws -> Void)?
+    /// N1: whether CloudKit may be used right now (`AppEnvironment.canUseCloudKit`). Checked when
+    /// a debounced push fires and at the start of `sync()`, so work queued before the identity was
+    /// paused never reaches CloudKit. A skip discards nothing: local rows stay unconfirmed and
+    /// push on the next allowed sync.
+    @ObservationIgnored
+    var isCloudKitAllowed: @MainActor () -> Bool = { true }
 
     init(
         engine: HouseholdRecordSyncing,
@@ -210,6 +220,8 @@ final class HouseholdCloudCoordinator {
                 return
             }
             guard !Task.isCancelled, self.epoch == armedEpoch else { return }
+            // CloudKit paused since this push was armed: leave it to the next allowed sync.
+            guard self.isCloudKitAllowed() else { return }
             let ran = await self.sync()
             if !Task.isCancelled, self.epoch == armedEpoch, !ran {
                 await self.save()
@@ -232,12 +244,13 @@ final class HouseholdCloudCoordinator {
     /// skip its post-sync orchestration — same contract as `SyncEngine.syncAll`.
     @discardableResult
     func sync() async -> Bool {
-        guard !isSyncing else { return false }
+        guard isCloudKitAllowed(), !isSyncing else { return false }
         if requiresWipeRetry {
             wipeAndClear()
             guard !requiresWipeRetry else { return false }
         }
         isSyncing = true
+        lastPassCompleted = false
         let passEpoch = epoch
         // Always reset the per-pass echo set, even if a stage throws before pushDirty clears it —
         // otherwise a stale recordName would suppress a later legitimate push of that record.
@@ -253,15 +266,19 @@ final class HouseholdCloudCoordinator {
             do {
                 try await runPass(passEpoch)
                 // Don't record a fresh success for a pass the account-change abandoned mid-flight
-                // (runPass returns cleanly on epoch change) — that would stamp lastSyncedAt + clear a
-                // real prior error after the data was wiped.
-                guard isCurrent(passEpoch) else { return true }
+                // (runPass returns cleanly on epoch change, or once CloudKit is paused) — that would
+                // stamp lastSyncedAt + clear a real prior error after the data was wiped.
+                guard canContinue(passEpoch) else { return true }
                 lastHumanizedError = nil
                 lastErrorDetail = nil
                 lastSyncedAt = Date()
+                lastPassCompleted = true
                 return true
             } catch {
-                guard isCurrent(passEpoch) else { return true }   // account changed mid-pass → abandon quietly
+                guard canContinue(passEpoch) else { return true }   // account changed or paused mid-pass → abandon quietly
+                // A cancelled operation is not a failure: no banner; the next pass picks it up. A
+                // migration that stopped for a pause is quiet too, even if CloudKit resumed since.
+                if Self.isCancellation(error) || error is HouseholdMigrationExecutor.Paused { return true }
                 if Self.isTransient(error), attempt < maxAttempts - 1 {
                     let delay = min(max(0, (error as? CKError)?.retryAfterSeconds ?? 0.5), 5)
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -269,6 +286,7 @@ final class HouseholdCloudCoordinator {
                 }
                 lastErrorDetail = Self.errorDetail(error)
                 lastHumanizedError = Self.humanizeCloudError(error)
+                lastPassCompleted = true
                 return true
             }
         }
@@ -277,11 +295,11 @@ final class HouseholdCloudCoordinator {
 
     /// One reconcile pass. Returns early (no throw) if the account changed mid-pass.
     private func runPass(_ passEpoch: Int) async throws {
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         try await ensureStarted(passEpoch)
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         try await pullAndApply(passEpoch)
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
         // children locally so pushDirty propagates the tombstones (no server to cascade for us).
         try HouseholdCascade.apply(in: ModelContext(container), now: Int64(Date().timeIntervalSince1970 * 1000))
@@ -298,17 +316,17 @@ final class HouseholdCloudCoordinator {
         guard !started else { return }
         if let provisioner {
             let status = await accountStatus(provisioner.container)
-            guard isCurrent(passEpoch) else { return }
+            guard canContinue(passEpoch) else { return }
             accountStatusText = Self.describe(status)
             guard status == .available else { throw CoordinatorError.iCloudUnavailable(status ?? .couldNotDetermine) }
             try await provisioner.ensureZone(householdID: householdID)
-            guard isCurrent(passEpoch) else { return }
+            guard canContinue(passEpoch) else { return }
             let root = try await provisioner.ensureHousehold(householdID: householdID, name: householdName)
-            guard isCurrent(passEpoch) else { return }
+            guard canContinue(passEpoch) else { return }
             _ = try await provisioner.ensureShare(for: root, title: householdName)
-            guard isCurrent(passEpoch) else { return }
+            guard canContinue(passEpoch) else { return }
         }
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         engine.activateForCurrentAccount()
         engine.merger = SeedkeepRecordMerger()
         engine.onFetchedChanges = { [weak self] mods, dels in
@@ -331,16 +349,16 @@ final class HouseholdCloudCoordinator {
             Task { @MainActor in self?.handleAccountChange(change) }
         }
         try await engine.fetchChanges()
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         try drainPendingApplies(passEpoch)
         if isParticipant {
             // Accept-race close (SimmerSmith's participantInitialFetch): right after accept the server
             // often hasn't materialized the shared zone yet and the accepting device gets no push — so
             // fetch once more after a short backoff so the first sync doesn't leave an empty garden.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            guard isCurrent(passEpoch) else { return }
+            guard canContinue(passEpoch) else { return }
             try await engine.fetchChanges()
-            guard isCurrent(passEpoch) else { return }
+            guard canContinue(passEpoch) else { return }
             try drainPendingApplies(passEpoch)
             // drainPendingApplies records synced-state for every fetched record, so it carries AC6
             // for participants across relaunch. A full-graph reseed here would suppress an unpushed
@@ -349,7 +367,7 @@ final class HouseholdCloudCoordinator {
             // A participant imports NOTHING; migration (export + receipt) is the OWNER's one-time job.
             try await migrateIfNeeded(passEpoch)
         }
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         started = true
     }
 
@@ -362,6 +380,11 @@ final class HouseholdCloudCoordinator {
         _ dels: [CKRecord.ID],
         passEpoch: Int
     ) throws {
+        // A changed account: refuse the batch, so the engine keeps it for the next fetch rather than
+        // advancing past records this pass will not project. Deliberately NOT the N1 pause
+        // (`canContinue`): this callback also carries the confirmed result of a send that already
+        // happened (a serverRecordChanged merge CloudKit never resends), which must still be
+        // projected. A pause stops new fetches and sends at their own boundaries instead.
         guard isCurrent(passEpoch) else { throw SyncEngineError.accountInvalidated }
         // CKAsset URLs are framework-owned and temporary. Copy each photo independently before the
         // callback returns. One unreadable asset becomes a recoverable shell row and does not poison
@@ -394,9 +417,9 @@ final class HouseholdCloudCoordinator {
 
     /// Pull remote changes then project the buffered records into SwiftData.
     private func pullAndApply(_ passEpoch: Int) async throws {
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         try await engine.fetchChanges()
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         try drainPendingApplies(passEpoch)
     }
 
@@ -468,7 +491,7 @@ final class HouseholdCloudCoordinator {
     /// No shared ceiling var, so a peer's clock can never raise a threshold that strands a later
     /// genuine local edit at a lower clock (the clock-skew-poisoning fix, expressed per-record).
     private func pushDirty(_ passEpoch: Int) async throws {
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         let context = ModelContext(container)
         let activeScopeID = scopeID
         let deletionIntents = try context.fetch(
@@ -518,6 +541,9 @@ final class HouseholdCloudCoordinator {
         // incomplete drain, so the commit below is skipped → an unconfirmed record is NOT marked
         // synced; it retries next pass (invariant 3).
         if pushed > 0 || !deletionIntents.isEmpty || engine.hasPendingRecordChanges {
+            // Paused since the pass began: leave the staged changes pending, unconfirmed, for the
+            // next allowed pass.
+            guard canContinue(passEpoch) else { return }
             do {
                 try await engine.sendUntilDrained(maxPasses: 6)
             } catch {
@@ -564,7 +590,7 @@ final class HouseholdCloudCoordinator {
     // MARK: - One-time migration (AC3)
 
     private func migrateIfNeeded(_ passEpoch: Int) async throws {
-        guard isCurrent(passEpoch) else { return }
+        guard canContinue(passEpoch) else { return }
         // DURABLE relaunch guard: the executor's receipt check reads the engine's IN-MEMORY store,
         // which an incremental fetch never re-populates on relaunch — so without this, the whole graph
         // would re-export on every launch. The marker (UserDefaults, per household) survives relaunch.
@@ -582,7 +608,8 @@ final class HouseholdCloudCoordinator {
         do {
             result = try await HouseholdMigrationExecutor.run(
                 into: engine, zoneID: zoneID, householdID: householdID, plan: plan,
-                prepareRecord: photoAssets.prepareForUpload)
+                prepareRecord: photoAssets.prepareForUpload,
+                canSend: { self.canContinue(passEpoch) })
         } catch {
             try recordPermanentPhotoFailures(engine.consumePermanentlyFailedSaveRecordIDs())
             throw error
@@ -706,7 +733,7 @@ final class HouseholdCloudCoordinator {
 
     // MARK: - Persisted per-household state (survives relaunch)
 
-    private var migratedKey: String { "seedkeep.ck.migrated.\(Self.cloudKitEnvironmentTag).\(householdID)" }
+    private var migratedKey: String { "\(Self.migratedKeyPrefix)\(Self.cloudKitEnvironmentTag).\(householdID)" }
     private var hasMigratedDurable: Bool {
         get { UserDefaults.standard.bool(forKey: migratedKey) }
         set { UserDefaults.standard.set(newValue, forKey: migratedKey) }
@@ -861,6 +888,14 @@ final class HouseholdCloudCoordinator {
         passEpoch == epoch && !buffer.isInvalidated(epoch: passEpoch)
     }
 
+    /// `isCurrent`, and CloudKit still allowed (N1): checked at every boundary where a pass would
+    /// start more CloudKit work (provisioning, fetch, push), so a pass running when the identity is
+    /// paused stops at its next boundary. Stopping discards nothing: what was not pushed stays
+    /// unconfirmed for the next allowed pass.
+    private func canContinue(_ passEpoch: Int) -> Bool {
+        isCurrent(passEpoch) && isCloudKitAllowed()
+    }
+
     private func seedSyncedState(from input: HouseholdMigrationPlanner.Input) {
         var seed: [String: SyncedRecordState] = [:]
         for d in dirtyRecords(from: input) {
@@ -892,10 +927,14 @@ final class HouseholdCloudCoordinator {
     /// subdirectories from the SAME root without duplicating this derivation — see
     /// `PhotoByteStore.rootDirectory`. "Do not invent a new location scheme."
     nonisolated static func householdSyncDir() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("HouseholdSync", isDirectory: true)
+        let dir = householdSyncDirURL()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+    /// The same location without creating it (N1: `AppEnvironment` resolves it at every launch).
+    nonisolated static func householdSyncDirURL() -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("HouseholdSync", isDirectory: true)
     }
     static func ownerStateTokenURL(householdID: String) -> URL {
         householdSyncDir().appendingPathComponent("engine-state-\(cloudKitEnvironmentTag)-\(householdID).json")
@@ -960,6 +999,40 @@ final class HouseholdCloudCoordinator {
     /// adopt/leave: those wipe local SwiftData, so the rebuilt coordinator must re-download (an
     /// incremental fetch on the parked token would return nothing → an empty local store).
     static func resetStateToken(at url: URL) throws { try removeItemIfPresent(at: url) }
+
+    /// N1: removes every scope's durable CloudKit state on this device, not just one coordinator's:
+    /// all of `directory` (engine-state tokens, synced-state, photo rosters, cleanup markers and
+    /// every household's photo bytes) and every migration marker. Used by both local-data erasers,
+    /// which may run before any coordinator exists. THROWS when anything is left, so the eraser
+    /// fails and the identity transition waits for Retry.
+    /// `keepingTransferWorkspace` keeps the account-deletion transfer bytes, while deletion
+    /// checkpoints are quarantined (their state may still need them).
+    static func resetAllDurableState(
+        directory: URL = householdSyncDir(),
+        defaults: UserDefaults = .standard,
+        keepingTransferWorkspace: Bool = false
+    ) throws {
+        try PhotoByteStore.purgeAll(under: directory, keepingTransferWorkspace: keepingTransferWorkspace)
+        let kept = keepingTransferWorkspace ? PhotoByteStore.Lifetime.transferWorkspace.rawValue : nil
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: directory.path) {
+            for item in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            where item.lastPathComponent != kept {
+                try fileManager.removeItem(at: item)
+            }
+        }
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(migratedKeyPrefix) {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    /// The prefix of every per-household migration marker (`migratedKey`).
+    static let migratedKeyPrefix = "seedkeep.ck.migrated."
+
+    /// A cancelled task or CloudKit operation (N1): never a user-facing failure.
+    nonisolated static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? CKError)?.code == .operationCancelled
+    }
 
     /// A CloudKit error worth auto-retrying inline (transient infra) vs surfacing (permanent).
     static func isTransient(_ error: Error) -> Bool {

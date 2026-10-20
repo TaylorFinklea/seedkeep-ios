@@ -323,18 +323,20 @@ private struct TodayQueryView: View {
                 Text("Set a home location to see today's daylight arc.")
                     .font(HerbFont.bodyItalic(size: 12))
                     .foregroundStyle(HerbColor.inkSoft)
-                Button {
-                    showHomeLocationSheet = true
-                } label: {
-                    Text("Set home location")
-                        .font(HerbFont.smallCaps(size: 11))
-                        .tracking(2)
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
+                if !ServerRetirement.isRetired {
+                    Button {
+                        showHomeLocationSheet = true
+                    } label: {
+                        Text("Set home location")
+                            .font(HerbFont.smallCaps(size: 11))
+                            .tracking(2)
+                            .textCase(.uppercase)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(HerbColor.sepia)
                 }
-                .buttonStyle(.bordered)
-                .tint(HerbColor.sepia)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)

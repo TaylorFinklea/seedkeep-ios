@@ -260,6 +260,21 @@
 
 **Rationale**: Record identity survives cursor advancement, while temporary asset URLs do not. A small durable retry roster preserves forward progress for the batch without silently abandoning photo bytes, and the generation/epoch fences preserve the existing account-switch privacy boundary.
 
+## 2026-10-20 — The iCloud account is the identity; no Seedkeep server (N1)
+
+**Context**: The Fly server was stopped on 2026-10-15, and the owner chose an Apple-only app (umbrella `decisions.md` [2026-10-20]). Garden data already lived in CloudKit, but sign-in, `/api/me` and the server-minted household ID (which names the zone `seedkeep-<householdID>`) still gated entry.
+
+**Decision**:
+- `AuthController` resolves the iCloud user (`CKContainer.userRecordID()`) and the user's own household from CloudKit zones. It still publishes `.signedIn(user:household:)`; a shared garden stays the participant marker.
+- Existing installs rebind their cached server identity to the iCloud user in place, crash-safely, keeping household ID, cursors, markers and pending writes. Nothing is wiped unless the iCloud user is confirmed different, or the user confirms a chooser discard. A chooser discard uses a narrower garden-switch eraser that keeps device-only recovery items.
+- A new account with no garden gets a household ID derived from its iCloud user record name, so devices bootstrapping together converge. Ambiguity (several gardens, a missing device garden, an unavailable shared garden, own plus one shared garden) is always a chooser, never a guess.
+- CloudKit work runs only on a verified identity with no paused account-deletion checkpoint (`AppEnvironment.canUseCloudKit`). It stops at pass boundaries when that changes. Share adoption re-checks the identity and a pending-share epoch after every await.
+- The server is unreachable by construction: `SeedkeepClient` uses a refusing transport, and server-only features are gated off and hidden (`ServerRetirement`).
+
+**Alternatives considered**: Keep Sign in with Apple as a gesture (no benefit without a server); a pointer record naming the active garden (needs a CloudKit schema deploy, and cannot pick between legacy zones); recency-based zone adoption (cannot prove which zone is current).
+
+**Rationale**: CloudKit already held the data. Making the iCloud account the identity removes the last server dependency without a schema change and without touching existing users' data.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in

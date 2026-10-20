@@ -120,7 +120,7 @@ struct SeedsTableView: View {
         // Packet scanning, as the Library offers it: the Seeds table replaces the Library on
         // regular-width iPad, so it must keep the scan-and-prefill entry.
         .toolbar {
-            if PlatformCapabilities.supportsCameraScanning {
+            if !ServerRetirement.isRetired && PlatformCapabilities.supportsCameraScanning {
                 ToolbarItem(placement: .platformTrailing) {
                     Button { showingScan = true } label: { Image(systemName: "viewfinder") }
                         .accessibilityLabel("Scan packet")
@@ -264,6 +264,7 @@ struct SeedsTableView: View {
     /// Fetches verdicts for every catalog seed in the household, 200 ids per request, the most
     /// `bulkRefresh` accepts in one call.
     private func refreshVerdicts() async {
+        guard !ServerRetirement.isRetired else { return }
         let ids = Array(Set(rows.compactMap(\.catalogID))).sorted()
         for start in stride(from: 0, to: ids.count, by: 200) {
             let chunk = Array(ids[start..<min(start + 200, ids.count)])
@@ -315,10 +316,12 @@ struct SeedsTableView: View {
                 locationCell(row)
             }
             .width(min: 110, ideal: 150)
-            TableColumn("Window", value: \.verdictLabel) { row in
-                windowCell(row)
+            if !ServerRetirement.isRetired {
+                TableColumn("Window", value: \.verdictLabel) { row in
+                    windowCell(row)
+                }
+                .width(min: 120, ideal: 150)
             }
-            .width(min: 120, ideal: 150)
         }
     }
 
@@ -361,10 +364,12 @@ struct SeedsTableView: View {
                 textCell(row.tagsText)
             }
             .width(min: 100, ideal: 160)
-            TableColumn("Window", value: \.verdictLabel) { row in
-                windowCell(row)
+            if !ServerRetirement.isRetired {
+                TableColumn("Window", value: \.verdictLabel) { row in
+                    windowCell(row)
+                }
+                .width(min: 110, ideal: 140)
             }
-            .width(min: 110, ideal: 140)
         }
         .modifier(DeleteKeyCommand { requestDeleteFromKeyboard() })
     }
@@ -727,7 +732,10 @@ struct SeedsTableView: View {
             selection: selection,
             sortOrder: sortOrder
         )
-        exportDocument = SeedCSVDocument(data: SeedCSV.data(for: exported))
+        exportDocument = SeedCSVDocument(data: SeedCSV.data(
+            for: exported,
+            includeRecommendationWindow: !ServerRetirement.isRetired
+        ))
         exportName = SeedCSV.baseFileName(on: Date())
         showingExporter = true
     }

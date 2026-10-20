@@ -83,6 +83,16 @@ struct SeedsCSVTests {
         ])
     }
 
+    @Test("retired mode leaves cached recommendation windows out of exports")
+    func retiredExportOmitsRecommendationWindow() {
+        let csv = SeedCSV.make(
+            [Self.row("s1", name: "Basil", window: "Plant now")],
+            includeRecommendationWindow: false
+        )
+
+        #expect(Self.lines(csv).last == "Basil,,,,,1,active,,,,")
+    }
+
     @Test("a blank year is an empty field, and tags are joined with a semicolon and a space")
     func blanksAndTags() {
         let csv = SeedCSV.make([

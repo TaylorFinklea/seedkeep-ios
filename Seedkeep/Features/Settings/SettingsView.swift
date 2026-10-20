@@ -61,15 +61,19 @@ struct SettingsContent: View {
                 }
 
                 Section {
-                    NavigationLink {
-                        HomeLocationSettingsView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Home location", systemImage: "location")
-                            Text(homeLocationSummary)
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
+                    if !ServerRetirement.isRetired {
+                        NavigationLink {
+                            HomeLocationSettingsView()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label("Home location", systemImage: "location")
+                                Text(homeLocationSummary)
+                                    .font(HerbFont.bodyItalic(size: 12))
+                                    .foregroundStyle(HerbColor.inkSoft)
+                            }
                         }
+                    } else {
+                        statusRow("Home location", homeLocationSummary)
                     }
                     NavigationLink {
                         NotificationsSettingsView()
@@ -80,18 +84,25 @@ struct SettingsContent: View {
                     Rubric(text: "garden")
                 }
 
-                Section {
-                    NavigationLink {
-                        ServerSettingsView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Server", systemImage: "server.rack")
-                            Text(appEnv.preferences.effectiveServerURL.absoluteString)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(HerbColor.inkSoft)
-                                .lineLimit(1)
+                if !ServerRetirement.isRetired {
+                    Section {
+                        NavigationLink {
+                            ServerSettingsView()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label("Server", systemImage: "server.rack")
+                                Text(appEnv.preferences.effectiveServerURL.absoluteString)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .lineLimit(1)
+                            }
                         }
+                    } header: {
+                        Rubric(text: "server")
                     }
+                }
+
+                Section {
                     NavigationLink {
                         AIProviderSettingsView()
                     } label: {
@@ -112,7 +123,7 @@ struct SettingsContent: View {
                                 .foregroundStyle(HerbColor.inkSoft)
                         }
                     }
-                    if AppPreferences.isHostedTierEnabled {
+                    if !ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled {
                         NavigationLink {
                             SubscriptionSettingsView()
                         } label: {
@@ -125,7 +136,7 @@ struct SettingsContent: View {
                         }
                     }
                 } header: {
-                    Rubric(text: "backend")
+                    Rubric(text: "configuration")
                 }
 
                 if case .signedIn(_, let household) = auth.state {
@@ -141,6 +152,17 @@ struct SettingsContent: View {
                     }
                 }
 
+                if appEnv.pausedDeletionCheckpointCount > 0 {
+                    Section {
+                        statusRow(
+                            "Account deletion",
+                            "\(appEnv.pausedDeletionCheckpointCount) pending checkpoint(s) paused"
+                        )
+                    } header: {
+                        Rubric(text: "diagnostics")
+                    }
+                }
+
                 Section {
                     Button {
                         guard !isSyncingNow else { return }
@@ -153,7 +175,11 @@ struct SettingsContent: View {
                             isSyncingNow = false
                             // Only show the success ✓ when the pass actually succeeded (no error
                             // surfaced on either path) — a green check next to an error banner lies.
-                            let clean = appEnv.sync.lastError == nil && appEnv.cloudKit?.lastHumanizedError == nil
+                            // N1: with CloudKit on, only a completed CloudKit pass counts; none
+                            // runs while paused (`cloudKit` is nil then).
+                            let cloudKitClean = !FeatureFlags.cloudKitHouseholdSyncEnabled
+                                || (appEnv.cloudKit.map { $0.lastPassCompleted && $0.lastHumanizedError == nil } ?? false)
+                            let clean = appEnv.sync.lastError == nil && cloudKitClean
                             syncedJustNow = clean
                             try? await Task.sleep(nanoseconds: 2_500_000_000)
                             if syncToken == token { syncedJustNow = false }   // don't clear a newer tap's ✓
@@ -208,6 +234,10 @@ struct SettingsContent: View {
                                     .font(.caption2)
                                     .foregroundStyle(HerbColor.inkFaint)
                             }
+                        } else if let reason = appEnv.cloudKitPauseReason {
+                            Text("iCloud sync is paused — \(reason).")
+                                .font(.footnote)
+                                .foregroundStyle(HerbColor.inkFaint)
                         } else {
                             Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
                                 .font(.footnote)
@@ -233,6 +263,8 @@ struct SettingsContent: View {
                             } label: {
                                 Label("Leave shared garden", systemImage: "rectangle.portrait.and.arrow.right")
                             }
+                            // N1: leaving needs a confirmed iCloud identity (CloudKit not paused).
+                            .disabled(!appEnv.canUseCloudKit)
                         } else {
                             Button {
                                 guard !preparingShare else { return }
