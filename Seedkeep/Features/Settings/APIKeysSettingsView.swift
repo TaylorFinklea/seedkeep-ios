@@ -52,7 +52,7 @@ struct APIKeysSettingsView: View {
                 WBSectionHeader("active provider")
             } footer: {
                 Text("If both keys are set, BYOK extractions prefer Anthropic (matches the server's Hosted-tier model family).")
-                    .font(.wbCaption)
+                    .font(.wbFootnote)
                     .foregroundStyle(WBColor.muted)
             }
         }
@@ -101,6 +101,7 @@ struct APIKeysSettingsView: View {
                 } label: {
                     // The minimum frame and the hit shape sit inside the label, so the whole target grows.
                     Text("Save")
+                        .foregroundStyle(WBColor.accentInk)
                         .frame(minHeight: WBMetrics.minTouchTarget)
                         .contentShape(Rectangle())
                 }
@@ -126,7 +127,7 @@ struct APIKeysSettingsView: View {
             WBSectionHeader(provider.displayName.lowercased())
         } footer: {
             Text(provider.keyHelpText)
-                .font(.wbCaption)
+                .font(.wbFootnote)
                 .foregroundStyle(WBColor.muted)
         }
     }

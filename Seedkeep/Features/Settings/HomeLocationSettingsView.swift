@@ -34,7 +34,7 @@ struct HomeLocationSettingsView: View {
                 WBSectionHeader("zip code")
             } footer: {
                 Text("Enter your home ZIP code. Seedkeep uses it to look up your USDA hardiness zone and average frost dates on this device.")
-                    .font(.wbCaption)
+                    .font(.wbFootnote)
                     .foregroundStyle(WBColor.muted)
             }
 
@@ -51,7 +51,7 @@ struct HomeLocationSettingsView: View {
                     WBSectionHeader("location")
                 } footer: {
                     Text("Frost dates are estimates for your hardiness zone, not measurements for your ZIP.")
-                        .font(.wbCaption)
+                        .font(.wbFootnote)
                         .foregroundStyle(WBColor.muted)
                 }
             case .unknown:

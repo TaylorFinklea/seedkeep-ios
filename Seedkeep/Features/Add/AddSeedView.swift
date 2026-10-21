@@ -260,6 +260,8 @@ struct AddSeedView: View {
                 WBSectionHeader("growing info (extracted)")
             } footer: {
                 Text("Read from the packet photos. Saved with this seed.")
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
             }
         }
     }

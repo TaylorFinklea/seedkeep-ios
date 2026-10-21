@@ -1154,3 +1154,46 @@ second round, with one change, now included (2026-10-20).
 - **Status:** the audit doesn't pass yet. Clearing it needs a triage and
   fix pass, which is next. The manual checklist is in
   `2026-10-20-a11y-manual-checklist.md`.
+
+## R2d triage (2026-10-21)
+
+The owner's decision: fix the real defects, allowlist only what can be
+shown not to be an app defect, and record the rest as known audit noise.
+Then move on to R3.
+
+- **Real fixes:**
+  - **Filled (bordered-prominent) buttons:** they use `accentInk` text. White
+    on the dark-mode accent was about 2:1. "Pick another" no longer fails.
+  - **Form footers:** they use `wbFootnote` and `muted`. The system
+    secondary grey was about 3.5:1 on our backgrounds.
+  - **Bed canvas labels:** they sit on an opaque `panel` capsule.
+  - **Decorative "·" separators:** hidden from VoiceOver.
+- **Allowlist:** 80 accepted limitations, each with its evidence.
+  - Dynamic Type on system toolbar buttons (Large Content Viewer).
+  - Clipping flagged on system text fields, search fields and the inline
+    navigation title.
+  - Dynamic Type on text set in a text style. These are checked in the code,
+    not measured per element.
+  - The bed canvas text, which is capped at `xxxLarge` by design.
+  - No contrast finding is suppressed.
+- **Second run:** 289 unresolved findings, down from 512 (light/default 98,
+  dark/default 83, light/XXXL 57, dark/XXXL 51).
+  - **By type:** contrast 199, Dynamic Type 51, clipped text 39. 138 have
+    no element.
+  - Every configuration completed, with no hang this time.
+- **Unresolved, suspected audit noise.** These are recorded here and not
+  suppressed:
+  - contrast on ink or muted text on opaque surfaces whose token pairs pass
+    the WCAG tests: the bed canvas names, Today's rows and headers, the
+    Settings About text, section headers
+  - contrast on system toolbar buttons
+  - Dynamic Type on the Privacy Policy and Support links
+  - clipping on "Share garden via iCloud", "Check iCloud account" and "Add
+    photos" (plain labels, no line limit)
+  - the 138 element-less issues
+  
+  Confirming any of these needs per-element measurement or Accessibility
+  Inspector, which belongs in the manual checklist and R5 QA.
+- **Status:** the audit runs and reports, but it doesn't pass. That's
+  expected at this level of investment. Rerun it before release and compare
+  against these counts.

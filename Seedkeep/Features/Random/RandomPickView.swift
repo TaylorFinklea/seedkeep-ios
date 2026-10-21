@@ -36,6 +36,7 @@ struct RandomPickView: View {
                 } label: {
                     Label(pickedSeed == nil ? "Pick a seed" : "Pick another", systemImage: "shuffle")
                         .font(.wbHeadline)
+                        .foregroundStyle(WBColor.accentInk)
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: WBMetrics.minTouchTarget)
                         .padding(.vertical, 12)

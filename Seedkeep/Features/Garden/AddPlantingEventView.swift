@@ -207,6 +207,8 @@ struct AddPlantingEventView: View {
                 WBSectionHeader("planting window")
             } footer: {
                 Text("Computed on this device from the seed's growing info and your home location.")
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
             }
         }
     }
@@ -254,6 +256,8 @@ struct AddPlantingEventView: View {
                 WBSectionHeader("position")
             } footer: {
                 Text("Distance in feet from the bottom-left corner of the bed.")
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
             }
         }
     }

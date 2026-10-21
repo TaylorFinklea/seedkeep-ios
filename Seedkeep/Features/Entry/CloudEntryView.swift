@@ -61,9 +61,14 @@ struct CloudEntryView: View {
             #if os(macOS)
             if reason == .blocked(.noAccount),
                let url = URL(string: "x-apple.systempreferences:com.apple.preferences.AppleIDPrefPane") {
-                Button("Open System Settings") { openURL(url) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(WBColor.accent)
+                Button {
+                    openURL(url)
+                } label: {
+                    Text("Open System Settings")
+                        .foregroundStyle(WBColor.accentInk)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(WBColor.accent)
             }
             #endif
             Button {

@@ -161,6 +161,7 @@ private struct BedRow: View {
                         Text("·")
                             .font(.wbCaption)
                             .foregroundStyle(WBColor.faint)
+                            .accessibilityHidden(true)
                     }
                     if let next = nextEvent {
                         Text("\(PlantingEventKind(rawValue: next.kindRaw)?.displayName ?? next.kindRaw) · \(humanDate(next.plannedFor))")

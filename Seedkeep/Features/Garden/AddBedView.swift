@@ -59,6 +59,8 @@ struct AddBedView: View {
                     WBSectionHeader("dimensions")
                 } footer: {
                     Text("Used later for spatial layout. You can fill these in any time.")
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.muted)
                 }
 
                 if let error {

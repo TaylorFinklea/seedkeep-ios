@@ -91,7 +91,8 @@ struct BedLayoutCanvas: View {
                     .foregroundStyle(WBColor.muted)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(.thinMaterial, in: .capsule)
+                    .background(WBColor.panel, in: .capsule)
+                    .overlay(Capsule().strokeBorder(WBColor.line, lineWidth: 1))
                     .background {
                         GeometryReader { geo in
                             Color.clear.preference(
@@ -286,7 +287,8 @@ struct BedLayoutCanvas: View {
             .lineLimit(1)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(.thinMaterial, in: .capsule)
+            .background(WBColor.panel, in: .capsule)
+            .overlay(Capsule().strokeBorder(WBColor.line, lineWidth: 1))
     }
 
     // MARK: - Geometry

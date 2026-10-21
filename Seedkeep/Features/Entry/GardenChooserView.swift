@@ -34,8 +34,11 @@ struct GardenChooserView: View {
                         .stroke(WBColor.line, lineWidth: 1)
                 )
                 if choice.canKeepDeviceGarden {
-                    Button("Keep this device's garden") {
+                    Button {
                         run { await auth.keepDeviceGarden() }
+                    } label: {
+                        Text("Keep this device's garden")
+                            .foregroundStyle(WBColor.accentInk)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(WBColor.accent)

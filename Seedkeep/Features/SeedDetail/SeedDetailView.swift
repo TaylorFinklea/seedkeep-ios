@@ -757,6 +757,8 @@ struct SeedDetailView: View {
             }
         } footer: {
             Text("Add a sow, transplant, harvest, or note tied to this seed and (optionally) a bed.")
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.muted)
         }
 
         // Planting-window recommendation, computed on this device from the seed's growing info.

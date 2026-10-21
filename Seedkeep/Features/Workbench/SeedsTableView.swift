@@ -550,9 +550,14 @@ struct SeedsTableView: View {
         } description: {
             Text("Add a seed to start your list.")
         } actions: {
-            Button("Add seed") { showingAdd = true }
-                .buttonStyle(.borderedProminent)
-                .tint(WBColor.accent)
+            Button {
+                showingAdd = true
+            } label: {
+                Text("Add seed")
+                    .foregroundStyle(WBColor.accentInk)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(WBColor.accent)
         }
     }
 

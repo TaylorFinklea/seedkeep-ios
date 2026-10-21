@@ -315,6 +315,7 @@ private struct SuggestionCard: View {
                     Text("·")
                         .font(.caption)
                         .foregroundStyle(WBColor.faint)
+                        .accessibilityHidden(true)
                     Text("\(formatDate(rangeStart)) – \(formatDate(rangeEnd))")
                         .font(.caption)
                         .foregroundStyle(WBColor.muted)

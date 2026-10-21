@@ -106,7 +106,7 @@ struct NotificationsSettingsView: View {
                     WBSectionHeader("what to notify")
                 } footer: {
                     Text("All notifications are scheduled on-device. Seedkeep doesn't send anything through Apple's push servers.")
-                        .font(.wbCaption)
+                        .font(.wbFootnote)
                         .foregroundStyle(WBColor.muted)
                 }
 
@@ -185,7 +185,7 @@ struct NotificationsSettingsView: View {
                             }
                         } label: {
                             Text("Weather")
-                                .font(.wbCaption)
+                                .font(.wbFootnote)
                                 .foregroundStyle(WBColor.accent)
                                 .underline()
                                 .frame(minHeight: WBMetrics.minTouchTarget, alignment: .leading)

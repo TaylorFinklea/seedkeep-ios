@@ -92,6 +92,8 @@ struct BedDetailView: View {
                         }
                     } footer: {
                         Text("Deleting a bed unlinks its planting events; the events themselves stick around so harvest history isn't lost.")
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
                     }
                     }
                     .scrollContentBackground(.hidden)
@@ -172,6 +174,8 @@ struct BedDetailView: View {
                 Text(placedCount(for: bed) == 0
                      ? "Add a position to a planting event to see it on the layout."
                      : "Drag a placed event to reposition it. Snaps to a half-foot grid.")
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.muted)
             }
         }
     }

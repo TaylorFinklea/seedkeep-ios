@@ -201,6 +201,7 @@ struct WhatToPlantView: View {
                     Text("·")
                         .font(.caption)
                         .foregroundStyle(WBColor.faint)
+                        .accessibilityHidden(true)
                     Text(days)
                         .font(.caption)
                         .foregroundStyle(WBColor.muted)

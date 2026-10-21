@@ -62,7 +62,7 @@ struct AIProviderSettingsView: View {
                     WBSectionHeader("subscription")
                 } footer: {
                     Text("Hosted requires an active subscription. The server records your purchase and reports it back here. Your local picker chooses your *preferred* extraction path; the server enforces what you can actually use.")
-                        .font(.wbCaption)
+                        .font(.wbFootnote)
                         .foregroundStyle(WBColor.muted)
                 }
 
