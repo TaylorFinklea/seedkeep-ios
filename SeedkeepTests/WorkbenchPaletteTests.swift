@@ -31,13 +31,15 @@ struct WorkbenchPaletteTests {
     func tiesUseGroupAndAlphabeticalOrder() {
         let rows = [seedRow(id: "zulu", name: "Zulu"), seedRow(id: "alpha", name: "Alpha")]
 
-        let ids = CommandPaletteSearch.results(query: "", rows: rows).map(\.id)
+        // iPad and iPhone-sized platforms offer Settings as a Go item; the Mac does not (see the
+        // WorkbenchNavigation suite).
+        let ids = CommandPaletteSearch.results(query: "", rows: rows, isMac: false).map(\.id)
         #expect(ids == [
             "action:exportCSV", "action:focusSearch", "action:newSeed", "action:randomPick",
             "route:garden", "route:journal", "route:seeds", "route:settings", "route:today"
         ])
         // Seeds come after Actions and Go to, alphabetically.
-        let seedIDs = CommandPaletteSearch.results(query: "a", rows: rows).map(\.id).filter { $0.hasPrefix("seed:") }
+        let seedIDs = CommandPaletteSearch.results(query: "a", rows: rows, isMac: false).map(\.id).filter { $0.hasPrefix("seed:") }
         #expect(seedIDs == ["seed:alpha"])
     }
 
@@ -85,8 +87,8 @@ struct WorkbenchPaletteTests {
             "route:garden", "route:journal", "route:seeds", "route:settings", "route:today"
         ]
 
-        #expect(CommandPaletteSearch.results(query: "", rows: rows).map(\.id) == expected)
-        #expect(CommandPaletteSearch.results(query: "  \n", rows: rows).map(\.id) == expected)
+        #expect(CommandPaletteSearch.results(query: "", rows: rows, isMac: false).map(\.id) == expected)
+        #expect(CommandPaletteSearch.results(query: "  \n", rows: rows, isMac: false).map(\.id) == expected)
     }
 }
 

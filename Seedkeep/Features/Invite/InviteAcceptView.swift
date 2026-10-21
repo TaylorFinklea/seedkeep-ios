@@ -19,6 +19,7 @@ struct InviteAcceptView: View {
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
             }
+            .background { WBScreenBackground() }
             .navigationTitle("Household invite")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

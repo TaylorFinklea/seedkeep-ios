@@ -11,7 +11,7 @@ struct EntryProgressView: View {
                 .foregroundStyle(WBColor.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WBColor.bg)
+        .background { WBScreenBackground() }
     }
 }
 
@@ -30,15 +30,17 @@ struct CloudEntryView: View {
     #endif
     let reason: Reason
     @State private var isRetrying = false
+    /// The status symbol's size, 36pt at the default text size and scaled with Dynamic Type.
+    @ScaledMetric(relativeTo: .largeTitle) private var symbolSize: CGFloat = 36
 
     var body: some View {
         VStack(spacing: WBMetrics.gapLarge) {
             Image(systemName: symbol)
-                .font(.system(size: 36))
+                .font(.system(size: symbolSize))
                 .foregroundStyle(WBColor.muted)
                 .accessibilityHidden(true)
             Text(title)
-                .font(.system(.title2, weight: .semibold))
+                .font(.wbTitle)
                 .foregroundStyle(WBColor.ink)
                 .multilineTextAlignment(.center)
             Text(message)
@@ -52,7 +54,7 @@ struct CloudEntryView: View {
         .padding(24)
         .frame(maxWidth: 440)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WBColor.bg)
+        .background { WBScreenBackground() }
     }
 
     @ViewBuilder
@@ -64,8 +66,11 @@ struct CloudEntryView: View {
                 Button {
                     openURL(url)
                 } label: {
+                    // The minimum height sits inside the label, so the whole bordered button grows.
                     Text("Open System Settings")
                         .foregroundStyle(WBColor.accentInk)
+                        .frame(minHeight: WBMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(WBColor.accent)
@@ -78,15 +83,19 @@ struct CloudEntryView: View {
                     isRetrying = false
                 }
             } label: {
-                if isRetrying {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Retry")
+                // The minimum height sits inside the label, so the whole bordered button grows.
+                Group {
+                    if isRetrying {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Retry")
+                    }
                 }
+                .frame(minHeight: WBMetrics.minTouchTarget)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.bordered)
             .tint(WBColor.accent)
-            .frame(minHeight: WBMetrics.touchTarget)
             .disabled(isRetrying)
         }
     }

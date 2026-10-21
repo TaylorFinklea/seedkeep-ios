@@ -9,7 +9,7 @@ struct WorkbenchSidebar: View {
             get: { Optional(model.route) },
             set: { if let route = $0 { model.route = route } }
         )) {
-            ForEach(WorkbenchRoute.allCases) { route in
+            ForEach(WorkbenchNavigation.routes(isMac: WorkbenchNavigation.isMacPlatform)) { route in
                 NavigationLink(value: route) {
                     Label {
                         HStack {

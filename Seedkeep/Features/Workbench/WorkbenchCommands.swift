@@ -108,10 +108,13 @@ struct WorkbenchCommands: Commands {
             ForEach(WorkbenchGoShortcut.routes, id: \.self) { route in
                 routeButton(route)
             }
-            Divider()
-            Button("Settings") { WorkbenchCommandAction.go(.settings).perform(on: model) }
-                .keyboardShortcut(",", modifiers: .command)
-                .disabled(!WorkbenchCommandAvailability.hasModel(model))
+            // The Mac's Settings window owns ⌘, (see `WorkbenchNavigation`).
+            if WorkbenchNavigation.goMenuShowsSettings(isMac: WorkbenchNavigation.isMacPlatform) {
+                Divider()
+                Button("Settings") { WorkbenchCommandAction.go(.settings).perform(on: model) }
+                    .keyboardShortcut(",", modifiers: .command)
+                    .disabled(!WorkbenchCommandAvailability.hasModel(model))
+            }
         }
     }
 

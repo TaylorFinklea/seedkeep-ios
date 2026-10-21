@@ -13,7 +13,7 @@ struct GardenChooserView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: WBMetrics.gapLarge) {
                 Text(title)
-                    .font(.system(.title2, weight: .semibold))
+                    .font(.wbTitle)
                     .foregroundStyle(WBColor.ink)
                 Text(explanation)
                     .font(.wbBody)
@@ -37,28 +37,33 @@ struct GardenChooserView: View {
                     Button {
                         run { await auth.keepDeviceGarden() }
                     } label: {
+                        // The minimum height sits inside the label, so the whole bordered button grows.
                         Text("Keep this device's garden")
                             .foregroundStyle(WBColor.accentInk)
+                            .frame(minHeight: WBMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(WBColor.accent)
-                    .frame(minHeight: WBMetrics.touchTarget)
                 }
                 if offersRetry {
                     // Non-destructive: checks iCloud again, e.g. after the garden is shared back.
-                    Button("Retry") {
+                    Button {
                         run { await auth.retry() }
+                    } label: {
+                        Text("Retry")
+                            .frame(minHeight: WBMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.bordered)
                     .tint(WBColor.accent)
-                    .frame(minHeight: WBMetrics.touchTarget)
                 }
             }
             .padding(24)
             .frame(maxWidth: 520)
             .frame(maxWidth: .infinity)
         }
-        .background(WBColor.bg)
+        .background { WBScreenBackground() }
         .disabled(isWorking)
         .confirmationDialog(
             "Use this garden?",

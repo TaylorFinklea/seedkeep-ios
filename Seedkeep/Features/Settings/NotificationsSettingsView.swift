@@ -34,169 +34,166 @@ struct NotificationsSettingsView: View {
     }
 
     var body: some View {
-        ZStack {
-            WBScreenBackground()
-            Form {
-                Section {
-                    permissionBanner
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 20))
-                        .listRowSeparator(.hidden)
-                }
+        Form {
+            Section {
+                permissionBanner
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 20))
+                    .listRowSeparator(.hidden)
+            }
 
+            Section {
+                Toggle(isOn: $frostEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Frost warnings", systemImage: "snowflake")
+                        Text("8am the morning before any forecast low ≤ 33°F")
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                .onChange(of: frostEnabled) { _, newValue in
+                    Task { await applyWeather(kind: .frost, enabled: newValue) }
+                }
+                Toggle(isOn: $heatEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Heat warnings", systemImage: "thermometer.sun")
+                        Text("7pm the evening before a heat-index ≥ 100°F day or a 4+ day heatwave")
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                .onChange(of: heatEnabled) { _, newValue in
+                    Task { await applyWeather(kind: .heat, enabled: newValue) }
+                }
+                Toggle(isOn: $waterEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Watering reminders", systemImage: "drop")
+                        Text("8am after 5 dry days with no soaking rain in the 3-day forecast")
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                .onChange(of: waterEnabled) { _, newValue in
+                    Task { await applyWeather(kind: .water, enabled: newValue) }
+                }
+                Toggle(isOn: $eventsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Planting reminders", systemImage: "calendar")
+                        Text("7am on the morning of any planned planting event")
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                .onChange(of: eventsEnabled) { _, newValue in
+                    Task { await applyEvents(enabled: newValue) }
+                }
+                Toggle(isOn: $catalogEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Correction outcomes", systemImage: "doc.text.magnifyingglass")
+                        Text("When off, new correction outcomes won't notify you. Pending and delivered ones are removed.")
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                .onChange(of: catalogEnabled) { _, newValue in
+                    if !newValue, !DevicePreferences.isSampleGarden {
+                        Task { await NotificationsCenter.shared.clearAllCatalogCorrectionPings() }
+                    }
+                }
+            } header: {
+                WBSectionHeader("what to notify")
+            } footer: {
+                Text("All notifications are scheduled on-device. Seedkeep doesn't send anything through Apple's push servers.")
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
+            }
+
+            if FeatureFlags.plantPetsEnabled {
                 Section {
-                    Toggle(isOn: $frostEnabled) {
+                    Toggle(isOn: $petWiltedEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Label("Frost warnings", systemImage: "snowflake")
-                            Text("8am the morning before any forecast low ≤ 33°F")
+                            Label("Wilting warnings", systemImage: "leaf")
+                            Text("When a pet's mood drops to wilted")
                                 .font(.wbCaption)
                                 .foregroundStyle(WBColor.muted)
                         }
                     }
-                    .onChange(of: frostEnabled) { _, newValue in
-                        Task { await applyWeather(kind: .frost, enabled: newValue) }
+                    .onChange(of: petWiltedEnabled) { _, newValue in
+                        Task { await applyPetWilted(enabled: newValue) }
                     }
-                    Toggle(isOn: $heatEnabled) {
+                    Toggle(isOn: $petDepartedEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Label("Heat warnings", systemImage: "thermometer.sun")
-                            Text("7pm the evening before a heat-index ≥ 100°F day or a 4+ day heatwave")
+                            Label("Departure farewells", systemImage: "envelope.open")
+                            Text("When a pet leaves with a goodbye note")
                                 .font(.wbCaption)
                                 .foregroundStyle(WBColor.muted)
                         }
                     }
-                    .onChange(of: heatEnabled) { _, newValue in
-                        Task { await applyWeather(kind: .heat, enabled: newValue) }
+                    .onChange(of: petDepartedEnabled) { _, newValue in
+                        Task { await applyPetDeparted(enabled: newValue) }
                     }
-                    Toggle(isOn: $waterEnabled) {
+                    Toggle(isOn: $petRoundupEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Label("Watering reminders", systemImage: "drop")
-                            Text("8am after 5 dry days with no soaking rain in the 3-day forecast")
+                            Label("Sunday roundup", systemImage: "calendar.badge.clock")
+                            Text("Weekly summary of every companion's mood")
                                 .font(.wbCaption)
                                 .foregroundStyle(WBColor.muted)
                         }
                     }
-                    .onChange(of: waterEnabled) { _, newValue in
-                        Task { await applyWeather(kind: .water, enabled: newValue) }
-                    }
-                    Toggle(isOn: $eventsEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Planting reminders", systemImage: "calendar")
-                            Text("7am on the morning of any planned planting event")
-                                .font(.wbCaption)
-                                .foregroundStyle(WBColor.muted)
-                        }
-                    }
-                    .onChange(of: eventsEnabled) { _, newValue in
-                        Task { await applyEvents(enabled: newValue) }
-                    }
-                    Toggle(isOn: $catalogEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Correction outcomes", systemImage: "doc.text.magnifyingglass")
-                            Text("When off, new corrections still appear in House → your contributions. Past notifications already on your lock screen aren't removed.")
-                                .font(.wbCaption)
-                                .foregroundStyle(WBColor.muted)
-                        }
-                    }
-                    .onChange(of: catalogEnabled) { _, newValue in
-                        if !newValue, !DevicePreferences.isSampleGarden {
-                            Task { await NotificationsCenter.shared.clearAllCatalogCorrectionPings() }
-                        }
+                    .onChange(of: petRoundupEnabled) { _, newValue in
+                        Task { await applyPetRoundup(enabled: newValue) }
                     }
                 } header: {
-                    WBSectionHeader("what to notify")
-                } footer: {
-                    Text("All notifications are scheduled on-device. Seedkeep doesn't send anything through Apple's push servers.")
-                        .font(.wbFootnote)
-                        .foregroundStyle(WBColor.muted)
-                }
-
-                if FeatureFlags.plantPetsEnabled {
-                    Section {
-                        Toggle(isOn: $petWiltedEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Wilting warnings", systemImage: "leaf")
-                                Text("When a pet's mood drops to wilted")
-                                    .font(.wbCaption)
-                                    .foregroundStyle(WBColor.muted)
-                            }
-                        }
-                        .onChange(of: petWiltedEnabled) { _, newValue in
-                            Task { await applyPetWilted(enabled: newValue) }
-                        }
-                        Toggle(isOn: $petDepartedEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Departure farewells", systemImage: "envelope.open")
-                                Text("When a pet leaves with a goodbye note")
-                                    .font(.wbCaption)
-                                    .foregroundStyle(WBColor.muted)
-                            }
-                        }
-                        .onChange(of: petDepartedEnabled) { _, newValue in
-                            Task { await applyPetDeparted(enabled: newValue) }
-                        }
-                        Toggle(isOn: $petRoundupEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Sunday roundup", systemImage: "calendar.badge.clock")
-                                Text("Weekly summary of every companion's mood")
-                                    .font(.wbCaption)
-                                    .foregroundStyle(WBColor.muted)
-                            }
-                        }
-                        .onChange(of: petRoundupEnabled) { _, newValue in
-                            Task { await applyPetRoundup(enabled: newValue) }
-                        }
-                    } header: {
-                        WBSectionHeader("plant pets")
-                    }
-                }
-
-                if weatherWatchVisible {
-                    Section {
-                        WarningStatusSection(
-                            outcome: appEnv.weatherWarnings.projection.lastRefreshOutcome,
-                            frostEnabled: frostEnabled,
-                            heatEnabled: heatEnabled,
-                            waterEnabled: waterEnabled,
-                            openURL: openURL
-                        )
-                        Button {
-                            Task { await manualRefresh() }
-                        } label: {
-                            HStack(spacing: 6) {
-                                if refreshing {
-                                    ProgressView().controlSize(.small).tint(WBColor.accent)
-                                } else {
-                                    Text("↻").foregroundStyle(WBColor.accent)
-                                }
-                                Text("Refresh forecast")
-                                    .font(.wbBody)
-                                    .foregroundStyle(WBColor.accent)
-                            }
-                        }
-                        .disabled(refreshing)
-                    } header: {
-                        WBSectionHeader("weather watch")
-                    } footer: {
-                        // Apple WeatherKit attribution — App Store
-                        // review requirement (spec §8).
-                        Button {
-                            if let url = URL(string: "https://weatherkit.apple.com/legal-attribution.html") {
-                                openURL(url)
-                            }
-                        } label: {
-                            Text("Weather")
-                                .font(.wbFootnote)
-                                .foregroundStyle(WBColor.accent)
-                                .underline()
-                                .frame(minHeight: WBMetrics.minTouchTarget, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    WBSectionHeader("plant pets")
                 }
             }
-            .scrollContentBackground(.hidden)
+
+            if weatherWatchVisible {
+                Section {
+                    WarningStatusSection(
+                        outcome: appEnv.weatherWarnings.projection.lastRefreshOutcome,
+                        frostEnabled: frostEnabled,
+                        heatEnabled: heatEnabled,
+                        waterEnabled: waterEnabled,
+                        openURL: openURL
+                    )
+                    Button {
+                        Task { await manualRefresh() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if refreshing {
+                                ProgressView().controlSize(.small).tint(WBColor.accent)
+                            } else {
+                                Text("↻").foregroundStyle(WBColor.accent)
+                            }
+                            Text("Refresh forecast")
+                                .font(.wbBody)
+                                .foregroundStyle(WBColor.accent)
+                        }
+                    }
+                    .disabled(refreshing)
+                } header: {
+                    WBSectionHeader("weather watch")
+                } footer: {
+                    // Apple WeatherKit attribution — App Store
+                    // review requirement (spec §8).
+                    Button {
+                        if let url = URL(string: "https://weatherkit.apple.com/legal-attribution.html") {
+                            openURL(url)
+                        }
+                    } label: {
+                        Text("Weather")
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.accent)
+                            .underline()
+                            .frame(minHeight: WBMetrics.minTouchTarget, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
+        .wbForm()
         .navigationTitle("Notifications")
         .accessibilityIdentifier("screen.notifications")
         #if os(iOS)

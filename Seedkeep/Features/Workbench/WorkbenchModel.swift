@@ -41,6 +41,32 @@ enum WorkbenchRoute: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Which routes each platform offers in its navigation surfaces: the sidebar, the palette's Go items
+/// and the Go menu. `settings` stays a route everywhere (iPad's sidebar and the exhaustive switches
+/// need it). On the Mac the Settings window owns ⌘, and the app menu's Settings item, so the route
+/// is left out of all three there. iPad keeps the sidebar route and its ⌘, item; iPhone keeps the
+/// Settings tab and has no Workbench.
+enum WorkbenchNavigation {
+    /// True in the Mac app.
+    static var isMacPlatform: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// The routes the sidebar and the palette's Go items offer, in `WorkbenchRoute` order.
+    static func routes(isMac: Bool) -> [WorkbenchRoute] {
+        WorkbenchRoute.allCases.filter { !(isMac && $0 == .settings) }
+    }
+
+    /// Whether the Go menu ends with a Settings item (⌘,). Only off the Mac.
+    static func goMenuShowsSettings(isMac: Bool) -> Bool {
+        !isMac
+    }
+}
+
 /// One Workbench window's state. Each window owns its own instance: selection, routes and
 /// drafts are per window, while data and sync stay app-wide in `AppEnvironment`.
 @MainActor

@@ -17,7 +17,7 @@ struct APIKeysSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Label("These keys never leave your device. The Seedkeep server never sees them — every BYOK extraction goes from your iPhone directly to the model provider.", systemImage: "lock.shield")
+                Label("These keys are stored on this device and sent only to the provider you choose, directly from this device.", systemImage: "lock.shield")
                     .font(.wbCaption)
                     .foregroundStyle(WBColor.muted)
             }
@@ -51,7 +51,7 @@ struct APIKeysSettingsView: View {
             } header: {
                 WBSectionHeader("active provider")
             } footer: {
-                Text("If both keys are set, BYOK extractions prefer Anthropic (matches the server's Hosted-tier model family).")
+                Text("If both keys are set, BYOK extractions prefer Anthropic.")
                     .font(.wbFootnote)
                     .foregroundStyle(WBColor.muted)
             }

@@ -834,6 +834,9 @@ public final class AppEnvironment {
     /// garden, the owner's zone is authoritative; server-only/rollback mode
     /// deliberately remains on the signed-in household.
     var activeGardenHouseholdID: String? {
+        // Read so views observing this property also update when the participant marker (kept in
+        // unobserved UserDefaults) changes: adopting a share or leaving a shared garden.
+        _ = participantMarkerRevision
         guard case .signedIn(_, let household) = auth.state else { return nil }
         return ActiveGardenContext.householdID(
             signedInHouseholdID: household.id,
@@ -906,13 +909,18 @@ public final class AppEnvironment {
               let owner = d.string(forKey: markerOwnerKey), !owner.isEmpty else { return nil }
         return ParticipantMarker(zoneName: zone, ownerName: owner)
     }
+    /// Bumped whenever the participant marker is saved or cleared, so `activeGardenHouseholdID`'s
+    /// observers (the Workbench scope reset, the Mac Settings window) see share adoption and leaving.
+    private(set) var participantMarkerRevision = 0
     private func saveParticipantMarker(_ m: ParticipantMarker) {
         stateDefaults.set(m.zoneName, forKey: markerZoneKey)
         stateDefaults.set(m.ownerName, forKey: markerOwnerKey)
+        participantMarkerRevision &+= 1
     }
     private func clearParticipantMarker() {
         stateDefaults.removeObject(forKey: markerZoneKey)
         stateDefaults.removeObject(forKey: markerOwnerKey)
+        participantMarkerRevision &+= 1
     }
 
     /// OWNER: create (or fetch) the household's zone-wide CKShare for `UICloudSharingController`.

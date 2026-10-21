@@ -35,6 +35,20 @@ struct SeedkeepApp: App {
             #endif
         }
         .commands { WorkbenchCommands() }
+
+        #if os(macOS)
+        // The standard Settings window (⌘, from the app menu). It gets the instances `mainRoot` gets,
+        // applied explicitly. It never copies RootView, so opening it starts nothing: startup runs
+        // only from the main window.
+        Settings {
+            MacSettingsWindow()
+                .environment(environment)
+                .environment(environment.auth)
+                .modelContainer(environment.container)
+                .modifier(AppAppearanceModifier())
+                .tint(WBColor.accent)
+        }
+        #endif
     }
 
     @ViewBuilder private var mainRoot: some View {

@@ -26,14 +26,18 @@ struct CommandPaletteItem: Identifiable, Equatable {
 }
 
 enum CommandPaletteSearch {
-    static func results(query: String, rows: [SeedTableRow]) -> [CommandPaletteItem] {
+    static func results(
+        query: String,
+        rows: [SeedTableRow],
+        isMac: Bool = WorkbenchNavigation.isMacPlatform
+    ) -> [CommandPaletteItem] {
         var items: [CommandPaletteItem] = [
             .init(title: "New seed", hint: "Create a seed", group: "Actions", kind: .action(.newSeed)),
             .init(title: "Export CSV", hint: "Export selected or visible seeds", group: "Actions", kind: .action(.exportCSV)),
             .init(title: "Find", hint: "Search seeds", group: "Actions", kind: .action(.focusSearch)),
             .init(title: "Random seed", hint: "Pick an active seed at random", group: "Actions", kind: .action(.randomPick))
         ]
-        items += WorkbenchRoute.allCases.map { .init(title: $0.title, hint: "Go to \($0.title)", group: "Go to", kind: .route($0)) }
+        items += WorkbenchNavigation.routes(isMac: isMac).map { .init(title: $0.title, hint: "Go to \($0.title)", group: "Go to", kind: .route($0)) }
         items += rows.map { .init(title: $0.name, hint: [$0.variety, $0.type, $0.company].filter { !$0.isEmpty }.joined(separator: " · "), group: "Seeds", kind: .seed($0.id)) }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return items.sorted(by: tieBreak).prefix(9).map { $0 } }

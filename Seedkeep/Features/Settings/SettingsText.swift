@@ -19,4 +19,8 @@ enum SettingsText {
     static func whatsNewLabel(unseen: Bool) -> String {
         unseen ? "What's New, new" : "What's New"
     }
+
+    /// Settings' explanation in place of the garden's rows, when no garden is open (signed out,
+    /// starting up, or no household yet).
+    static let gardenUnavailableExplanation = "Your garden isn't open, so its locations, tags and sync aren't shown here. Appearance, the device settings and About still work."
 }
