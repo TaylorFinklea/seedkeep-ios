@@ -7,9 +7,18 @@ Contract: `.docs/ai/plans/2026-10-21-r3-garden-windows.md` (slices G0–G4).
   a per-window `GardenSession`; the `.windows` route (⌘5); a frost-flagged
   sample sowing. Reviewed by Sol and Opus; the fixes are in the same commit.
   The sample garden keeps its ZIP's real frost dates (contract amended).
-- **Next:** G1 (grid and square details) and G3 (Windows screen) in
-  parallel, then G2 (Garden screens), then G4 (frost on Today and Add
-  Planting), then verification.
+- **G1 done** (9eb72e0): `BedGridView`, the `GardenInteraction` reducer,
+  `GardenActions` (re-checked writes through `SyncEngine`), `SquareDetails`
+  with a per-event notes draft, and `BedEventsList`. Not wired into screens
+  yet.
+- **G3 done** (e60f40d): `WindowsView` replaces What to Plant (a timeline on
+  regular width, a list on compact); Plan routes by host shell.
+- Each slice was reviewed by Sol and Opus, with DeepSeek on G0 and G1;
+  every fix is in its slice's commit. Unverified at runtime: keyboard
+  focus and activation, VoiceOver, and the timeline's layout. These are in
+  the R3 verification and owner checks.
+- **Next:** G2 (Garden screens, retiring the canvas), then G4 (frost on
+  Today and Add Planting), then verification.
 
 ## R2d done (2026-10-21): accessibility audit
 
