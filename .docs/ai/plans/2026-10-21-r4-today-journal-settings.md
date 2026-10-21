@@ -188,8 +188,9 @@ S owns the route and palette changes; C builds on S's.
   - In `SettingsContent`, remove the Server and Subscription sections,
     which are gated off.
   - In `AIProviderSettingsView`, remove the "Hosted" option and the
-    server-tier rows. A stored "hosted" selection reads as the BYOK
-    default; stored keys are untouched.
+    server-tier rows. A stored "hosted" selection keeps reading as Free
+    (on-device, the app's default), as `AppPreferences` already does, so
+    scanning works without a key; stored keys are untouched.
   - Remove the hosted-tier copy in `APIKeysSettingsView` and the "House"
     copy in `NotificationsSettingsView`.
   - Keep BYOK and the existing Apple-only behaviour.
@@ -299,8 +300,9 @@ Rebase onto S before merging.
     - Fields that compare equal produce no change. Values the export
       doesn't carry (`catalogID`, growing info, the custom-name override,
       source, ids) are never touched.
-  - **Creates use defaults:** status `active`, packets 1 when blank, and
-    source as Add Seed sets it for manual entries. A non-blank `type` is
+  - **Creates use defaults:** status `active`. When `packets` is blank, use
+    Add Seed's default: 0 for wishlist, 1 otherwise. Source is set as Add
+    Seed sets it for manual entries. A non-blank `type` is
     applied with `setLocalCustomType` after the create.
   - **Locations and tags:**
     - They resolve by trimmed, case-folded name among the household's live
