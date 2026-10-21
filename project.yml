@@ -60,7 +60,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: Seedkeep
         UILaunchScreen:
-          UIColorName: ""
+          UIColorName: "LaunchBackground"
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         NSCameraUsageDescription: "Seedkeep uses the camera to photograph seed packets so it can read their details."

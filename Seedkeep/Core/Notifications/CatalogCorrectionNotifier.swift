@@ -153,7 +153,7 @@ final class CatalogCorrectionNotifier {
     /// roundup. POSTs to the ledger after scheduling so a sibling
     /// device skips on the next sync.
     private func scheduleBatch(ids: [String]) async {
-        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.catalog") else { return }
+        guard DevicePreferences.store.bool(forKey: "seedkeep.notif.catalog") else { return }
         guard let client, let container else { return }
 
         // OS-authorization gate — checked BEFORE any ledger read/write.

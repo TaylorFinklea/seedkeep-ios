@@ -397,7 +397,7 @@ struct SeedsTableView: View {
     private func textCell(_ value: String) -> some View {
         Group {
             if value.isEmpty {
-                Text("—").foregroundStyle(WBColor.faint)
+                Text("—").foregroundStyle(WBColor.muted)
             } else {
                 Text(value)
             }
@@ -506,7 +506,7 @@ struct SeedsTableView: View {
             }
             Text(row.verdictLabel.isEmpty ? "—" : row.verdictLabel)
                 .font(.wbBody)
-                .foregroundStyle(row.verdictLabel.isEmpty ? WBColor.faint : WBColor.ink)
+                .foregroundStyle(row.verdictLabel.isEmpty ? WBColor.muted : WBColor.ink)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .ignore)

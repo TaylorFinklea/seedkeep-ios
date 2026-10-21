@@ -944,7 +944,7 @@ public final class SyncEngine {
     /// only when the user has the planting-reminders toggle on. The
     /// scheduling itself is silent on permission denial.
     private func scheduleEventReminder(_ event: LocalPlantingEvent) {
-        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.events") else { return }
+        guard DevicePreferences.store.bool(forKey: "seedkeep.notif.events") else { return }
         guard event.completedAt == nil, event.deletedAt == nil else { return }
         let eventID = event.id
         let plannedFor = event.plannedFor

@@ -34,7 +34,9 @@ struct SystemNotificationScheduler: NotificationScheduler {
     }
 
     func requestAuthorization(options: UNAuthorizationOptions) async -> Bool {
-        await mainActorResult { center in
+        // Sample-garden mode never prompts, schedules or clears (see `DevicePreferences`).
+        guard !DevicePreferences.isSampleGarden else { return false }
+        return await mainActorResult { center in
             do {
                 return try await center.requestAuthorization(options: options)
             } catch {
@@ -48,10 +50,12 @@ struct SystemNotificationScheduler: NotificationScheduler {
     }
 
     func add(_ request: UNNotificationRequest) async throws {
+        guard !DevicePreferences.isSampleGarden else { return }
         try await mainActorThrowingResult { try await $0.add(request) }
     }
 
     func removePendingNotificationRequests(withIdentifiers ids: [String]) async {
+        guard !DevicePreferences.isSampleGarden else { return }
         await MainActor.run {
             UNUserNotificationCenter.current()
                 .removePendingNotificationRequests(withIdentifiers: ids)

@@ -1,14 +1,57 @@
-// Workbench design tokens (redesign R1). PARENT-OWNED contract: workers use these and do
-// not edit this file; ask the parent for additions.
+// Workbench design tokens (redesign R1). PARENT-OWNED contract: workers use these and do not
+// edit this file; ask the parent for additions.
 //
 // Values are the Workbench web prototype's (`seedkeep-web-design/src/app.css`), light / dark.
-// The app still forces light mode until R2 audits dark mode, but every token already
-// resolves per appearance so new surfaces never hard-code a colour.
+// They live in `WBPalette`, one table that the contrast tests read. Every token resolves per
+// appearance, so new surfaces never hard-code a colour.
 import SwiftUI
 
+/// Every Workbench token's sRGB hex in light and dark. `WBColor` builds its colours from this table.
+enum WBPalette {
+    /// One token's values, `0xRRGGBB`, for each appearance.
+    struct Pair: Equatable, Sendable {
+        let light: UInt32
+        let dark: UInt32
+    }
+
+    // Surfaces
+    static let bg = Pair(light: 0xF5F5F1, dark: 0x0F1311)
+    static let panel = Pair(light: 0xFFFFFF, dark: 0x161B18)
+    static let panel2 = Pair(light: 0xFAFAF7, dark: 0x1B211E)
+    // Text
+    static let ink = Pair(light: 0x17201B, dark: 0xE6EBE7)
+    static let muted = Pair(light: 0x56605A, dark: 0xA2ACA5)
+    static let faint = Pair(light: 0x7C857F, dark: 0x828C86)
+    // Rules
+    static let line = Pair(light: 0xE2E3DD, dark: 0x262D29)
+    static let line2 = Pair(light: 0xCDD0C8, dark: 0x363E39)
+    // Accent and selection
+    static let accent = Pair(light: 0x07583B, dark: 0x4CC688)
+    static let accentInk = Pair(light: 0xFFFFFF, dark: 0x07150E)
+    static let accentSoft = Pair(light: 0xE3EFE8, dark: 0x16301F)
+    static let selection = Pair(light: 0xEEF5F0, dark: 0x1A2A21)
+    static let paletteSelection = Pair(light: 0xEEF5F0, dark: 0x1F3328)
+    // Warnings
+    static let warn = Pair(light: 0xA8461A, dark: 0xF0936A)
+    static let warnSoft = Pair(light: 0xFBEEE6, dark: 0x2E1D15)
+    /// Icons on `warn`.
+    static let warnInk = Pair(light: 0xFFFFFF, dark: 0x1A0F0A)
+    // Planting-window verdicts
+    static let verdictPlantNow = Pair(light: 0x1D7A45, dark: 0x5BD08F)
+    static let verdictPlantSoon = Pair(light: 0xA66A0E, dark: 0xE7B04D)
+    static let verdictLate = Pair(light: 0xB5501A, dark: 0xF0936A)
+    static let verdictTooEarly = Pair(light: 0x3F6688, dark: 0x86A9CC)
+    static let verdictTooLate = Pair(light: 0x858C87, dark: 0x8E9892)
+    // Planting-event kinds (Garden, R3)
+    static let kindSowing = Pair(light: 0xE3EFE8, dark: 0x1C3527)
+    static let kindTransplant = Pair(light: 0xE3EBF4, dark: 0x1C2A3A)
+    static let kindHarvest = Pair(light: 0xF6ECD6, dark: 0x3A2F1A)
+    static let kindNote = Pair(light: 0xECECE8, dark: 0x262B28)
+}
+
 enum WBColor {
-    private static func token(_ light: UInt32, _ dark: UInt32) -> Color {
-        let colour = PlatformColor.dynamic(light: platformColor(light), dark: platformColor(dark))
+    private static func token(_ pair: WBPalette.Pair) -> Color {
+        let colour = PlatformColor.dynamic(light: platformColor(pair.light), dark: platformColor(pair.dark))
         #if os(iOS)
         return Color(uiColor: colour)
         #else
@@ -28,25 +71,26 @@ enum WBColor {
     }
 
     // Surfaces
-    static let bg = token(0xF5F5F1, 0x0F1311)
-    static let panel = token(0xFFFFFF, 0x161B18)
-    static let panel2 = token(0xFAFAF7, 0x1B211E)
+    static let bg = token(WBPalette.bg)
+    static let panel = token(WBPalette.panel)
+    static let panel2 = token(WBPalette.panel2)
     // Text
-    static let ink = token(0x17201B, 0xE6EBE7)
-    static let muted = token(0x56605A, 0xA2ACA5)
-    static let faint = token(0x7C857F, 0x828C86)
+    static let ink = token(WBPalette.ink)
+    static let muted = token(WBPalette.muted)
+    static let faint = token(WBPalette.faint)
     // Rules
-    static let line = token(0xE2E3DD, 0x262D29)
-    static let line2 = token(0xCDD0C8, 0x363E39)
+    static let line = token(WBPalette.line)
+    static let line2 = token(WBPalette.line2)
     // Accent and selection
-    static let accent = token(0x07583B, 0x4CC688)
-    static let accentInk = token(0xFFFFFF, 0x07150E)
-    static let accentSoft = token(0xE3EFE8, 0x16301F)
-    static let selection = token(0xEEF5F0, 0x1A2A21)
-    static let paletteSelection = token(0xEEF5F0, 0x1F3328)
+    static let accent = token(WBPalette.accent)
+    static let accentInk = token(WBPalette.accentInk)
+    static let accentSoft = token(WBPalette.accentSoft)
+    static let selection = token(WBPalette.selection)
+    static let paletteSelection = token(WBPalette.paletteSelection)
     // Warnings
-    static let warn = token(0xA8461A, 0xF0936A)
-    static let warnSoft = token(0xFBEEE6, 0x2E1D15)
+    static let warn = token(WBPalette.warn)
+    static let warnSoft = token(WBPalette.warnSoft)
+    static let warnInk = token(WBPalette.warnInk)
 
     /// Planting-window verdict colours. Keys are `LocalRecommendation.verdict` raw values.
     static func verdict(_ raw: String) -> Color {
@@ -60,17 +104,17 @@ enum WBColor {
         }
     }
 
-    static let verdictPlantNow = token(0x1D7A45, 0x5BD08F)
-    static let verdictPlantSoon = token(0xA66A0E, 0xE7B04D)
-    static let verdictLate = token(0xB5501A, 0xF0936A)
-    static let verdictTooEarly = token(0x3F6688, 0x86A9CC)
-    static let verdictTooLate = token(0x858C87, 0x8E9892)
+    static let verdictPlantNow = token(WBPalette.verdictPlantNow)
+    static let verdictPlantSoon = token(WBPalette.verdictPlantSoon)
+    static let verdictLate = token(WBPalette.verdictLate)
+    static let verdictTooEarly = token(WBPalette.verdictTooEarly)
+    static let verdictTooLate = token(WBPalette.verdictTooLate)
 
     // Planting-event kinds (Garden, R3)
-    static let kindSowing = token(0xE3EFE8, 0x1C3527)
-    static let kindTransplant = token(0xE3EBF4, 0x1C2A3A)
-    static let kindHarvest = token(0xF6ECD6, 0x3A2F1A)
-    static let kindNote = token(0xECECE8, 0x262B28)
+    static let kindSowing = token(WBPalette.kindSowing)
+    static let kindTransplant = token(WBPalette.kindTransplant)
+    static let kindHarvest = token(WBPalette.kindHarvest)
+    static let kindNote = token(WBPalette.kindNote)
 }
 
 /// Workbench geometry and type. System fonts (SF Pro, SF Mono) per the owner's decision;

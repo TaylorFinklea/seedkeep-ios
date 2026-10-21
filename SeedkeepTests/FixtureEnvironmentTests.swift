@@ -101,6 +101,33 @@ struct FixtureEnvironmentTests {
         #expect(env.preferences.homeClimate?.zip == FixtureSampleGarden.homeZip)
     }
 
+    @Test func fixtureSessionLeavesStandardWhatsNewAndNotificationKeysAlone() async throws {
+        defer { Self.clearFixtureSuite() }
+        let standard = UserDefaults.standard
+        let notificationKeys = [
+            "seedkeep.notif.frost", "seedkeep.notif.heat", "seedkeep.notif.water",
+            "seedkeep.notif.events", "seedkeep.notif.catalog",
+            "seedkeep.notif.pet.wilted", "seedkeep.notif.pet.departed", "seedkeep.notif.pet.roundup",
+        ]
+        let keys = [WhatsNewGate.lastSeenBuildKey] + notificationKeys
+        let snapshot = { (defaults: UserDefaults) in
+            keys.map { defaults.object(forKey: $0).map { String(describing: $0) } }
+        }
+        let before = snapshot(standard)
+
+        let env = AppEnvironment.makeForFixture()
+        await env.auth.restoreSession()
+
+        // The What's New baseline and the notification toggles go through the store the app selects
+        // in sample-garden mode, so the fixture suite takes the writes.
+        let store = DevicePreferences.store(isFixture: true)
+        WhatsNewGate.markSeen(build: 99, defaults: store)
+        for key in notificationKeys { store.set(true, forKey: key) }
+        #expect(WhatsNewGate.lastSeenBuild(defaults: store) == 99)
+        #expect(store.bool(forKey: "seedkeep.notif.frost"))
+        #expect(snapshot(standard) == before)
+    }
+
 }
 #endif
 

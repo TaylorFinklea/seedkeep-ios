@@ -388,8 +388,10 @@ private struct SuitabilityGradientBar: View {
 
                 if dayOffset >= 0 && dayOffset < count {
                     let xCenter = (CGFloat(dayOffset) + 0.5) * segmentWidth
+                    // A 1pt `panel` halo on each side keeps the 2pt `ink` marker visible over every segment.
+                    let haloRect = CGRect(x: xCenter - 2, y: 0, width: 4, height: size.height)
+                    context.fill(Path(haloRect), with: .color(WBColor.panel))
                     let markerRect = CGRect(x: xCenter - 1, y: 0, width: 2, height: size.height)
-                    // `ink` stands out on every segment, including the empty `line` days.
                     context.fill(Path(markerRect), with: .color(WBColor.ink))
                 }
             }

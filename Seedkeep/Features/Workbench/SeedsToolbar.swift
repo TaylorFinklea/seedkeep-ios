@@ -112,7 +112,7 @@ struct SeedsToolbar: View {
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(WBColor.faint)
+                .foregroundStyle(WBColor.muted)
                 .accessibilityHidden(true)
             TextField("Search seeds", text: $filter.search)
                 .textFieldStyle(.plain)

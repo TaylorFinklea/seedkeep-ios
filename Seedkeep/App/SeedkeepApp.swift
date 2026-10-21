@@ -12,6 +12,7 @@ struct SeedkeepApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var pendingInviteCode: String?
     @State private var pendingHandoff: AccountDeletionHandoffLink?
+    @AppStorage(AppAppearance.storageKey, store: DevicePreferences.store) private var storedAppearance: String = AppAppearance.system.rawValue
     #if os(macOS)
     @MainActor private static var didRunStartup = false
     #endif
@@ -42,10 +43,8 @@ struct SeedkeepApp: App {
             .environment(environment)
             .environment(environment.auth)
             .modelContainer(environment.container)
-            // Force light mode while we validate the Herbarium palette
-            // on-device. Dark variants exist in HerbColor but are gated
-            // off until they've been verified screen-by-screen.
-            .preferredColorScheme(.light)
+            // The Light / Dark / System choice from Settings. System (nil) follows the device.
+            .preferredColorScheme(AppAppearance.resolve(storedAppearance).colorScheme)
             // Workbench accent for controls, links and progress, on every platform.
             .tint(WBColor.accent)
             .task {
@@ -278,13 +277,14 @@ struct RootView: View {
     private func presentWhatsNewIfNeeded() {
         guard pendingInviteCode == nil, pendingHandoff == nil else { return }
         let current = AppInfo.currentBuild
-        let seen = WhatsNewGate.lastSeenBuild()
+        let defaults = DevicePreferences.store
+        let seen = WhatsNewGate.lastSeenBuild(defaults: defaults)
         if let release = WhatsNewGate.releaseToAutoPresent(
             releases: ChangelogData.releases, lastSeenBuild: seen, currentBuild: current) {
-            WhatsNewGate.markSeen(build: release.build)
+            WhatsNewGate.markSeen(build: release.build, defaults: defaults)
             whatsNewRelease = release
         } else if seen == nil {
-            WhatsNewGate.markSeen(build: current)
+            WhatsNewGate.markSeen(build: current, defaults: defaults)
         }
     }
 

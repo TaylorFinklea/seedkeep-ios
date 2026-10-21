@@ -36,7 +36,14 @@ final class NotificationsCenter {
         static let catalogCorrectionRoundup = "seedkeep.notif.catalog.roundup."
     }
 
-    private let center = UNUserNotificationCenter.current()
+    private let systemCenter = UNUserNotificationCenter.current()
+
+    /// The center for anything that changes the device's notifications: permission prompts,
+    /// scheduling, and clearing. Nil in sample-garden mode, so a fixture session never touches the
+    /// device's real notifications. Reads use `systemCenter`.
+    private var center: UNUserNotificationCenter? {
+        DevicePreferences.isSampleGarden ? nil : systemCenter
+    }
 
     /// Test seam: when set, `authorizationStatus()` returns this instead of
     /// querying the real `UNUserNotificationCenter`, so `ensureGranted()`
@@ -52,6 +59,7 @@ final class NotificationsCenter {
     /// the user already granted or grants now; false otherwise.
     func requestAuthorization() async -> Bool {
         do {
+            guard let center else { return false }
             return try await center.requestAuthorization(options: [.alert, .sound, .badge])
         } catch {
             return false
@@ -64,7 +72,7 @@ final class NotificationsCenter {
         if let override = authorizationStatusOverrideForTesting {
             return await override()
         }
-        return await center.notificationSettings().authorizationStatus
+        return await systemCenter.notificationSettings().authorizationStatus
     }
 
     /// Sign-out / identity-switch cleanup: drop every pending AND
@@ -73,8 +81,8 @@ final class NotificationsCenter {
     /// (event reminders, pet pings, correction outcomes, weather
     /// warnings) — none may survive into the next account's session.
     func removeAllAppNotifications() {
-        center.removeAllPendingNotificationRequests()
-        center.removeAllDeliveredNotifications()
+        center?.removeAllPendingNotificationRequests()
+        center?.removeAllDeliveredNotifications()
     }
 
     // MARK: - Planting-event reminders
@@ -90,7 +98,7 @@ final class NotificationsCenter {
     ) async {
         guard await ensureGranted() else { return }
         let id = IdPrefix.event + eventID
-        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center?.removePendingNotificationRequests(withIdentifiers: [id])
 
         let parser = DateFormatter()
         parser.dateFormat = "yyyy-MM-dd"
@@ -130,7 +138,7 @@ final class NotificationsCenter {
 
     /// Cancel a pending planting-event reminder.
     func cancelPlantingEventReminder(eventID: String) {
-        center.removePendingNotificationRequests(
+        center?.removePendingNotificationRequests(
             withIdentifiers: [IdPrefix.event + eventID])
     }
 
@@ -156,7 +164,7 @@ final class NotificationsCenter {
             [.year, .month, .day, .hour, .minute], from: fireDate)
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-        center.add(request) { _ in /* silent — first failure usually means denied */ }
+        center?.add(request) { _ in /* silent — first failure usually means denied */ }
     }
 
     private func scheduleRecurring(id: String, title: String, body: String, dateComponents: DateComponents) {
@@ -166,13 +174,13 @@ final class NotificationsCenter {
         content.sound = .default
         let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
         let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-        center.add(request) { _ in /* silent */ }
+        center?.add(request) { _ in /* silent */ }
     }
 
     // MARK: - Plant pets (Phase 5.1.4)
 
     func schedulePetWiltedWarning(eventID: String, petName: String) async {
-        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.pet.wilted") else { return }
+        guard DevicePreferences.store.bool(forKey: "seedkeep.notif.pet.wilted") else { return }
         guard await ensureGranted() else { return }
         let fire = Date().addingTimeInterval(10) // ~10s in future per spec
         schedule(
@@ -184,7 +192,7 @@ final class NotificationsCenter {
     }
 
     func schedulePetDeparted(eventID: String, goodbyeFirstLine: String) async {
-        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.pet.departed") else { return }
+        guard DevicePreferences.store.bool(forKey: "seedkeep.notif.pet.departed") else { return }
         guard await ensureGranted() else { return }
         let fire = Date().addingTimeInterval(5)
         schedule(
@@ -196,11 +204,11 @@ final class NotificationsCenter {
     }
 
     func cancelPetWiltedWarning(eventID: String) {
-        center.removePendingNotificationRequests(withIdentifiers: [IdPrefix.petWilted + eventID])
+        center?.removePendingNotificationRequests(withIdentifiers: [IdPrefix.petWilted + eventID])
     }
 
     func cancelPetDeparted(eventID: String) {
-        center.removePendingNotificationRequests(withIdentifiers: [IdPrefix.petDeparted + eventID])
+        center?.removePendingNotificationRequests(withIdentifiers: [IdPrefix.petDeparted + eventID])
     }
 
     func cancelAllPetNotifications(eventID: String) {
@@ -213,7 +221,7 @@ final class NotificationsCenter {
     /// `thrivingCount` + `wiltingCount` are baked into the body at schedule
     /// time; the caller is expected to re-invoke this after each `syncAll`.
     func schedulePetWeeklyRoundup(thrivingCount: Int, wiltingCount: Int) async {
-        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.pet.roundup") else { return }
+        guard DevicePreferences.store.bool(forKey: "seedkeep.notif.pet.roundup") else { return }
         guard await ensureGranted() else { return }
         var dc = DateComponents()
         dc.hour = 8
@@ -229,14 +237,14 @@ final class NotificationsCenter {
     }
 
     func clearPetWeeklyRoundup() {
-        center.removePendingNotificationRequests(withIdentifiers: [IdPrefix.petRoundup])
+        center?.removePendingNotificationRequests(withIdentifiers: [IdPrefix.petRoundup])
     }
 
     /// Clears every pending pet notification (both prefixes + roundup).
     /// Used when the user disables pets in Settings entirely. Mirrors
     /// `clearAllFrostWarnings` shape.
     func clearAllPetNotifications() async {
-        let pending = await center.pendingNotificationRequests()
+        let pending = await systemCenter.pendingNotificationRequests()
         let ids = pending
             .map(\.identifier)
             .filter {
@@ -244,7 +252,7 @@ final class NotificationsCenter {
                 || $0.hasPrefix(IdPrefix.petDeparted)
                 || $0 == IdPrefix.petRoundup
             }
-        center.removePendingNotificationRequests(withIdentifiers: ids)
+        center?.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
     private func isoDay(_ date: Date) -> String {
@@ -274,7 +282,7 @@ final class NotificationsCenter {
         fieldLabel: String,
         dismissedReason: String?
     ) async {
-        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.catalog") else { return }
+        guard DevicePreferences.store.bool(forKey: "seedkeep.notif.catalog") else { return }
         guard await ensureGranted() else { return }
 
         let title: String
@@ -311,7 +319,7 @@ final class NotificationsCenter {
         // next sync, so the user expects "you have a result now."
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
         let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-        center.add(request) { _ in /* silent — denial caught above */ }
+        center?.add(request) { _ in /* silent — denial caught above */ }
     }
 
     /// Schedule a coalesced roundup ping when a single sync batch
@@ -324,7 +332,7 @@ final class NotificationsCenter {
         dismissed: Int,
         ids: [String]
     ) async {
-        guard UserDefaults.standard.bool(forKey: "seedkeep.notif.catalog") else { return }
+        guard DevicePreferences.store.bool(forKey: "seedkeep.notif.catalog") else { return }
         guard await ensureGranted() else { return }
 
         let bucket = Int64(Date().timeIntervalSince1970)
@@ -339,14 +347,14 @@ final class NotificationsCenter {
         content.interruptionLevel = .active
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
         let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-        center.add(request) { _ in /* silent */ }
+        center?.add(request) { _ in /* silent */ }
     }
 
     /// Cancel any pending UN request for a given correction. Called
     /// when the row is tombstoned server-side so a withdrawn /
     /// revoked correction doesn't leave a ghost ping queued.
     func cancelCatalogCorrectionPing(correctionID: String) {
-        center.removePendingNotificationRequests(
+        center?.removePendingNotificationRequests(
             withIdentifiers: [IdPrefix.catalogCorrection + correctionID]
         )
     }
@@ -356,16 +364,16 @@ final class NotificationsCenter {
     /// sweep matters because lock-screen pings accumulated before the
     /// toggle-off would otherwise stay visible.
     func clearAllCatalogCorrectionPings() async {
-        let pending = await center.pendingNotificationRequests()
+        let pending = await systemCenter.pendingNotificationRequests()
         let pendingIDs = pending
             .map(\.identifier)
             .filter { $0.hasPrefix(IdPrefix.catalogCorrection) }
-        center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
+        center?.removePendingNotificationRequests(withIdentifiers: pendingIDs)
 
-        let delivered = await center.deliveredNotifications()
+        let delivered = await systemCenter.deliveredNotifications()
         let deliveredIDs = delivered
             .map(\.request.identifier)
             .filter { $0.hasPrefix(IdPrefix.catalogCorrection) }
-        center.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
+        center?.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
     }
 }

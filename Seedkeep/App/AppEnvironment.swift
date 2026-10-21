@@ -120,9 +120,9 @@ public final class AppEnvironment {
             },
             togglesProvider: { @MainActor in
                 (
-                    frost: UserDefaults.standard.bool(forKey: "seedkeep.notif.frost"),
-                    heat: UserDefaults.standard.bool(forKey: "seedkeep.notif.heat"),
-                    water: UserDefaults.standard.bool(forKey: "seedkeep.notif.water")
+                    frost: DevicePreferences.store.bool(forKey: "seedkeep.notif.frost"),
+                    heat: DevicePreferences.store.bool(forKey: "seedkeep.notif.heat"),
+                    water: DevicePreferences.store.bool(forKey: "seedkeep.notif.water")
                 )
             }
         )

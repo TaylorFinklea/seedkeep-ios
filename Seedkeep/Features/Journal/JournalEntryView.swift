@@ -247,7 +247,7 @@ struct JournalEntryView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise.circle.fill")
                             .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, WBColor.warn)
+                            .foregroundStyle(WBColor.warnInk, WBColor.warn)
                             .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
                             .contentShape(Rectangle())
                     }

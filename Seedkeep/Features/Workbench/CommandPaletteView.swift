@@ -108,7 +108,7 @@ struct CommandPaletteView: View {
                                 Text(item.hint).font(.wbCaption).foregroundStyle(WBColor.muted).lineLimit(1)
                             }
                             Spacer()
-                            Text(item.group).font(.wbMonoCaption).foregroundStyle(WBColor.faint)
+                            Text(item.group).font(.wbMonoCaption).foregroundStyle(WBColor.muted)
                         }
                         .padding(.horizontal, 8).frame(minHeight: WBMetrics.touchTarget)
                         .background(index == selectedIndex ? WBColor.paletteSelection : WBColor.panel)

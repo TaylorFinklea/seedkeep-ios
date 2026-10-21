@@ -10,20 +10,21 @@ struct NotificationsSettingsView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.openURL) private var openURL
 
+    // The toggles are kept in `DevicePreferences.store`: the fixture suite in sample-garden mode.
     // Phase 4C — three weather toggles. `frost` key preserved.
-    @AppStorage("seedkeep.notif.frost") private var frostEnabled: Bool = false
-    @AppStorage("seedkeep.notif.heat") private var heatEnabled: Bool = false
-    @AppStorage("seedkeep.notif.water") private var waterEnabled: Bool = false
+    @AppStorage("seedkeep.notif.frost", store: DevicePreferences.store) private var frostEnabled: Bool = false
+    @AppStorage("seedkeep.notif.heat", store: DevicePreferences.store) private var heatEnabled: Bool = false
+    @AppStorage("seedkeep.notif.water", store: DevicePreferences.store) private var waterEnabled: Bool = false
 
-    @AppStorage("seedkeep.notif.events") private var eventsEnabled: Bool = false
+    @AppStorage("seedkeep.notif.events", store: DevicePreferences.store) private var eventsEnabled: Bool = false
     // Phase 4D — catalog correction outcomes. Default-on; new users
     // opt-in once they file their first suggestion. Disabling sweeps
     // pending + delivered pings (see `clearAllCatalogCorrectionPings`).
-    @AppStorage("seedkeep.notif.catalog") private var catalogEnabled: Bool = true
+    @AppStorage("seedkeep.notif.catalog", store: DevicePreferences.store) private var catalogEnabled: Bool = true
     // Phase 5.1.4 — plant pets. All default-off per spec line 1250.
-    @AppStorage("seedkeep.notif.pet.wilted") private var petWiltedEnabled: Bool = false
-    @AppStorage("seedkeep.notif.pet.departed") private var petDepartedEnabled: Bool = false
-    @AppStorage("seedkeep.notif.pet.roundup") private var petRoundupEnabled: Bool = false
+    @AppStorage("seedkeep.notif.pet.wilted", store: DevicePreferences.store) private var petWiltedEnabled: Bool = false
+    @AppStorage("seedkeep.notif.pet.departed", store: DevicePreferences.store) private var petDepartedEnabled: Bool = false
+    @AppStorage("seedkeep.notif.pet.roundup", store: DevicePreferences.store) private var petRoundupEnabled: Bool = false
 
     @State private var authStatus: UNAuthorizationStatus = .notDetermined
     @State private var refreshing: Bool = false
@@ -97,7 +98,7 @@ struct NotificationsSettingsView: View {
                         }
                     }
                     .onChange(of: catalogEnabled) { _, newValue in
-                        if !newValue {
+                        if !newValue, !DevicePreferences.isSampleGarden {
                             Task { await NotificationsCenter.shared.clearAllCatalogCorrectionPings() }
                         }
                     }
@@ -222,7 +223,10 @@ struct NotificationsSettingsView: View {
 
     // MARK: - Toggle handlers
 
+    // Sample-garden mode (`DevicePreferences.isSampleGarden`) only stores the toggles. Each handler below
+    // returns before any permission request, scheduling or clearing of pending or delivered notifications.
     private func applyWeather(kind: WarningKind, enabled: Bool) async {
+        guard !DevicePreferences.isSampleGarden else { return }
         if enabled {
             _ = await NotificationsCenter.shared.requestAuthorization()
             _ = await appEnv.weatherWarnings.refreshAll(reason: .toggleEnable(kind))
@@ -233,6 +237,7 @@ struct NotificationsSettingsView: View {
     }
 
     private func applyEvents(enabled: Bool) async {
+        guard !DevicePreferences.isSampleGarden else { return }
         // Events are scheduled when the event is created; we just need
         // permission. Toggling off cancels per-event when the user
         // completes or deletes — no bulk-purge here.
@@ -243,6 +248,7 @@ struct NotificationsSettingsView: View {
     }
 
     private func applyPetWilted(enabled: Bool) async {
+        guard !DevicePreferences.isSampleGarden else { return }
         if enabled {
             _ = await NotificationsCenter.shared.requestAuthorization()
         } else {
@@ -257,6 +263,7 @@ struct NotificationsSettingsView: View {
     }
 
     private func applyPetDeparted(enabled: Bool) async {
+        guard !DevicePreferences.isSampleGarden else { return }
         if enabled {
             _ = await NotificationsCenter.shared.requestAuthorization()
         } else {
@@ -270,6 +277,7 @@ struct NotificationsSettingsView: View {
     }
 
     private func applyPetRoundup(enabled: Bool) async {
+        guard !DevicePreferences.isSampleGarden else { return }
         if enabled {
             // Best-effort initial schedule with zero counts until the
             // next sync re-bakes the body.
@@ -283,6 +291,7 @@ struct NotificationsSettingsView: View {
     }
 
     private func manualRefresh() async {
+        guard !DevicePreferences.isSampleGarden else { return }
         refreshing = true
         defer { refreshing = false }
         _ = await appEnv.weatherWarnings.refreshAll(reason: .manualRefresh)

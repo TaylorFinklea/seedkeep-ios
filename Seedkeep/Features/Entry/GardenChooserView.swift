@@ -103,12 +103,12 @@ struct GardenChooserView: View {
                     Text(Date(timeIntervalSince1970: TimeInterval(updatedAt) / 1000)
                         .formatted(date: .abbreviated, time: .omitted))
                         .font(.wbMonoCaption)
-                        .foregroundStyle(WBColor.faint)
+                        .foregroundStyle(WBColor.muted)
                         .accessibilityLabel(Text("Updated \(Date(timeIntervalSince1970: TimeInterval(updatedAt) / 1000).formatted(date: .long, time: .omitted))"))
                 }
                 Image(systemName: "chevron.right")
                     .font(.wbCaption)
-                    .foregroundStyle(WBColor.faint)
+                    .foregroundStyle(WBColor.muted)
                     .accessibilityHidden(true)
             }
             .padding(.horizontal, WBMetrics.gapLarge)

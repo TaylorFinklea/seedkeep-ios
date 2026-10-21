@@ -16,12 +16,22 @@ enum CloudSharingPresenter {
         guard let top = topViewController() else { return }
         let controller = UICloudSharingController(share: share, container: container)
         controller.availablePermissions = [.allowReadWrite, .allowPrivate]
+        controller.overrideUserInterfaceStyle = userInterfaceStyle(for: AppAppearance.stored)
         let delegate = Delegate(title: title, onComplete: onComplete)
         controller.delegate = delegate
         // UICloudSharingController.delegate is weak — keep the delegate alive for the controller's
         // lifetime via an associated object so the save/stop callbacks still fire.
         objc_setAssociatedObject(controller, &Delegate.associatedKey, delegate, .OBJC_ASSOCIATION_RETAIN)
         top.present(controller, animated: true)
+    }
+
+    /// System leaves the style unspecified, so the sheet follows the device.
+    private static func userInterfaceStyle(for appearance: AppAppearance) -> UIUserInterfaceStyle {
+        switch appearance {
+        case .system: .unspecified
+        case .light: .light
+        case .dark: .dark
+        }
     }
 
     @MainActor

@@ -18,6 +18,7 @@ struct SettingsContent: View {
     // R1 27d.18 — participant journal recovery review inbox
     @State private var showingJournalRecoveryReview = false
     @State private var showingWhatsNew = false
+    @AppStorage(AppAppearance.storageKey, store: DevicePreferences.store) private var storedAppearance: String = AppAppearance.system.rawValue
     @Query(filter: #Predicate<LocalJournalRecoveryItem> { $0.status == "pending" })
     private var pendingRecoveryItems: [LocalJournalRecoveryItem]
 
@@ -65,6 +66,20 @@ struct SettingsContent: View {
                 } header: {
                     WBSectionHeader("Account")
                 }
+            }
+
+            Section {
+                // Through `resolve`, so an unknown stored value shows as System, which is what applies.
+                Picker("Appearance", selection: Binding(
+                    get: { AppAppearance.resolve(storedAppearance) },
+                    set: { storedAppearance = $0.rawValue }
+                )) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Text(appearance.title).tag(appearance)
+                    }
+                }
+            } header: {
+                WBSectionHeader("Appearance")
             }
 
             Section {
@@ -294,7 +309,7 @@ struct SettingsContent: View {
             Section {
                 Button {
                     if let newest = ChangelogData.releases.map(\.build).max() {
-                        WhatsNewGate.markSeen(build: newest)
+                        WhatsNewGate.markSeen(build: newest, defaults: DevicePreferences.store)
                     }
                     showingWhatsNew = true
                 } label: {
@@ -355,7 +370,7 @@ struct SettingsContent: View {
     /// last opened — drives the small unseen dot on the What's New row.
     private var whatsNewUnseen: Bool {
         guard let newest = ChangelogData.releases.map(\.build).max() else { return false }
-        return newest > (WhatsNewGate.lastSeenBuild() ?? .max)
+        return newest > (WhatsNewGate.lastSeenBuild(defaults: DevicePreferences.store) ?? .max)
     }
 
     private var homeLocationSummary: String {
