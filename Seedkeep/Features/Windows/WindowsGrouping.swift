@@ -89,4 +89,20 @@ enum WindowsGrouping {
         }
         return result
     }
+
+    /// The next planned event for every seed, scoped to one household. Only its events count, and only those in a
+    /// live bed (`liveBedIDs`). Each event is paired with the household it belongs to. Nil `householdID` yields none.
+    static func nextPlannedBySeed(
+        _ events: [(householdID: String, event: GridEvent)],
+        householdID: String?,
+        liveBedIDs: Set<String>
+    ) -> [String: GridEvent] {
+        guard let householdID else { return [:] }
+        let scoped = events.compactMap { item -> GridEvent? in
+            guard item.householdID == householdID,
+                  let bedID = item.event.bedID, liveBedIDs.contains(bedID) else { return nil }
+            return item.event
+        }
+        return nextPlannedBySeed(scoped)
+    }
 }

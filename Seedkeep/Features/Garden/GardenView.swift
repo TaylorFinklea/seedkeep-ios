@@ -16,9 +16,18 @@ struct GardenView: View {
     private var openEvents: [LocalPlantingEvent]
 
     @State private var showAddBed = false
-    @State private var showWhatToPlant = false
+    @State private var showWindows = false
+
+    /// The regular-width workbench's model when the workbench hosts this screen. Nil in the compact tab shell.
+    private let workbench: WorkbenchModel?
+
+    init(workbench: WorkbenchModel? = nil) {
+        self.workbench = workbench
+    }
 
     var body: some View {
+        // Read here, outside the sheet, so the Windows sheet knows which shell it sits over.
+        let windowsHost: WindowsHost = workbench == nil ? .compactGardenSheet : .workbenchGardenSheet
         NavigationStack {
             ZStack {
                 WBScreenBackground()
@@ -83,12 +92,12 @@ struct GardenView: View {
             .toolbar {
                 ToolbarItem(placement: .platformLeading) {
                     Button {
-                        showWhatToPlant = true
+                        showWindows = true
                     } label: {
                         Image(systemName: "calendar")
                     }
-                    .accessibilityLabel("What to plant")
-                    .accessibilityIdentifier("garden.whatToPlant")
+                    .accessibilityLabel("Windows")
+                    .accessibilityIdentifier("garden.windows")
                 }
                 ToolbarItem(placement: .platformTrailing) {
                     Button {
@@ -102,12 +111,12 @@ struct GardenView: View {
             .sheet(isPresented: $showAddBed) {
                 AddBedView()
             }
-            .sheet(isPresented: $showWhatToPlant) {
+            .sheet(isPresented: $showWindows) {
                 NavigationStack {
-                    WhatToPlantView()
+                    WindowsView(host: windowsHost, workbench: workbench)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showWhatToPlant = false }
+                                Button("Done") { showWindows = false }
                             }
                         }
                 }

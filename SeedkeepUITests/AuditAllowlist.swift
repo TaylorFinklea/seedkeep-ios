@@ -49,9 +49,6 @@ enum AuditAllowlist {
     private static let systemTextField = Justification(
         reason: "System text field: scrolls its text horizontally instead of truncating.",
         recheck: "If the field becomes a multi-line or custom view.")
-    private static let navigationTitle = Justification(
-        reason: "System inline navigation title.",
-        recheck: "If the title becomes custom.")
     private static let canvasCap = Justification(
         reason: "Bed canvas text is capped at .xxxLarge by design (R2c decision); "
             + "names stay in VoiceOver and the events list.",
@@ -102,7 +99,7 @@ enum AuditAllowlist {
         accepted(.addSeed, "top", .dynamicType,
                  .labelAndType(label: "Save", type: .button),
                  [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], toolbarButton),
-        accepted(.whatToPlant, "top", .dynamicType,
+        accepted(.windows, "top", .dynamicType,
                  .labelAndType(label: "Done", type: .button),
                  [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], toolbarButton),
         accepted(.journalEntry, "top", .dynamicType,
@@ -134,11 +131,6 @@ enum AuditAllowlist {
         accepted(.addSeed, "top", .textClipped,
                  .labelAndType(label: "", type: .textField),
                  [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], systemTextField),
-
-        // C. The "What to plant" inline navigation title: clipped text.
-        accepted(.whatToPlant, "top", .textClipped,
-                 .labelAndType(label: "What to plant", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], navigationTitle),
 
         // D. Dynamic Type on static text in a text style, checked against the view code.
         accepted(.seedDetail, "plantingPanel", .dynamicType,
@@ -198,9 +190,9 @@ enum AuditAllowlist {
         accepted(.bedDetail, "top", .dynamicType,
                  .labelAndType(label: "Raised, full sun", type: .staticText),
                  [.lightDefault, .darkDefault], textStyle("the default body style", "BedDetailView.swift:69")),
-        accepted(.whatToPlant, "top", .dynamicType,
+        accepted(.windows, "top", .dynamicType,
                  .labelAndType(label: "Snap a corner", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], textStyle(".wbCallout (semibold)", "WhatToPlantView.swift:116")),
+                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], textStyle(".wbCallout (semibold)", "WindowsView.swift:94")),
         accepted(.journalEntry, "top", .dynamicType,
                  .labelAndType(label: "Add photos", type: .staticText),
                  [.lightDefault, .darkDefault], textStyle("the default body style (Label)", "JournalEntryView.swift:105")),

@@ -72,4 +72,57 @@ struct WindowsGroupingTests {
         let bySeed = WindowsGrouping.nextPlannedBySeed(events)
         #expect(bySeed.mapValues(\.id) == ["s": "2", "t": "4"])
     }
+
+    /// A stored event for the scoped next-planned rule: its household, bed and seed, incomplete unless `done`.
+    private func stored(
+        _ id: String,
+        household: String = "h1",
+        seed: String? = "s",
+        bed: String? = "b1",
+        on day: String = "2026-06-01",
+        done: Bool = false
+    ) -> (householdID: String, event: GridEvent) {
+        (householdID: household, event: GridEvent(id: id, bedID: bed, seedID: seed, kind: "sowing", plannedFor: day,
+                                                  isCompleted: done, x: nil, y: nil, isFrostFlagged: false))
+    }
+
+    @Test func nextPlannedIsScopedToTheHouseholdLiveBedsAndIncompleteEvents() {
+        let events = [
+            stored("other-house", household: "h2", on: "2026-05-01"),
+            stored("deleted-bed", bed: "gone", on: "2026-05-02"),
+            stored("no-bed", bed: nil, on: "2026-05-03"),
+            stored("done", on: "2026-05-04", done: true),
+            stored("no-seed", seed: nil, on: "2026-05-05"),
+            stored("kept", on: "2026-06-01"),
+            stored("later", on: "2026-07-01"),
+        ]
+        let next = WindowsGrouping.nextPlannedBySeed(events, householdID: "h1", liveBedIDs: ["b1"])
+        #expect(next.mapValues(\.id) == ["s": "kept"])
+    }
+
+    @Test func nextPlannedBreaksDateTiesByIDAcrossBeds() {
+        let events = [
+            stored("c", bed: "b2", on: "2026-06-01"),
+            stored("a", bed: "b1", on: "2026-06-01"),
+            stored("b", bed: "b1", on: "2026-06-10"),
+        ]
+        let next = WindowsGrouping.nextPlannedBySeed(events, householdID: "h1", liveBedIDs: ["b1", "b2"])
+        #expect(next["s"]?.id == "a")
+        #expect(next["s"]?.bedID == "b1")
+    }
+
+    @Test func nextPlannedKeepsEachSeedsOwnFirstEvent() {
+        let events = [
+            stored("s1", seed: "s", on: "2026-06-01"),
+            stored("t1", seed: "t", on: "2026-05-01"),
+            stored("t2", seed: "t", on: "2026-08-01"),
+        ]
+        let next = WindowsGrouping.nextPlannedBySeed(events, householdID: "h1", liveBedIDs: ["b1"])
+        #expect(next.mapValues(\.id) == ["s": "s1", "t": "t1"])
+    }
+
+    @Test func nextPlannedWithNoHouseholdIsEmpty() {
+        let events = [stored("1")]
+        #expect(WindowsGrouping.nextPlannedBySeed(events, householdID: nil, liveBedIDs: ["b1"]).isEmpty)
+    }
 }

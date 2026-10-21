@@ -88,7 +88,7 @@ final class AuditDriver {
             try swipeDownSheet(destination)
             return try confirmLeft(destination)
         case .whatsNew: labels = ["Close"]
-        case .whatToPlant: labels = ["Done"]
+        case .windows: labels = ["Done"]
         case .journalEntry: labels = ["Cancel", "BackButton"]
         default: labels = ["BackButton", "Back"]
         }

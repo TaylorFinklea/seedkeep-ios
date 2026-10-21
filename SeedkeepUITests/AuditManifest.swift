@@ -59,7 +59,7 @@ enum AuditFixture {
 enum AuditDestination: String, CaseIterable, Sendable {
     case today, seeds, garden, journal, settings
     case seedDetail, addSeed, randomPick
-    case bedDetail, whatToPlant
+    case bedDetail, windows
     case journalEntry
     case locations, tags, homeLocation, notifications, aiProvider, apiKeys, whatsNew
 
@@ -70,7 +70,7 @@ enum AuditDestination: String, CaseIterable, Sendable {
         switch self {
         case .today: .today
         case .seeds, .seedDetail, .addSeed, .randomPick: .seeds
-        case .garden, .bedDetail, .whatToPlant: .garden
+        case .garden, .bedDetail, .windows: .garden
         case .journal, .journalEntry: .journal
         case .settings, .locations, .tags, .homeLocation, .notifications, .aiProvider, .apiKeys, .whatsNew:
             .settings
@@ -125,7 +125,7 @@ enum AuditManifest {
 
         AuditStop(destination: .garden, checkpoints: [.top]),
         AuditStop(destination: .bedDetail, checkpoints: [.top, .anchor(.canvas)]),
-        AuditStop(destination: .whatToPlant, checkpoints: [.top]),
+        AuditStop(destination: .windows, checkpoints: [.top]),
 
         AuditStop(destination: .journal, checkpoints: [.top]),
         AuditStop(destination: .journalEntry, checkpoints: [.top]),

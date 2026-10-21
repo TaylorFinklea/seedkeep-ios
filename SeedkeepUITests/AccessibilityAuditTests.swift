@@ -124,7 +124,7 @@ final class AccessibilityAuditTests: XCTestCase {
         case .addSeed: "seeds.add"
         case .randomPick: "seeds.random"
         case .bedDetail: "garden.bed.\(AuditFixture.northBedID)"
-        case .whatToPlant: "garden.whatToPlant"
+        case .windows: "garden.windows"
         case .journalEntry: "journal.entry.\(AuditFixture.journalEntryID)"
         case .locations, .tags, .homeLocation, .notifications, .aiProvider, .apiKeys, .whatsNew:
             "settings.\(destination.rawValue)"
