@@ -46,8 +46,29 @@ public final class AppEnvironment {
     @ObservationIgnored private var lastBannerString: String?
     @ObservationIgnored private var lastBannerTime: Date?
 
-    public enum AppTab: Hashable {
-        case today, library, garden, journal, you
+    /// The compact interface's tabs, in order. Settings replaced You in R2b.
+    public enum AppTab: Hashable, CaseIterable {
+        case today, seeds, garden, journal, settings
+
+        var title: String {
+            switch self {
+            case .today: return "Today"
+            case .seeds: return "Seeds"
+            case .garden: return "Garden"
+            case .journal: return "Journal"
+            case .settings: return "Settings"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .today: return "sun.max"
+            case .seeds: return "leaf"
+            case .garden: return "square.grid.3x3.topleft.filled"
+            case .journal: return "book"
+            case .settings: return "gearshape"
+            }
+        }
     }
 
     public static func live() -> AppEnvironment {

@@ -52,13 +52,15 @@ struct SeedsInspector: View {
                 LabeledContent("Selected", value: "\(selectedRows.count) seeds")
                 LabeledContent("Packets", value: "\(total)")
             }
-            Section("By status") {
+            Section {
                 ForEach(SeedStateFilter.allCases.filter { $0 != .all }) { tab in
                     let count = selectedRows.filter { $0.state == tab.stateRaw }.count
                     if count > 0 {
                         LabeledContent(tab.title, value: "\(count)")
                     }
                 }
+            } header: {
+                WBSectionHeader("By status")
             }
         }
         .font(.wbBody)

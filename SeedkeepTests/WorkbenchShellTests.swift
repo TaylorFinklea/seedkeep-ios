@@ -44,3 +44,11 @@ struct WorkbenchShellTests {
         #expect(WorkbenchRoute.allCases.map(\.symbol) == ["sun.max", "leaf", "square.grid.3x3", "book", "gearshape"])
     }
 }
+
+struct CompactTabTests {
+    @Test func settingsReplacesYouAndSeedsReplacesLibrary() {
+        #expect(AppEnvironment.AppTab.allCases.map(\.title) == ["Today", "Seeds", "Garden", "Journal", "Settings"])
+        #expect(AppEnvironment.AppTab.allCases.map(\.systemImage)
+            == ["sun.max", "leaf", "square.grid.3x3.topleft.filled", "book", "gearshape"])
+    }
+}

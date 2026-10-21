@@ -1,5 +1,43 @@
 # Current State
 
+## Native Workbench redesign — R2b complete (2026-10-20)
+
+R2b finishes the Workbench look for the remaining Herbarium screens. It's on
+`redesign/r2-design-system` after R2a, and is local only.
+- **Tabs (compact interface):** Today, Seeds, Garden, Journal and Settings.
+  Settings replaced You. YouView is unreferenced (its server-era rows were
+  already hidden) until N3. On iPad and Mac, the Settings route opens
+  Settings directly.
+- **Seeds (compact):**
+  - A list built on R1's row model and search.
+  - A state filter with counts that follow the search: segmented, or a menu
+    at accessibility sizes.
+  - Rows show type, variety, company, year and the planting verdict.
+  - Group by type, as before.
+- **Today:**
+  - A daylight panel, with a polar day/night message.
+  - The Due queue (one queue, six rows), now showing the event kind and an
+    overdue warning icon.
+  - The latest journal note.
+- **Settings:** one Workbench form with these sections: Account, Seeds, Home
+  and alerts, AI, Sync (unchanged), Diagnostics, About (version row).
+- **Shared:**
+  - `WBScreenTitle` and `WBMetrics.screenGutter`.
+  - `AppEnvironment.isSyncingForDisplay`, so loading states see CloudKit
+    sync.
+  - `WBSectionHeader` in the remaining forms.
+  - Layouts stack at accessibility text sizes.
+- **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 1096 + 1, macOS
+  app 1111 + 1, on Xcode 27.1.
+- **Reviews:** Sol critiqued the contract over three rounds. Opus and Sol
+  reviewed the merged change. The iPhone screenshot review is done.
+- **Contract and results:** `.docs/ai/plans/2026-10-20-r2-design-system.md`
+  (R2b sections).
+- **Open:** the regular-width iPad screenshots (the iPad simulator needs the
+  owner's approval to drive) and the owner's Mac visual check.
+- **Next:** R2c (the appearance setting and dark mode, contrast, the large-text
+  items deferred from R2a, and VoiceOver and keyboard acceptance).
+
 ## Native Workbench redesign — R2a complete (2026-10-20)
 
 R2a restyles the app in Workbench with no behaviour change. It's on branch

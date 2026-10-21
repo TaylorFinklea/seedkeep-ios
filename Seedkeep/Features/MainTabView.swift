@@ -1,9 +1,9 @@
 import SwiftUI
 import SeedkeepKit
 
-/// Five-tab root: Today / Library / Garden / Journal / You. Today (Diurnalis)
-/// is the default landing — a daily dashboard with sun arc + sowing queue +
-/// recent journal margin note. Settings lives under You → Settings.
+/// Five-tab root for the compact interface: Today, Seeds, Garden, Journal and Settings
+/// (`AppEnvironment.AppTab`). Today is the default landing. Settings replaced the You tab in
+/// R2b; the server-era rows You held were already hidden and stay unreachable until N3.
 ///
 /// Sprout (the BYOK AI assistant) and Claude/MCP connections have no entry
 /// point as of the 2026-07-27 V1 plan's removal of "temporarily unavailable"
@@ -17,27 +17,24 @@ struct MainTabView: View {
     /// a new error fires so the 8s clock resets.
     @State private var dismissTask: Task<Void, Never>?
 
+    @ViewBuilder
+    private func tabRoot(_ tab: AppEnvironment.AppTab) -> some View {
+        switch tab {
+        case .today: TodayView()
+        case .seeds: LibraryView()
+        case .garden: GardenView()
+        case .journal: JournalView()
+        case .settings: NavigationStack { SettingsContent() }
+        }
+    }
+
     var body: some View {
         TabView(selection: $selection) {
-            TodayView()
-                .tag(AppEnvironment.AppTab.today)
-                .tabItem { Label("Today", systemImage: "sun.max") }
-
-            LibraryView()
-                .tag(AppEnvironment.AppTab.library)
-                .tabItem { Label("Library", systemImage: "leaf") }
-
-            GardenView()
-                .tag(AppEnvironment.AppTab.garden)
-                .tabItem { Label("Garden", systemImage: "square.grid.3x3.topleft.filled") }
-
-            JournalView()
-                .tag(AppEnvironment.AppTab.journal)
-                .tabItem { Label("Journal", systemImage: "book") }
-
-            YouView()
-                .tag(AppEnvironment.AppTab.you)
-                .tabItem { Label("You", systemImage: "person.crop.circle") }
+            ForEach(AppEnvironment.AppTab.allCases, id: \.self) { tab in
+                tabRoot(tab)
+                    .tag(tab)
+                    .tabItem { Label(tab.title, systemImage: tab.systemImage) }
+            }
         }
         .overlay(alignment: .top) { bannerOverlay }
         .onChange(of: appEnv.requestedTab) { _, requested in

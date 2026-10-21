@@ -33,9 +33,8 @@ struct TopBarSparkleButton: View {
         working = true
         defer { working = false }
         if !appEnv.assistant.keyConfigured {
-            // Route to You so the user can navigate to Settings → AI assistant
-            // key. Settings now lives under You rather than as a standalone tab.
-            appEnv.requestedTab = .you
+            // Route to the Settings tab so the user can reach the AI assistant key.
+            appEnv.requestedTab = .settings
             return
         }
         do {

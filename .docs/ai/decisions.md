@@ -303,6 +303,20 @@
 
 **Rationale**: Text that scales and readable contrast are release requirements. Shared components keep the three phases consistent, and the sample garden makes visual review repeatable.
 
+## 2026-10-20 — Settings replaces the You tab; one Seeds model on every size (R2b)
+
+**Context**: You held two live rows and a link to Settings; its server-era rows were already hidden. The iPhone Seeds grid kept its own search, grouping and counts in the view, with no tests, while iPad and Mac used R1's tested table model.
+
+**Decision**:
+- The compact tabs are Today, Seeds, Garden, Journal and Settings (`AppEnvironment.AppTab`). Both interfaces render `NavigationStack { SettingsContent() }` for Settings. YouView stays compiled but unreferenced until N3.
+- The compact Seeds list uses `SeedTableRow` and R1's search. Its counts follow the search on every size. Its titles match iPad and Mac (Wishlist, Archived).
+- Loading states use `AppEnvironment.isSyncingForDisplay`, an observed count of CloudKit passes plus the coordinator's flag. The legacy `sync.isSyncing` never turns on in the CloudKit path.
+- At accessibility text sizes, side-by-side layouts (the daylight readings, due rows, seed rows, and the state filter as a menu) switch on `dynamicTypeSize.isAccessibilitySize`. `ViewThatFits` doesn't work for segmented controls, whose text doesn't grow.
+
+**Alternatives considered**: Keeping You as a slim tab (two rows don't justify a tab); a separate iPhone list model (it would drift from R1's); `ViewThatFits` for every fallback (it misjudges segmented controls).
+
+**Rationale**: Fewer roots, one tested model for seeds, and loading states that reflect the sync that actually runs.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in

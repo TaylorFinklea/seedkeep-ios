@@ -84,8 +84,8 @@ struct FixtureModeTests {
         // Every seed has growing info, so its planting window can show.
         #expect(seeds.allSatisfy { $0.growingInfo?.days_to_maturity_min != nil })
         #expect(try context.fetchCount(FetchDescriptor<LocalBed>()) == 2)
-        #expect(try context.fetchCount(FetchDescriptor<LocalPlantingEvent>()) == 9)
-        #expect(try context.fetchCount(FetchDescriptor<LocalJournalEntry>()) == 5)
+        #expect(try context.fetchCount(FetchDescriptor<LocalPlantingEvent>()) == 16)
+        #expect(try context.fetchCount(FetchDescriptor<LocalJournalEntry>()) == 6)
         #expect(try context.fetchCount(FetchDescriptor<LocalJournalChecklistItem>()) == 8)
         #expect(try context.fetchCount(FetchDescriptor<LocalTag>()) == 4)
         #expect(try context.fetchCount(FetchDescriptor<LocalLocation>()) == 3)

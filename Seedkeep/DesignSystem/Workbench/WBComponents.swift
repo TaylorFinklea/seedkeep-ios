@@ -281,6 +281,8 @@ struct WBDaylightPanel: View {
     let sunset: Date
     let now: Date
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     init(sunrise: Date, sunset: Date, now: Date) {
         self.sunrise = sunrise
         self.sunset = sunset
@@ -311,34 +313,34 @@ struct WBDaylightPanel: View {
         date.formatted(date: .omitted, time: .shortened)
     }
 
+    private func reading(_ label: String, _ value: String, alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 2) {
+            Text(label)
+                .font(.wbCaption)
+                .foregroundStyle(WBColor.muted)
+            Text(value)
+                .font(.wbMono)
+                .foregroundStyle(WBColor.ink)
+        }
+    }
+
     var body: some View {
+        let length = "\(dayLength.hours)h \(dayLength.minutes)m"
         VStack(alignment: .leading, spacing: WBMetrics.gap) {
-            HStack(alignment: .top, spacing: WBMetrics.gap) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Sunrise")
-                        .font(.wbCaption)
-                        .foregroundStyle(WBColor.muted)
-                    Text(time(sunrise))
-                        .font(.wbMono)
-                        .foregroundStyle(WBColor.ink)
+            if dynamicTypeSize.isAccessibilitySize {
+                // One reading per line: side by side, the labels and times break mid-word.
+                VStack(alignment: .leading, spacing: WBMetrics.gap) {
+                    reading("Sunrise", time(sunrise), alignment: .leading)
+                    reading("Day length", length, alignment: .leading)
+                    reading("Sunset", time(sunset), alignment: .leading)
                 }
-                Spacer(minLength: WBMetrics.gap)
-                VStack(spacing: 2) {
-                    Text("Day length")
-                        .font(.wbCaption)
-                        .foregroundStyle(WBColor.muted)
-                    Text("\(dayLength.hours)h \(dayLength.minutes)m")
-                        .font(.wbMono)
-                        .foregroundStyle(WBColor.ink)
-                }
-                Spacer(minLength: WBMetrics.gap)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Sunset")
-                        .font(.wbCaption)
-                        .foregroundStyle(WBColor.muted)
-                    Text(time(sunset))
-                        .font(.wbMono)
-                        .foregroundStyle(WBColor.ink)
+            } else {
+                HStack(alignment: .top, spacing: WBMetrics.gap) {
+                    reading("Sunrise", time(sunrise), alignment: .leading)
+                    Spacer(minLength: WBMetrics.gap)
+                    reading("Day length", length, alignment: .center)
+                    Spacer(minLength: WBMetrics.gap)
+                    reading("Sunset", time(sunset), alignment: .trailing)
                 }
             }
             ProgressView(value: progress)

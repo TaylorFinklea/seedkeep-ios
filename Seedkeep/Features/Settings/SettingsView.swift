@@ -2,12 +2,8 @@ import SwiftUI
 import SwiftData
 import SeedkeepKit
 
-/// Stack-less content view for Settings — "The Order". Designed to be
-/// embedded inside an existing `NavigationStack` (e.g. `YouView`). All
-/// `NavigationLink`s push onto the host's stack; no inner stack is created.
-///
-/// `SettingsView` below is a thin standalone wrapper that adds its own
-/// `NavigationStack` for any remaining direct-navigation uses.
+/// Stack-less content view for Settings. The host (the Settings tab or the Workbench `.settings`
+/// route) wraps it in a `NavigationStack`; every `NavigationLink` pushes onto that stack.
 struct SettingsContent: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(AuthController.self) private var auth
@@ -27,315 +23,319 @@ struct SettingsContent: View {
 
     @ViewBuilder private func statusRow(_ label: String, _ value: String) -> some View {
         HStack {
-            Text(label).foregroundStyle(HerbColor.inkFaint)
+            Text(label).foregroundStyle(WBColor.muted)
             Spacer()
-            Text(value).foregroundStyle(HerbColor.ink)
+            Text(value).foregroundStyle(WBColor.ink)
         }
-        .font(.footnote)
+        .font(.wbFootnote)
+    }
+
+    /// An error message. The text is `ink`; the warning icon carries the status colour.
+    private func errorRow(_ message: String) -> some View {
+        Label {
+            Text(message)
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.ink)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(WBColor.warn)
+        }
     }
 
     var body: some View {
-        ZStack {
-            VellumBackground()
-            Form {
+        Form {
+            if case .signedIn(_, let household) = auth.state {
                 Section {
-                    herbHero
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                }
-
-                Section {
-                    NavigationLink {
-                        LocationsView()
-                    } label: {
-                        Label("Locations", systemImage: "tray")
+                    // N1: the iCloud account is the identity; there is no Seedkeep account.
+                    LabeledContent("Account") {
+                        Text("iCloud account")
+                            .font(.wbBody)
+                            .foregroundStyle(WBColor.ink)
                     }
-                    NavigationLink {
-                        TagsView()
-                    } label: {
-                        Label("Tags", systemImage: "tag")
+                    LabeledContent("Your household") {
+                        Text(household.name)
+                            .font(.wbBody)
+                            .foregroundStyle(WBColor.ink)
+                    }
+                    LabeledContent("Household ID") {
+                        Text(household.id)
+                            .font(.wbMonoCaption)
+                            .foregroundStyle(WBColor.muted)
                     }
                 } header: {
-                    Rubric(text: "inventory")
-                }
-
-                Section {
-                    NavigationLink {
-                        HomeLocationSettingsView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Home location", systemImage: "location")
-                            Text(homeLocationSummary)
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
-                        }
-                    }
-                    NavigationLink {
-                        NotificationsSettingsView()
-                    } label: {
-                        Label("Notifications", systemImage: "bell")
-                    }
-                } header: {
-                    Rubric(text: "garden")
-                }
-
-                if !ServerRetirement.isRetired {
-                    Section {
-                        NavigationLink {
-                            ServerSettingsView()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Server", systemImage: "server.rack")
-                                Text(appEnv.preferences.effectiveServerURL.absoluteString)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(HerbColor.inkSoft)
-                                    .lineLimit(1)
-                            }
-                        }
-                    } header: {
-                        Rubric(text: "server")
-                    }
-                }
-
-                Section {
-                    NavigationLink {
-                        AIProviderSettingsView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("AI provider", systemImage: "sparkles")
-                            Text(appEnv.preferences.aiProvider.displayName)
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
-                        }
-                    }
-                    NavigationLink {
-                        APIKeysSettingsView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("API keys", systemImage: "key.fill")
-                            Text(apiKeysStatusText)
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
-                        }
-                    }
-                    if !ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled {
-                        NavigationLink {
-                            SubscriptionSettingsView()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label("Subscription", systemImage: "creditcard")
-                                Text(subscriptionStatusText)
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
-                            }
-                        }
-                    }
-                } header: {
-                    Rubric(text: "configuration")
-                }
-
-                if case .signedIn(_, let household) = auth.state {
-                    Section {
-                        LabeledContent("Name", value: household.name)
-                        LabeledContent("ID") {
-                            Text(household.id)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(HerbColor.inkSoft)
-                        }
-                    } header: {
-                        Rubric(text: "household")
-                    }
-                }
-
-                if appEnv.pausedDeletionCheckpointCount > 0 {
-                    Section {
-                        statusRow(
-                            "Account deletion",
-                            "\(appEnv.pausedDeletionCheckpointCount) pending checkpoint(s) paused"
-                        )
-                    } header: {
-                        Rubric(text: "diagnostics")
-                    }
-                }
-
-                Section {
-                    Button {
-                        guard !isSyncingNow else { return }
-                        isSyncingNow = true
-                        syncedJustNow = false
-                        syncToken += 1
-                        let token = syncToken
-                        Task {
-                            await appEnv.syncIfPossible()
-                            isSyncingNow = false
-                            // Only show the success ✓ when the pass actually succeeded (no error
-                            // surfaced on either path) — a green check next to an error banner lies.
-                            // N1: with CloudKit on, only a completed CloudKit pass counts; none
-                            // runs while paused (`cloudKit` is nil then).
-                            let cloudKitClean = !FeatureFlags.cloudKitHouseholdSyncEnabled
-                                || (appEnv.cloudKit.map { $0.lastPassCompleted && $0.lastHumanizedError == nil } ?? false)
-                            let clean = appEnv.sync.lastError == nil && cloudKitClean
-                            syncedJustNow = clean
-                            try? await Task.sleep(nanoseconds: 2_500_000_000)
-                            if syncToken == token { syncedJustNow = false }   // don't clear a newer tap's ✓
-                        }
-                    } label: {
-                        HStack {
-                            Label("Sync now", systemImage: "arrow.clockwise")
-                            Spacer()
-                            if isSyncingNow {
-                                ProgressView()
-                            } else if syncedJustNow {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(HerbColor.sage)
-                            }
-                        }
-                    }
-                    .disabled(isSyncingNow)
-                    if let err = appEnv.sync.lastError {
-                        Text(err)
-                            .font(.footnote)
-                            .foregroundStyle(HerbColor.rose)
-                    }
-                    if FeatureFlags.cloudKitHouseholdSyncEnabled {
-                        // Visible CloudKit status so the beta test isn't blind.
-                        Button {
-                            checkingICloud = true
-                            Task {
-                                let s = await HouseholdCloudCoordinator.currentAccountStatusText()
-                                await MainActor.run { iCloudStatus = s; checkingICloud = false }
-                            }
-                        } label: {
-                            Label(checkingICloud ? "Checking iCloud…" : "Check iCloud account", systemImage: "person.icloud")
-                        }
-                        .disabled(checkingICloud)
-                        if let iCloudStatus {
-                            statusRow("iCloud account", iCloudStatus)
-                        }
-                        if let ck = appEnv.cloudKit {
-                            statusRow("Initial upload", ck.initialUploadComplete ? "complete" : "pending")
-                            if ck.isSyncing { statusRow("CloudKit", "syncing…") }
-                            if let at = ck.lastSyncedAt {
-                                statusRow("Last CloudKit sync", at.formatted(date: .omitted, time: .standard))
-                            }
-                            statusRow("Records synced this session", "\(ck.zoneRecordCount)")
-                            if let acct = ck.accountStatusText { statusRow("Account (at first sync)", acct) }
-                            if let err = ck.lastHumanizedError {
-                                Text("CloudKit: \(err)")
-                                    .font(.footnote)
-                                    .foregroundStyle(HerbColor.rose)
-                            }
-                            if let detail = ck.lastErrorDetail {
-                                Text(detail)
-                                    .font(.caption2)
-                                    .foregroundStyle(HerbColor.inkFaint)
-                            }
-                        } else if let reason = appEnv.cloudKitPauseReason {
-                            Text("iCloud sync is paused — \(reason).")
-                                .font(.footnote)
-                                .foregroundStyle(HerbColor.inkFaint)
-                        } else {
-                            Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
-                                .font(.footnote)
-                                .foregroundStyle(HerbColor.inkFaint)
-                        }
-
-                        // Cross-account sharing (CloudKit). Owner shares the household zone via the
-                        // system share sheet; a participant who has joined sees a Leave affordance.
-                        if appEnv.isViewingSharedHousehold {
-                            statusRow("Household", "shared with you")
-                            if let scopeKey = appEnv.participantRecoveryScopeKey {
-                                let scopedPendingCount = pendingRecoveryItems.filter { $0.scopeKey == scopeKey }.count
-                                if scopedPendingCount > 0 {
-                                    Button {
-                                        showingJournalRecoveryReview = true
-                                    } label: {
-                                        Label("Journal items need review (\(scopedPendingCount))", systemImage: "tray.and.arrow.down")
-                                    }
-                                }
-                            }
-                            Button(role: .destructive) {
-                                Task { await appEnv.leaveSharedHouseholdSurfacingErrors() }
-                            } label: {
-                                Label("Leave shared garden", systemImage: "rectangle.portrait.and.arrow.right")
-                            }
-                            // N1: leaving needs a confirmed iCloud identity (CloudKit not paused).
-                            .disabled(!appEnv.canUseCloudKit)
-                        } else {
-                            Button {
-                                guard !preparingShare else { return }
-                                preparingShare = true
-                                Task {
-                                    let pkg = await appEnv.prepareOwnerShare()
-                                    preparingShare = false
-                                    if let pkg {
-                                        CloudSharingPresenter.present(share: pkg.share, container: pkg.container, title: "Seedkeep garden")
-                                    }
-                                }
-                            } label: {
-                                HStack {
-                                    Label("Share garden via iCloud", systemImage: "person.crop.circle.badge.plus")
-                                    Spacer()
-                                    if preparingShare { ProgressView() }
-                                }
-                            }
-                            .disabled(preparingShare)
-                        }
-                    }
-                } header: {
-                    Rubric(text: "sync")
-                }
-
-                Section {
-                    Button {
-                        if let newest = ChangelogData.releases.map(\.build).max() {
-                            WhatsNewGate.markSeen(build: newest)
-                        }
-                        showingWhatsNew = true
-                    } label: {
-                        HStack {
-                            Label("What's New", systemImage: "sparkles")
-                            Spacer()
-                            if whatsNewUnseen {
-                                Circle().fill(HerbColor.rose).frame(width: 8, height: 8)
-                            }
-                        }
-                    }
-                } header: {
-                    Rubric(text: "changelog")
-                }
-
-                Section {
-                    Text("Data sources")
-                        .font(HerbFont.smallCaps(size: 10))
-                        .tracking(1.4)
-                        .foregroundStyle(HerbColor.sepia)
-                    Text("USDA ARS Plant Hardiness Zone Map (2023)")
-                    Text("U.S. Census Bureau")
-                    Text("Frost dates estimated from the hardiness zone")
-                        .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.inkSoft)
-                    // App Review §5.1.1(i): the privacy policy must be reachable in the app.
-                    Link("Privacy Policy", destination: URL(string: "https://seedkeep.app/privacy")!)
-                    Link("Support", destination: URL(string: "https://seedkeep.app/support")!)
-                } header: {
-                    Rubric(text: "about")
-                }
-
-                Section {
-                    Text("SEEDKEEP · BUILD \(buildRoman) · ANNO MMXXVI")
-                        .font(HerbFont.smallCaps(size: 8))
-                        .tracking(1.5)
-                        .foregroundStyle(HerbColor.inkFaint)
-                        .frame(maxWidth: .infinity)
-                        .listRowBackground(Color.clear)
+                    WBSectionHeader("Account")
                 }
             }
-            .scrollContentBackground(.hidden)
+
+            Section {
+                NavigationLink {
+                    LocationsView()
+                } label: {
+                    Label("Locations", systemImage: "tray")
+                }
+                NavigationLink {
+                    TagsView()
+                } label: {
+                    Label("Tags", systemImage: "tag")
+                }
+            } header: {
+                WBSectionHeader("Seeds")
+            }
+
+            Section {
+                NavigationLink {
+                    HomeLocationSettingsView()
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Home location", systemImage: "location")
+                        Text(homeLocationSummary)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                NavigationLink {
+                    NotificationsSettingsView()
+                } label: {
+                    Label("Notifications", systemImage: "bell")
+                }
+            } header: {
+                WBSectionHeader("Home and alerts")
+            }
+
+            if !ServerRetirement.isRetired {
+                Section {
+                    NavigationLink {
+                        ServerSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Server", systemImage: "server.rack")
+                            Text(appEnv.preferences.effectiveServerURL.absoluteString)
+                                .font(.wbMonoCaption)
+                                .foregroundStyle(WBColor.muted)
+                                .lineLimit(1)
+                        }
+                    }
+                } header: {
+                    WBSectionHeader("Server")
+                }
+            }
+
+            Section {
+                NavigationLink {
+                    AIProviderSettingsView()
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("AI provider", systemImage: "sparkles")
+                        Text(appEnv.preferences.aiProvider.displayName)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                NavigationLink {
+                    APIKeysSettingsView()
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("API keys", systemImage: "key.fill")
+                        Text(apiKeysStatusText)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                    }
+                }
+                if !ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled {
+                    NavigationLink {
+                        SubscriptionSettingsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Subscription", systemImage: "creditcard")
+                            Text(subscriptionStatusText)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
+                        }
+                    }
+                }
+            } header: {
+                WBSectionHeader("AI")
+            }
+
+            Section {
+                Button {
+                    guard !isSyncingNow else { return }
+                    isSyncingNow = true
+                    syncedJustNow = false
+                    syncToken += 1
+                    let token = syncToken
+                    Task {
+                        await appEnv.syncIfPossible()
+                        isSyncingNow = false
+                        // Only show the success ✓ when the pass actually succeeded (no error
+                        // surfaced on either path) — a green check next to an error banner lies.
+                        // N1: with CloudKit on, only a completed CloudKit pass counts; none
+                        // runs while paused (`cloudKit` is nil then).
+                        let cloudKitClean = !FeatureFlags.cloudKitHouseholdSyncEnabled
+                            || (appEnv.cloudKit.map { $0.lastPassCompleted && $0.lastHumanizedError == nil } ?? false)
+                        let clean = appEnv.sync.lastError == nil && cloudKitClean
+                        syncedJustNow = clean
+                        try? await Task.sleep(nanoseconds: 2_500_000_000)
+                        if syncToken == token { syncedJustNow = false }   // don't clear a newer tap's ✓
+                    }
+                } label: {
+                    HStack {
+                        Label("Sync now", systemImage: "arrow.clockwise")
+                        Spacer()
+                        if isSyncingNow {
+                            ProgressView()
+                        } else if syncedJustNow {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(WBColor.accent)
+                        }
+                    }
+                }
+                .disabled(isSyncingNow)
+                if let err = appEnv.sync.lastError {
+                    errorRow(err)
+                }
+                if FeatureFlags.cloudKitHouseholdSyncEnabled {
+                    // Visible CloudKit status so the beta test isn't blind.
+                    Button {
+                        checkingICloud = true
+                        Task {
+                            let s = await HouseholdCloudCoordinator.currentAccountStatusText()
+                            await MainActor.run { iCloudStatus = s; checkingICloud = false }
+                        }
+                    } label: {
+                        Label(checkingICloud ? "Checking iCloud…" : "Check iCloud account", systemImage: "person.icloud")
+                    }
+                    .disabled(checkingICloud)
+                    if let iCloudStatus {
+                        statusRow("iCloud account", iCloudStatus)
+                    }
+                    if let ck = appEnv.cloudKit {
+                        statusRow("Initial upload", ck.initialUploadComplete ? "complete" : "pending")
+                        if ck.isSyncing { statusRow("CloudKit", "syncing…") }
+                        if let at = ck.lastSyncedAt {
+                            statusRow("Last CloudKit sync", at.formatted(date: .omitted, time: .standard))
+                        }
+                        statusRow("Records synced this session", "\(ck.zoneRecordCount)")
+                        if let acct = ck.accountStatusText { statusRow("Account (at first sync)", acct) }
+                        if let err = ck.lastHumanizedError {
+                            errorRow("CloudKit: \(err)")
+                        }
+                        if let detail = ck.lastErrorDetail {
+                            Text(detail)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
+                        }
+                    } else if let reason = appEnv.cloudKitPauseReason {
+                        Text("iCloud sync is paused — \(reason).")
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
+                    } else {
+                        Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
+                    }
+
+                    // Cross-account sharing (CloudKit). Owner shares the household zone via the
+                    // system share sheet; a participant who has joined sees a Leave affordance.
+                    if appEnv.isViewingSharedHousehold {
+                        statusRow("Household", "shared with you")
+                        if let scopeKey = appEnv.participantRecoveryScopeKey {
+                            let scopedPendingCount = pendingRecoveryItems.filter { $0.scopeKey == scopeKey }.count
+                            if scopedPendingCount > 0 {
+                                Button {
+                                    showingJournalRecoveryReview = true
+                                } label: {
+                                    Label("Journal items need review (\(scopedPendingCount))", systemImage: "tray.and.arrow.down")
+                                }
+                            }
+                        }
+                        Button(role: .destructive) {
+                            Task { await appEnv.leaveSharedHouseholdSurfacingErrors() }
+                        } label: {
+                            Label("Leave shared garden", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        // N1: leaving needs a confirmed iCloud identity (CloudKit not paused).
+                        .disabled(!appEnv.canUseCloudKit)
+                    } else {
+                        Button {
+                            guard !preparingShare else { return }
+                            preparingShare = true
+                            Task {
+                                let pkg = await appEnv.prepareOwnerShare()
+                                preparingShare = false
+                                if let pkg {
+                                    CloudSharingPresenter.present(share: pkg.share, container: pkg.container, title: "Seedkeep garden")
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Label("Share garden via iCloud", systemImage: "person.crop.circle.badge.plus")
+                                Spacer()
+                                if preparingShare { ProgressView() }
+                            }
+                        }
+                        .disabled(preparingShare)
+                    }
+                }
+            } header: {
+                WBSectionHeader("Sync")
+            }
+
+            if appEnv.pausedDeletionCheckpointCount > 0 {
+                Section {
+                    statusRow(
+                        "Account deletion",
+                        "\(appEnv.pausedDeletionCheckpointCount) pending checkpoint(s) paused"
+                    )
+                } header: {
+                    WBSectionHeader("Diagnostics")
+                }
+            }
+
+            Section {
+                Button {
+                    if let newest = ChangelogData.releases.map(\.build).max() {
+                        WhatsNewGate.markSeen(build: newest)
+                    }
+                    showingWhatsNew = true
+                } label: {
+                    HStack {
+                        Label("What's New", systemImage: "sparkles")
+                        Spacer()
+                        if whatsNewUnseen {
+                            Circle().fill(WBColor.warn).frame(width: 8, height: 8)
+                        }
+                    }
+                }
+
+                Text("Data sources")
+                    .font(.wbCaption.weight(.semibold))
+                    .foregroundStyle(WBColor.muted)
+                Text("USDA ARS Plant Hardiness Zone Map (2023)")
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.ink)
+                Text("U.S. Census Bureau")
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.ink)
+                Text("Frost dates estimated from the hardiness zone")
+                    .font(.wbCaption)
+                    .foregroundStyle(WBColor.muted)
+                // App Review §5.1.1(i): the privacy policy must be reachable in the app.
+                Link("Privacy Policy", destination: URL(string: "https://seedkeep.app/privacy")!)
+                Link("Support", destination: URL(string: "https://seedkeep.app/support")!)
+                if let versionText = SettingsText.versionText(version: AppInfo.currentVersion, build: AppInfo.currentBuild) {
+                    Text(versionText)
+                        .font(.wbMonoCaption)
+                        .foregroundStyle(WBColor.muted)
+                }
+            } header: {
+                WBSectionHeader("About")
+            }
         }
-        .navigationTitle("")
+        .wbForm()
+        .navigationTitle("Settings")
+        .publishesAssistantContext(pageType: "settings")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
         #endif
         .sheet(isPresented: $showingJournalRecoveryReview) {
             NavigationStack {
@@ -349,52 +349,13 @@ struct SettingsContent: View {
         }
     }
 
-    // MARK: - Build stamp
-
-    /// Reads `CFBundleVersion` (the build number set by `release.sh`) and
-    /// converts it to Roman numerals for the footer stamp. Falls back to the
-    /// raw Arabic number if the build value isn't an integer, and to "?" if
-    /// the Info.plist entry is missing entirely — never crashes.
-    private var buildRoman: String {
-        let raw = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
-        guard let n = Int(raw), n > 0 else { return raw.isEmpty ? "?" : raw }
-        return HerbRomanNumeral.string(for: n, lowercase: false)
-    }
+    // MARK: - Helpers
 
     /// True when the newest authored release is newer than what the user has
     /// last opened — drives the small unseen dot on the What's New row.
     private var whatsNewUnseen: Bool {
         guard let newest = ChangelogData.releases.map(\.build).max() else { return false }
         return newest > (WhatsNewGate.lastSeenBuild() ?? .max)
-    }
-
-    // MARK: - Hero block
-
-    @ViewBuilder
-    private var herbHero: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            FolioStrip(section: "Order", folio: 1)
-                .padding(.horizontal, -16)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("The Order")
-                    .font(HerbFont.display(size: 38))
-                    .foregroundStyle(HerbColor.ink)
-                Text(orderSubtitle)
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
-            }
-            ScholarRule(verticalMargin: 8)
-        }
-    }
-
-    private var orderSubtitle: String {
-        if case .signedIn(_, let household) = auth.state {
-            let zip = appEnv.preferences.homeZip ?? ""
-            let suffix = zip.isEmpty ? "" : " · \(zip)"
-            return "House of \(household.name)\(suffix)"
-        }
-        return "House awaiting steward"
     }
 
     private var homeLocationSummary: String {
@@ -419,16 +380,4 @@ struct SettingsContent: View {
         appEnv.preferences.cachedTier ?? "Tap to view"
     }
 
-}
-
-/// Thin standalone wrapper — adds a `NavigationStack` around `SettingsContent`
-/// for any direct-navigation use (e.g. previews, deep-link entry points).
-/// When `SettingsContent` is embedded in `YouView`'s existing stack, use
-/// `SettingsContent` directly to avoid a double navigation bar.
-struct SettingsView: View {
-    var body: some View {
-        NavigationStack {
-            SettingsContent()
-        }
-    }
 }

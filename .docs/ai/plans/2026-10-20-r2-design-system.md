@@ -45,8 +45,9 @@ has its own review and gate.
     - ServerSettingsView, SubscriptionSettingsView, AccountDeletionFlowView
   - **Code gated off in live files:** inside `if !ServerRetirement.isRetired` or
     `if FeatureFlags.plantPetsEnabled` blocks, listed in the final review.
-  - **Unmigrated live screens:** LibraryView, TodayView, YouView, SettingsView
-    (`SettingsContent`), until R2b migrates them.
+  - **Unmigrated live screens:** none after R2b. LibraryView, TodayView
+    (outside its pet gate) and SettingsView (`SettingsContent`) are migrated.
+    YouView is a dead file (no references) until N3.
 
   A **reference audit** lists every Herbarium symbol in live files and maps
   each one to an allowlist entry. Anything unmapped fails the phase.
@@ -588,3 +589,42 @@ Files: `BedDetailView`, `AttachedEntityPicker`, `SeedsInspector`,
 - **Accessibility:** the pure label helpers are tested. A VoiceOver pass
   with Accessibility Inspector is R2c acceptance.
 - **Reviews:** Opus and Sol on the merged diff.
+
+## R2b review and screenshot results (2026-10-20)
+
+- **Opus review:** approve with fixes. Applied:
+  - **Seeds:**
+    - The state filter switches on `isAccessibilitySize` rather than
+      `ViewThatFits`. Segmented-control text doesn't grow, so the fallback
+      never triggered.
+    - The menu shows only the value, and the custom accessibility value is
+      dropped.
+    - A blank type and a literal "Untyped" type share the last group, as the
+      grid did.
+    - The counts go through a tested `libraryStateCounts(_:search:)`.
+  - **Today:** due rows use `displayName`. The fixture's seedless note is
+    overdue, so the six-row cut always keeps it.
+  - **Settings:** publishes `pageType: "settings"` assistant context.
+  - **Recorded, not changed:** BedDetailView's "Companions" header sits
+    inside the pet gate (allowlisted).
+- **Fixed after screenshots** (iPhone, sample garden, default and largest
+  sizes):
+  - Today's daylight readings and due rows stack at accessibility sizes,
+    instead of breaking words mid-word.
+  - Seed rows put the verdict under the name at accessibility sizes, and sit
+    on the page background and gutter.
+- **Checked:**
+  - Today: daylight, due rows (overdue and today, the seedless note), the
+    journal panel.
+  - Seeds: segmented filter, rows, grouped, no matches with counts following
+    the search, the menu filter at the largest size.
+  - Settings: every section, the version row, the largest size.
+  - Garden; bed detail headers; journal entry ("Attached to" once, no blank
+    photo strip).
+- **Open:**
+  - **Regular-width iPad (Today, Settings route, bed detail, Add Seed):**
+    driving the iPad simulator needs the owner's approval in the simulator
+    panel. A static capture showed the R1 Seeds table.
+  - **R1 problem for R2c:** in iPad portrait, with the sidebar and inspector
+    open, the table's Name column scrolls out of view.
+  - **Mac:** the visual check stays with the owner.

@@ -153,8 +153,7 @@ struct WorkbenchShell: View {
         case .today: TodayView()
         case .garden: GardenView()
         case .journal: JournalView()
-        // YouView, not SettingsView: it links to Settings and holds Sign out and Delete account.
-        case .settings: YouView()
+        case .settings: NavigationStack { SettingsContent() }
         }
     }
 }

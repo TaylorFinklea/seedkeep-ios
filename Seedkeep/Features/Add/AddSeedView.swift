@@ -53,23 +53,8 @@ struct AddSeedView: View {
 
     var body: some View {
         NavigationStack {
+            // The navigation title names the screen; there is no second in-content heading.
             Form {
-                Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Seeds")
-                            .font(.wbSectionLabel)
-                            .tracking(0.6)
-                            .foregroundStyle(WBColor.muted)
-                            .textCase(.uppercase)
-                        Text(prefill == nil ? "Add seed" : "Review the scan")
-                            .font(.wbTitle)
-                            .foregroundStyle(WBColor.ink)
-                            .accessibilityAddTraits(.isHeader)
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
-                    .listRowSeparator(.hidden)
-                }
                 if prefill != nil {
                     Section { prefillBanner }
                 }

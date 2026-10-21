@@ -71,13 +71,12 @@ struct JournalEntryView: View {
             } header: {
                 WBSectionHeader("entry")
             }
+            // No header: the picker's own "Attached to" label names the row.
             Section {
                 AttachedEntityPicker(
                     seedID: $seedID,
                     bedID: $bedID,
                     plantingEventID: $plantingEventID)
-            } header: {
-                WBSectionHeader("attached to")
             }
 
             Section {
@@ -86,13 +85,16 @@ struct JournalEntryView: View {
                         .font(.wbFootnote)
                         .foregroundStyle(WBColor.muted)
                 } else {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(photos) { photo in
-                                photoThumb(photo)
+                    // The strip appears only once there are photos, so an empty one leaves no blank row.
+                    if !photos.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(photos) { photo in
+                                    photoThumb(photo)
+                                }
                             }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
                     }
                     if let entryID {
                         PhotosPicker(

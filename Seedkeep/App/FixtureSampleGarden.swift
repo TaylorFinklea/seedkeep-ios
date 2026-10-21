@@ -239,6 +239,15 @@ enum FixtureSampleGarden {
         PlantingSpec(kind: .sowing, bed: 1, seed: 17, planned: -2, done: true, position: (2.0, 3.0), notes: nil),
         PlantingSpec(kind: .harvest, bed: 1, seed: 1, planned: 14, done: false, position: (1.0, 1.0), notes: nil),
         PlantingSpec(kind: .sowing, bed: 1, seed: 11, planned: 7, done: false, position: (2.5, 5.0), notes: nil),
+        // Due now: three overdue, then due today, seven in all so the six-row queue is cut. The note
+        // has no seed, so its row reads "Untitled seed"; it is overdue so it always makes the cut.
+        PlantingSpec(kind: .transplant, bed: 0, seed: 0, planned: -4, done: false, position: nil, notes: nil),
+        PlantingSpec(kind: .note, bed: 1, seed: nil, planned: -2, done: false, position: nil, notes: nil),
+        PlantingSpec(kind: .sowing, bed: 1, seed: 4, planned: -1, done: false, position: nil, notes: nil),
+        PlantingSpec(kind: .harvest, bed: 0, seed: 3, planned: 0, done: false, position: nil, notes: nil),
+        PlantingSpec(kind: .sowing, bed: 0, seed: 5, planned: 0, done: false, position: nil, notes: nil),
+        PlantingSpec(kind: .transplant, bed: 0, seed: 9, planned: 0, done: false, position: nil, notes: nil),
+        PlantingSpec(kind: .sowing, bed: 1, seed: 2, planned: 0, done: false, position: nil, notes: nil),
     ]
 
     // MARK: - Journal
@@ -279,6 +288,8 @@ enum FixtureSampleGarden {
                         ChecklistSpec(text: "Sow peppers indoors", done: true),
                         ChecklistSpec(text: "Set up the grow light", done: true),
                     ]),
+        JournalSpec(age: 0, body: "Second row of lettuce sown under the fence. Soil is warm enough for the radishes.",
+                    seed: 2, bed: 0, checklist: []),
     ]
 
     // MARK: - Growing info

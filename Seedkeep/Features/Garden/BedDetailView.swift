@@ -61,7 +61,7 @@ struct BedDetailView: View {
                             .listRowSeparator(.hidden)
                         }
                         layoutSection(bed)
-                    Section("Bed") {
+                    Section {
                         LabeledContent("Name", value: bed.name)
                         if let desc = bed.bedDescription, !desc.isEmpty {
                             VStack(alignment: .leading, spacing: 2) {
@@ -72,6 +72,8 @@ struct BedDetailView: View {
                         if let dims = formatDims(bed) {
                             LabeledContent("Dimensions", value: dims)
                         }
+                    } header: {
+                        WBSectionHeader("Bed")
                     }
 
                     eventSection(title: "Overdue", events: overdueEvents, defaultEmptyHidden: true)
@@ -164,7 +166,7 @@ struct BedDetailView: View {
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
             } header: {
-                Text("Layout")
+                WBSectionHeader("Layout")
             } footer: {
                 Text(placedCount(for: bed) == 0
                      ? "Add a position to a planting event to see it on the layout."
@@ -259,7 +261,7 @@ struct BedDetailView: View {
     @ViewBuilder
     private func eventSection(title: String, events: [LocalPlantingEvent], defaultEmptyHidden: Bool) -> some View {
         if !events.isEmpty {
-            Section(title) {
+            Section {
                 ForEach(events.sorted(by: sortKey)) { event in
                     EventRow(event: event, seedName: seedName(for: event))
                         .swipeActions {
@@ -280,12 +282,16 @@ struct BedDetailView: View {
                             .accessibilityLabel("Delete planting event")
                         }
                 }
+            } header: {
+                WBSectionHeader(title)
             }
         } else if !defaultEmptyHidden {
-            Section(title) {
+            Section {
                 Text("Nothing planned yet.")
                     .font(.callout)
                     .foregroundStyle(WBColor.muted)
+            } header: {
+                WBSectionHeader(title)
             }
         }
     }

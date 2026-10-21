@@ -93,7 +93,52 @@ enum SeedSortValue: Equatable, Sendable {
     }
 }
 
+struct SeedsTableTypeGroup: Identifiable, Sendable {
+    let rawType: String?
+    let rows: [SeedTableRow]
+
+    var id: String { rawType.map { "typed:\($0)" } ?? "untyped" }
+    var title: String { rawType ?? "Untyped" }
+}
+
 enum SeedsTableModel {
+    /// Most recently updated rows first, with a stable id tie-break.
+    static func recentFirst(_ rows: [SeedTableRow]) -> [SeedTableRow] {
+        rows.sorted {
+            if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+            return $0.id < $1.id
+        }
+    }
+
+    /// Groups by trimmed type without merging case-distinct types. Blank types, and a type that is
+    /// literally "Untyped", share the last group, as the card grid did.
+    static func groupedByType(_ rows: [SeedTableRow]) -> [SeedsTableTypeGroup] {
+        let buckets = Dictionary(grouping: rows) { row in
+            let trimmed = row.type.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty || trimmed == "Untyped" ? nil : trimmed
+        }
+        return buckets.map { type, groupedRows in
+            SeedsTableTypeGroup(rawType: type, rows: recentFirst(groupedRows))
+        }.sorted { lhs, rhs in
+            if lhs.rawType == nil { return false }
+            if rhs.rawType == nil { return true }
+            let comparison = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            return lhs.title < rhs.title
+        }
+    }
+
+    /// Counts for the compact Seeds subtitle.
+    static func libraryCounts(_ rows: [SeedTableRow]) -> (total: Int, active: Int) {
+        (rows.count, rows.filter { $0.state == SeedStateFilter.active.rawValue }.count)
+    }
+
+    /// Per-state counts for the compact Seeds filter: the search applies, the state and type
+    /// filters don't, so each option shows how many matches it would list.
+    static func libraryStateCounts(_ rows: [SeedTableRow], search: String) -> [SeedStateFilter: Int] {
+        counts(rows, filter: SeedsFilter(stateTab: .all, type: nil, search: search))
+    }
+
     /// Name ascending, the table's first sort.
     static var defaultSortOrder: [KeyPathComparator<SeedTableRow>] {
         [KeyPathComparator(\SeedTableRow.name, order: .forward)]

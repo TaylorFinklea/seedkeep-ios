@@ -2,60 +2,98 @@ import SwiftUI
 import SwiftData
 import SeedkeepKit
 
-/// Library / Hortulus — "Pressed specimens".
-///
-/// A herbarium-styled grid of the user's seeds, filtered by lifecycle
-/// state. Each seed renders as a paper specimen card with corner tape,
-/// Roman specimen number, pressed-plant illustration, binomial / name,
-/// and a verdict-dot provenance footer.
 struct LibraryView: View {
     @Environment(AppEnvironment.self) private var appEnv
-    @Environment(\.modelContext) private var modelContext
 
-    @State private var selectedState: SeedState = .active
-    @State private var searchText: String = ""
+    @State private var selectedState: SeedStateFilter = .active
+    @State private var searchText = ""
     @State private var showingAdd = false
     @State private var showingScan = false
     @State private var showingRandom = false
     @State private var scanPrefill: AddSeedView.Prefill?
-    @AppStorage("library.groupByType") private var groupByType: Bool = false
+    @AppStorage("library.groupByType") private var groupByType = false
 
-    @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var allSeeds: [LocalSeed]
+    @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var queriedSeeds: [LocalSeed]
+    @Query private var queriedTags: [LocalTag]
+    @Query private var queriedLocations: [LocalLocation]
+
+    @ScaledMetric(relativeTo: .caption) private var verdictDotSize: CGFloat = 7
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        let householdID = appEnv.activeGardenHouseholdID
+        let seeds = queriedSeeds.filter { $0.householdID == householdID }
+        let tags = queriedTags.filter { $0.householdID == householdID && $0.deletedAt == nil }
+        let locations = queriedLocations.filter { $0.householdID == householdID && $0.deletedAt == nil }
+        let recommendations = Dictionary(
+            seeds.compactMap { seed in appEnv.recommendations.recommendation(for: seed).map { (seed.id, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let rows = SeedTableRow.rows(
+            seeds: seeds, locations: locations, tags: tags, recommendations: recommendations
+        )
+        let recentRows = SeedsTableModel.recentFirst(rows)
+        let counts = SeedsTableModel.libraryStateCounts(rows, search: searchText)
+        let selectedRows = recentRows.filter { $0.state == selectedState.rawValue }
+        let visibleRows = SeedsTableModel.filtered(
+            recentRows,
+            SeedsFilter(stateTab: selectedState, type: nil, search: searchText)
+        )
         NavigationStack {
-            ZStack {
-                VellumBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        FolioStrip(section: "Hortulus", folio: max(activeCount, 1))
+            List {
+                Section {
+                    WBScreenTitle("Seeds", subtitle: SeedsListText.subtitle(
+                        total: rows.count,
+                        active: SeedsTableModel.libraryCounts(rows).active
+                    ))
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
 
-                        headingBlock
-                            .padding(.horizontal, HerbSpace.titleGutter)
-                            .padding(.top, 2)
+                Section {
+                    statePicker(counts: counts)
+                        .listRowInsets(EdgeInsets(top: 8, leading: WBMetrics.screenGutter, bottom: 8, trailing: WBMetrics.screenGutter))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
 
-                        lifecycleStrip
-                            .padding(.horizontal, HerbSpace.titleGutter)
-                            .padding(.top, 12)
-
-                        ScholarRule(verticalMargin: 4)
-                            .padding(.horizontal, HerbSpace.gutter)
-
-                        SpecimenGrid(
-                            state: selectedState,
-                            householdID: appEnv.activeGardenHouseholdID,
-                            searchText: searchText,
-                            groupByType: groupByType
-                        )
-                        .padding(.horizontal, 18)
-                        .padding(.top, 8)
-                        .padding(.bottom, 96)
+                if rows.isEmpty && appEnv.isSyncingForDisplay {
+                    Section {
+                        ProgressView("Syncing…")
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
+                            .frame(maxWidth: .infinity, minHeight: WBMetrics.minTouchTarget)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
+                } else if visibleRows.isEmpty {
+                    Section {
+                        emptyState(rowsInSelectedState: selectedRows, searchMatches: visibleRows)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
+                } else if groupByType {
+                    ForEach(SeedsTableModel.groupedByType(visibleRows)) { group in
+                        Section {
+                            ForEach(group.rows) { row in
+                                seedRow(row)
+                            }
+                        } header: {
+                            WBSectionHeader(group.title)
+                        }
+                    }
+                } else {
+                    Section {
+                        ForEach(visibleRows) { row in
+                            seedRow(row)
+                        }
                     }
                 }
-                .refreshable {
-                    await appEnv.syncIfPossible()
-                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background { WBScreenBackground() }
             .navigationTitle("")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -65,6 +103,7 @@ struct LibraryView: View {
             #else
             .searchable(text: $searchText, prompt: "Search seeds")
             #endif
+            .refreshable { await appEnv.syncIfPossible() }
             .publishesAssistantContext(pageType: "library")
             .toolbar {
                 ToolbarItem(placement: .platformLeading) {
@@ -72,22 +111,32 @@ struct LibraryView: View {
                         Toggle("Group by type", isOn: $groupByType)
                     } label: {
                         Image(systemName: groupByType ? "rectangle.3.group" : "line.3.horizontal")
+                            .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
                     }
                     .accessibilityLabel("Library options")
                 }
                 ToolbarItem(placement: .platformTrailing) {
-                    Button { showingRandom = true } label: { Image(systemName: "shuffle") }
-                        .accessibilityLabel("Random pick")
+                    Button { showingRandom = true } label: {
+                        Image(systemName: "shuffle")
+                            .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                    }
+                    .accessibilityLabel("Random pick")
                 }
                 if PlatformCapabilities.supportsCameraScanning {
                     ToolbarItem(placement: .platformTrailing) {
-                        Button { showingScan = true } label: { Image(systemName: "viewfinder") }
-                            .accessibilityLabel("Scan packet")
+                        Button { showingScan = true } label: {
+                            Image(systemName: "viewfinder")
+                                .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                        }
+                        .accessibilityLabel("Scan packet")
                     }
                 }
                 ToolbarItem(placement: .platformTrailing) {
-                    Button { showingAdd = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("Add seed")
+                    Button { showingAdd = true } label: {
+                        Image(systemName: "plus")
+                            .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                    }
+                    .accessibilityLabel("Add seed")
                 }
             }
             .sheet(isPresented: $showingAdd) { AddSeedView() }
@@ -108,81 +157,103 @@ struct LibraryView: View {
             )) { box in
                 AddSeedView(prefill: box.prefill)
             }
-        }
-    }
-
-    // MARK: - Heading
-
-    @ViewBuilder
-    private var headingBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Pressed\nspecimens")
-                .font(HerbFont.display(size: 42))
-                .foregroundStyle(HerbColor.ink)
-                .lineSpacing(0)
-            Text("\(activeSeeds.count) \(activeSeeds.count == 1 ? "specimen" : "specimens"), of which \(activeCount) in the active garden")
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-        }
-    }
-
-    private var activeSeeds: [LocalSeed] {
-        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
-        return allSeeds.filter { $0.householdID == householdID }
-    }
-
-    private var activeCount: Int {
-        activeSeeds.filter { $0.stateRaw == SeedState.active.rawValue }.count
-    }
-
-    // MARK: - Lifecycle filter
-
-    @ViewBuilder
-    private var lifecycleStrip: some View {
-        HStack(spacing: 0) {
-            ForEach(SeedState.allCases, id: \.self) { state in
-                lifecycleButton(state)
-                    .frame(maxWidth: .infinity)
+            .navigationDestination(for: String.self) { seedID in
+                SeedDetailView(seedID: seedID)
             }
         }
     }
 
+    /// Segmented at standard sizes. At accessibility sizes a menu, because segmented control text
+    /// doesn't grow with Dynamic Type. Each option reads its title and count; the control itself
+    /// announces the selection.
     @ViewBuilder
-    private func lifecycleButton(_ state: SeedState) -> some View {
-        let active = state == selectedState
-        let count = activeSeeds.filter { $0.stateRaw == state.rawValue }.count
-        Button {
-            selectedState = state
-        } label: {
-            VStack(spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(label(state))
-                        .font(HerbFont.smallCaps(size: 10))
-                        .tracking(1.2)
-                        .foregroundStyle(active ? HerbColor.ink : HerbColor.inkSoft)
-                        .textCase(.uppercase)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                    Text("\(count)")
-                        .font(HerbFont.bodyItalic(size: 10))
-                        .foregroundStyle(HerbColor.inkSoft)
+    private func statePicker(counts: [SeedStateFilter: Int]) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            Picker("Seed state", selection: $selectedState) {
+                ForEach(visibleStateFilters) { state in
+                    Text(optionTitle(state, counts: counts)).tag(state)
                 }
-                Rectangle()
-                    .fill(active ? HerbColor.rose : Color.clear)
-                    .frame(height: 1)
             }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .tint(WBColor.accent)
+        } else {
+            Picker("Seed state", selection: $selectedState) {
+                ForEach(visibleStateFilters) { state in
+                    Text(optionTitle(state, counts: counts)).tag(state)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var visibleStateFilters: [SeedStateFilter] {
+        [.active, .wishlist, .saved, .archived]
+    }
+
+    private func optionTitle(_ state: SeedStateFilter, counts: [SeedStateFilter: Int]) -> String {
+        "\(state.title) \(counts[state, default: 0])"
+    }
+
+    @ViewBuilder
+    private func seedRow(_ row: SeedTableRow) -> some View {
+        // At accessibility sizes the verdict goes under the name; beside it, both break mid-word.
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: WBMetrics.gap))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: WBMetrics.gap))
+        NavigationLink(value: row.id) {
+            layout {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(SeedsListText.displayName(for: row))
+                        .font(.wbHeadline)
+                        .foregroundStyle(WBColor.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(SeedsListText.rowLines(for: row).enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let verdict = row.verdict {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(WBColor.verdict(verdict))
+                            .frame(width: verdictDotSize, height: verdictDotSize)
+                            .accessibilityHidden(true)
+                        Text(row.verdictLabel)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .frame(minHeight: WBMetrics.minTouchTarget)
             .contentShape(Rectangle())
-            .frame(minHeight: 44)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(SeedsListText.accessibilityLabel(for: row))
+            .accessibilityAddTraits(.isButton)
         }
         .buttonStyle(.plain)
+        // On the page background and the screen gutter, like the Journal list.
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(
+            top: WBMetrics.gap, leading: WBMetrics.screenGutter,
+            bottom: WBMetrics.gap, trailing: WBMetrics.screenGutter))
     }
 
-    private func label(_ s: SeedState) -> String {
-        switch s {
-        case .active:   return "Active"
-        case .wishlist: return "Wished"
-        case .saved:    return "Saved"
-        case .archived: return "Archive"
+    @ViewBuilder
+    private func emptyState(rowsInSelectedState: [SeedTableRow], searchMatches: [SeedTableRow]) -> some View {
+        switch SeedsListText.emptyState(rowsInSelectedState: rowsInSelectedState, searchMatches: searchMatches) {
+        case .noSeeds:
+            WBEmptyState(title: "No seeds yet", message: "Tap + to add a seed.", systemImage: "leaf")
+        case .noMatches:
+            WBEmptyState(title: "No matches", message: "Try a different search.", systemImage: "magnifyingglass")
+        case .hasResults:
+            EmptyView()
         }
     }
 }
@@ -194,263 +265,5 @@ struct ScanPrefillBox: Identifiable {
         switch prefill {
         case .localExtraction(let scanID, _, _): return "scan-\(scanID.uuidString)"
         }
-    }
-}
-
-// MARK: - Specimen grid
-
-/// 2-column LazyVGrid of seed specimen cards. Pulled into its own view
-/// so `@Query` can take filter parameters via the initializer.
-private struct SpecimenGrid: View {
-    @Environment(AppEnvironment.self) private var appEnv
-    @Query private var seeds: [LocalSeed]
-
-    private let searchText: String
-    private let groupByType: Bool
-
-    init(state: SeedState, householdID: String?, searchText: String, groupByType: Bool) {
-        let raw = state.rawValue
-        let activeHouseholdID = householdID ?? ""
-        _seeds = Query(
-            filter: #Predicate<LocalSeed> { seed in
-                seed.deletedAt == nil && seed.stateRaw == raw && seed.householdID == activeHouseholdID
-            },
-            sort: \.updatedAt,
-            order: .reverse)
-        self.searchText = searchText
-        self.groupByType = groupByType
-    }
-
-    var body: some View {
-        let filtered = filterBySearch(seeds, query: searchText)
-        Group {
-            if filtered.isEmpty {
-                if appEnv.sync.isSyncing && seeds.isEmpty {
-                    loadingState
-                } else {
-                    emptyState
-                }
-            } else if groupByType {
-                groupedGrid(filtered)
-            } else {
-                grid(filtered)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var loadingState: some View {
-        VStack(spacing: 8) {
-            ProgressView()
-                .herbProgressStyle()
-                .controlSize(.small)
-            Text("turning the page…")
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
-    }
-
-    @ViewBuilder
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "leaf")
-                .font(.system(size: 32))
-                .foregroundStyle(HerbColor.sepia.opacity(0.6))
-            Text(seeds.isEmpty ? "No seeds yet" : "No matches")
-                .font(HerbFont.display(size: 22))
-                .foregroundStyle(HerbColor.ink)
-            Text(seeds.isEmpty
-                 ? "Tap + to lay a new packet upon the table."
-                 : "Try a different search term.")
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
-    }
-
-    private let columns: [GridItem] = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-    ]
-
-    @ViewBuilder
-    private func grid(_ seeds: [LocalSeed]) -> some View {
-        LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(Array(seeds.enumerated()), id: \.element.id) { (idx, seed) in
-                NavigationLink(value: seed.id) {
-                    SpecimenCard(seed: seed, romanNumber: idx + 1)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .navigationDestination(for: String.self) { seedID in
-            SeedDetailView(seedID: seedID)
-        }
-    }
-
-    @ViewBuilder
-    private func groupedGrid(_ seeds: [LocalSeed]) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(groupedByType(seeds), id: \.title) { group in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(group.title)
-                        .herbRubricStyle(size: 11, tracking: 2)
-                        .padding(.leading, 4)
-                    grid(group.seeds)
-                }
-            }
-        }
-    }
-
-    private func groupedByType(_ seeds: [LocalSeed]) -> [(title: String, seeds: [LocalSeed])] {
-        let buckets = Dictionary(grouping: seeds) { seed -> String in
-            let trimmed = (seed.customType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? "Untyped" : trimmed
-        }
-        return buckets
-            .map { (title: $0.key, seeds: $0.value) }
-            .sorted { lhs, rhs in
-                if lhs.title == "Untyped" { return false }
-                if rhs.title == "Untyped" { return true }
-                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-            }
-    }
-
-    private func filterBySearch(_ all: [LocalSeed], query: String) -> [LocalSeed] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return all }
-        return all.filter { seed in
-            (seed.customName ?? "").lowercased().contains(q)
-            || (seed.customVariety ?? "").lowercased().contains(q)
-            || (seed.customCompany ?? "").lowercased().contains(q)
-            || (seed.notes ?? "").lowercased().contains(q)
-        }
-    }
-}
-
-// MARK: - Specimen card
-
-private struct SpecimenCard: View {
-    let seed: LocalSeed
-    let romanNumber: Int
-
-    @Environment(AppEnvironment.self) private var appEnv
-
-    var body: some View {
-        ZStack(alignment: .top) {
-            HerbColor.vellumHi
-                .shadow(color: HerbColor.ink.opacity(0.12), radius: 2, x: 0, y: 2)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text("NO. \(HerbRomanNumeral.string(for: romanNumber, lowercase: false))")
-                    .font(HerbFont.smallCaps(size: 11))
-                    .tracking(1.6)
-                    .foregroundStyle(HerbColor.sepia)
-                    .textCase(.uppercase)
-                    .padding(.top, 10)
-                    .padding(.leading, 8)
-
-                HStack {
-                    Spacer()
-                    PressedPlant(kind: PressedPlant.Kind.from(seed.customType), size: 90)
-                    Spacer()
-                }
-                .padding(.top, 4)
-                .padding(.bottom, 6)
-
-                Text(scientificName)
-                    .font(HerbFont.smallCaps(size: 10))
-                    .tracking(1.2)
-                    .textCase(.uppercase)
-                    .foregroundStyle(HerbColor.inkSoft)
-                    .padding(.horizontal, 8)
-                Text(displayName)
-                    .font(HerbFont.bodyEmph(size: 14))
-                    .foregroundStyle(HerbColor.ink)
-                    .lineLimit(2)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 1)
-
-                Rectangle()
-                    .fill(HerbColor.inkFaint)
-                    .frame(height: 0.5)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 6)
-
-                HStack(spacing: 4) {
-                    // Verdict dot — only shown when a cached recommendation
-                    // exists for this seed. Mirrors `SeedRow.verdictDotColor`.
-                    if let dotColor = verdictDotColor {
-                        Circle()
-                            .fill(dotColor)
-                            .frame(width: 7, height: 7)
-                    }
-                    Text(provenance)
-                        .font(HerbFont.bodyItalic(size: 10))
-                        .foregroundStyle(HerbColor.inkSoft)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 8)
-                .padding(.top, 5)
-                .padding(.bottom, 8)
-            }
-
-            // Corner tape strips — visual "specimen attached to herbarium sheet"
-            TapeStrip(width: 28, height: 10, rotation: -10)
-                .offset(x: -56, y: -4)
-            TapeStrip(width: 28, height: 10, rotation: 9)
-                .offset(x: 56, y: -4)
-        }
-        .frame(minHeight: 210)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityDescription)
-        .accessibilityAddTraits(.isButton)
-    }
-
-    /// Synthesized VoiceOver label combining the rendered fragments
-    /// (display name, scientific name / type, provenance) into one item.
-    private var accessibilityDescription: String {
-        var parts: [String] = [displayName]
-        let type = (seed.customType ?? "").trimmingCharacters(in: .whitespaces)
-        if !type.isEmpty {
-            parts.append(type)
-        }
-        if provenance != "—" {
-            parts.append(provenance)
-        }
-        return parts.joined(separator: ", ")
-    }
-
-    private var displayName: String {
-        seed.customName ?? "Untitled"
-    }
-
-    private var scientificName: String {
-        let raw = (seed.customType ?? "").trimmingCharacters(in: .whitespaces)
-        return raw.isEmpty ? "—" : raw
-    }
-
-    private var provenance: String {
-        let company = seed.customCompany ?? ""
-        let year = seed.yearPacked.map { HerbRomanNumeral.string(for: $0, lowercase: false) } ?? ""
-        switch (company.isEmpty, year.isEmpty) {
-        case (false, false): return "\(company) · \(year)"
-        case (false, true):  return company
-        case (true, false):  return year
-        case (true, true):   return "—"
-        }
-    }
-
-    /// Color for the verdict dot beside the provenance line. Returns nil when
-    /// the seed has no planting window: no growing info, or no home location.
-    /// Mirrors the wiring in `SeedRow.verdictDotColor`.
-    private var verdictDotColor: Color? {
-        guard let verdict = appEnv.recommendations.recommendation(for: seed)?.verdict else { return nil }
-        return HerbColor.verdictForeground(for: verdict)
     }
 }

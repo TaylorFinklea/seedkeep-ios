@@ -2,12 +2,7 @@ import SwiftUI
 import SwiftData
 import SeedkeepKit
 
-/// Diurnalis — Today's specimens.
-///
-/// Landing screen for the Herbarium-styled app. Renders the date in the
-/// scholarly format, a daylight arc with sunrise/sunset, the queue of
-/// planting events due today (or overdue), and a Caveat-handwritten
-/// margin note pulling the latest journal entry from the last 48h.
+/// Today: the daylight panel, the Due queue, and the newest journal entry since yesterday.
 ///
 /// `todayString` / `yesterdayString` are held as `@State` here and
 /// refreshed on `NSCalendarDayChanged` + foreground. The date-dependent
@@ -17,7 +12,7 @@ import SeedkeepKit
 struct TodayView: View {
     @Environment(AppEnvironment.self) private var appEnv
 
-    /// Drives the "Set home location" sheet from the sun-arc empty state.
+    /// Drives the "Set home location" sheet from the daylight empty state.
     @State private var showHomeLocationSheet: Bool = false
 
     /// Date strings used as @Query predicate keys. Refreshed at midnight
@@ -50,7 +45,7 @@ struct TodayView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                VellumBackground()
+                WBScreenBackground()
                 ScrollView {
                     TodayQueryView(
                         todayString: todayString,
@@ -118,7 +113,7 @@ private struct TodayQueryView: View {
 
     /// Today's + overdue events (deletedAt nil, completedAt nil, planned for today or earlier)
     @Query private var dueEvents: [LocalPlantingEvent]
-    /// Recent journal entries to surface in the margin note.
+    /// Recent journal entries for the Journal section.
     @Query private var recentJournal: [LocalJournalEntry]
     /// Active seeds for pulling the seed name on a planting event.
     @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var seeds: [LocalSeed]
@@ -129,14 +124,18 @@ private struct TodayQueryView: View {
 
     @Binding var showHomeLocationSheet: Bool
 
-    private var activeDueEvents: [LocalPlantingEvent] {
-        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
-        return TodayHouseholdScope.events(dueEvents, householdID: householdID)
-    }
+    /// The `yyyy-MM-dd` day the queries were built for. Due-row day labels are measured from it.
+    private let today: String
 
     private var activeSeeds: [LocalSeed] {
         guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
         return TodayHouseholdScope.seeds(seeds, householdID: householdID)
+    }
+
+    /// The Due queue: scoped to the active household, then cut to the first six rows.
+    private var queue: [LocalPlantingEvent] {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
+        return TodayDue.queue(dueEvents, householdID: householdID, today: today)
     }
 
     private var activeLiveCandidates: [LocalPlantingEvent] {
@@ -161,6 +160,7 @@ private struct TodayQueryView: View {
     init(todayString: String, yesterdayString: String, showHomeLocationSheet: Binding<Bool>) {
         let today = todayString
         let yesterday = yesterdayString
+        self.today = today
         _dueEvents = Query(
             filter: #Predicate<LocalPlantingEvent> { event in
                 event.deletedAt == nil
@@ -184,32 +184,21 @@ private struct TodayQueryView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            FolioStrip(section: "Diurnalis", folio: folioNumber)
+        VStack(alignment: .leading, spacing: WBMetrics.gapLarge * 2) {
+            WBScreenTitle("Today", subtitle: scholarlyDate)
+                .padding(.top, WBMetrics.gapLarge)
 
-            headingBlock
-                .padding(.horizontal, HerbSpace.titleGutter)
-                .padding(.top, 4)
-
-            ScholarRule(verticalMargin: 12)
-                .padding(.horizontal, HerbSpace.gutter)
-
-            sunArcBlock
-                .padding(.horizontal, HerbSpace.titleGutter)
-                .padding(.bottom, 4)
+            daylightBlock
+                .padding(.horizontal, WBMetrics.screenGutter)
 
             gardenRollCallBlock
-                .padding(.horizontal, HerbSpace.gutter)
-                .padding(.top, 16)
+                .padding(.horizontal, WBMetrics.screenGutter)
 
-            sowingsBlock
-                .padding(.horizontal, HerbSpace.gutter)
-                .padding(.top, 16)
+            dueBlock
 
             if let marginEntry {
-                marginNoteBlock(entry: marginEntry)
-                    .padding(.horizontal, HerbSpace.titleGutter)
-                    .padding(.top, 16)
+                journalBlock(entry: marginEntry)
+                    .padding(.horizontal, WBMetrics.screenGutter)
             }
 
             Color.clear.frame(height: 80)
@@ -266,31 +255,6 @@ private struct TodayQueryView: View {
         }
     }
 
-    // MARK: - Heading
-
-    @ViewBuilder
-    private var headingBlock: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(astroSubtitle)
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-                .tracking(0.3)
-
-            Text(scholarlyDate)
-                .font(HerbFont.smallCaps(size: 13))
-                .tracking(2.5)
-                .foregroundStyle(HerbColor.sepia)
-                .textCase(.uppercase)
-                .padding(.top, 6)
-
-            Text("Today's\nspecimens")
-                .font(HerbFont.display(size: 44))
-                .foregroundStyle(HerbColor.ink)
-                .lineSpacing(0)
-                .padding(.top, 2)
-        }
-    }
-
     private var scholarlyDate: String {
         let f = DateFormatter()
         f.dateFormat = "EEEE, MMMM d"
@@ -298,109 +262,97 @@ private struct TodayQueryView: View {
         return f.string(from: Date())
     }
 
-    private var astroSubtitle: String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: Date())
-    }
+    // MARK: - Daylight
 
-    private var folioNumber: Int {
-        // Day-of-year as the folio (a small joke — the app is "today's leaf"
-        // in the gardener's herbarium for the year).
-        Calendar(identifier: .gregorian).ordinality(of: .day, in: .year, for: Date()) ?? 1
-    }
-
-    // MARK: - Sun arc
-
-    @ViewBuilder
-    private var sunArcBlock: some View {
-        if let dayLight = computedDayLight {
-            SunArc(sunrise: dayLight.sunrise, sunset: dayLight.sunset, now: Date())
-                .padding(.top, 4)
-        } else {
-            VStack(spacing: 10) {
-                Text("Set a home location to see today's daylight arc.")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
-                Button {
-                    showHomeLocationSheet = true
-                } label: {
-                    Text("Set home location")
-                        .font(HerbFont.smallCaps(size: 11))
-                        .tracking(2)
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.bordered)
-                .tint(HerbColor.sepia)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-        }
-    }
-
-    private var computedDayLight: Solar.DayLight? {
+    /// Home coordinates from the cached preferences; nil until a home location is set.
+    private var cachedHome: (latitude: Double, longitude: Double)? {
         guard
             let lat = appEnv.preferences.cachedLatitude,
             let lon = appEnv.preferences.cachedLongitude
         else { return nil }
-        return Solar.dayLight(latitude: lat, longitude: lon, on: Date())
+        return (lat, lon)
     }
 
-    // MARK: - Sowings queue
-
     @ViewBuilder
-    private var sowingsBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Rubric(text: "to be sown today")
-                .padding(.horizontal, 4)
-
-            if activeDueEvents.isEmpty {
-                if appEnv.sync.isSyncing {
-                    VStack(spacing: 8) {
-                        ProgressView()
-                            .herbProgressStyle()
-                            .controlSize(.small)
-                        Text("turning the page…")
-                            .font(HerbFont.bodyItalic(size: 12))
-                            .foregroundStyle(HerbColor.inkSoft)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 48)
-                } else {
-                    Text("No sowings planned. A quiet day in the herbarium.")
-                        .font(HerbFont.bodyItalic(size: 13))
-                        .foregroundStyle(HerbColor.inkSoft)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 4)
-                }
+    private var daylightBlock: some View {
+        if let home = cachedHome {
+            if let dayLight = Solar.dayLight(latitude: home.latitude, longitude: home.longitude, on: Date()) {
+                WBDaylightPanel(sunrise: dayLight.sunrise, sunset: dayLight.sunset, now: Date())
             } else {
-                ForEach(activeDueEvents.prefix(6)) { event in
-                    SowingRow(event: event, seed: seedFor(eventID: event.id))
-                }
+                // Polar day or night: there is a home location, so don't ask for one.
+                Text("No sunrise or sunset at your home location today.")
+                    .font(.wbCallout)
+                    .foregroundStyle(WBColor.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .wbPanel()
             }
+        } else {
+            VStack(alignment: .leading, spacing: WBMetrics.gap) {
+                Text("Set a home location to see today's daylight.")
+                    .font(.wbCallout)
+                    .foregroundStyle(WBColor.muted)
+                Button {
+                    showHomeLocationSheet = true
+                } label: {
+                    Text("Set home location")
+                        .frame(minHeight: WBMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.bordered)
+                .tint(WBColor.accent)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .wbPanel()
         }
     }
 
-    private func seedFor(eventID: String) -> LocalSeed? {
-        // Match the planting event's seed_id; fall back to nil if absent.
-        guard let evt = activeDueEvents.first(where: { $0.id == eventID }),
-              let sid = evt.seedID else { return nil }
-        return activeSeeds.first(where: { $0.id == sid })
-    }
-
-    // MARK: - Margin handwritten note
+    // MARK: - Due
 
     @ViewBuilder
-    private func marginNoteBlock(entry: LocalJournalEntry) -> some View {
-        Text(entry.body.isEmpty ? "—" : entry.body)
-            .font(HerbFont.handwritten(size: 17))
-            .foregroundStyle(HerbColor.sepia)
-            .lineSpacing(2)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    private var dueBlock: some View {
+        VStack(alignment: .leading, spacing: WBMetrics.gap) {
+            WBSectionHeader("Due")
+
+            if queue.isEmpty {
+                if appEnv.isSyncingForDisplay {
+                    ProgressView("Syncing…")
+                        .tint(WBColor.accent)
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.muted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                } else {
+                    Text("Nothing due.")
+                        .font(.wbCallout)
+                        .foregroundStyle(WBColor.muted)
+                        .padding(.vertical, WBMetrics.gapLarge)
+                }
+            } else {
+                ForEach(queue) { event in
+                    DueRow(event: event, seed: seed(for: event), today: today)
+                }
+            }
+        }
+        .padding(.horizontal, WBMetrics.screenGutter)
+    }
+
+    private func seed(for event: LocalPlantingEvent) -> LocalSeed? {
+        guard let seedID = event.seedID else { return nil }
+        return activeSeeds.first { $0.id == seedID }
+    }
+
+    // MARK: - Journal
+
+    @ViewBuilder
+    private func journalBlock(entry: LocalJournalEntry) -> some View {
+        VStack(alignment: .leading, spacing: WBMetrics.gap) {
+            WBSectionHeader("Journal")
+            Text(entry.body.isEmpty ? "—" : entry.body)
+                .font(.wbBody)
+                .foregroundStyle(WBColor.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .wbPanel()
+        }
     }
 
     private var marginEntry: LocalJournalEntry? {
@@ -409,76 +361,72 @@ private struct TodayQueryView: View {
     }
 }
 
-// MARK: - Sowing row
+// MARK: - Due row
 
-private struct SowingRow: View {
+private struct DueRow: View {
     let event: LocalPlantingEvent
     let seed: LocalSeed?
+    let today: String
+
+    @ScaledMetric(relativeTo: .footnote) private var iconSize: CGFloat = 13
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var name: String {
+        seed?.displayName ?? "Untitled seed"
+    }
+
+    private var kind: String {
+        TodayDue.kindLabel(event.kindRaw)
+    }
+
+    private var offset: Int {
+        TodayDue.dayOffset(plannedFor: event.plannedFor, today: today)
+    }
+
+    private var dayLabel: String {
+        TodayDue.dayLabel(offset: offset)
+    }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            PressedPlant(kind: PressedPlant.Kind.from(seed?.customType), size: 40)
-                .frame(width: 40, height: 40)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(displayName)
-                    .font(HerbFont.body(size: 15))
-                    .foregroundStyle(HerbColor.ink)
-                Text(scientificName)
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+        // At accessibility sizes the day label goes under the name; beside it, both break mid-word.
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: WBMetrics.gap))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: WBMetrics.gapLarge))
+        layout {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.ink)
+                Text(TodayDue.rowSubtitle(kind: kind, type: seed?.customType))
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
             }
 
-            Spacer()
+            if !stacked {
+                Spacer(minLength: WBMetrics.gap)
+            }
 
-            VStack(alignment: .trailing, spacing: 4) {
-                Circle()
-                    .fill(daysRemaining < 0 ? HerbColor.rose : HerbColor.verdictNow)
-                    .frame(width: 10, height: 10)
-                Text(daysLabel)
-                    .font(HerbFont.smallCaps(size: 9))
-                    .tracking(1.5)
-                    .foregroundStyle(HerbColor.sepia)
-                    .textCase(.uppercase)
+            HStack(spacing: 4) {
+                if offset < 0 {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: iconSize))
+                        .foregroundStyle(WBColor.warn)
+                        .accessibilityHidden(true)
+                }
+                Text(dayLabel)
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, WBMetrics.gapLarge)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(HerbColor.inkFaint)
-                .frame(height: 0.5)
+                .fill(WBColor.line)
+                .frame(height: 1)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(displayName), \(daysLabel)")
-    }
-
-    private var displayName: String {
-        seed?.customName ?? "Untitled seed"
-    }
-
-    private var scientificName: String {
-        let raw = (seed?.customType ?? "").trimmingCharacters(in: .whitespaces)
-        return raw.isEmpty ? "—" : raw
-    }
-
-    private var daysRemaining: Int {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        guard let planned = f.date(from: event.plannedFor) else { return 0 }
-        let diff = Calendar(identifier: .gregorian).dateComponents([.day], from: Date(), to: planned).day ?? 0
-        return diff
-    }
-
-    private var daysLabel: String {
-        if daysRemaining < 0 {
-            let n = -daysRemaining
-            return n == 1 ? "1 day past" : "\(n) days past"
-        } else if daysRemaining == 0 {
-            return "today"
-        } else {
-            return daysRemaining == 1 ? "1 day left" : "\(daysRemaining) days left"
-        }
+        .accessibilityLabel(TodayDue.rowAccessibilityLabel(name: name, kind: kind, dayLabel: dayLabel))
     }
 }
