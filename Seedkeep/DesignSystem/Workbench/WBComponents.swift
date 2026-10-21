@@ -21,6 +21,33 @@ struct WBSectionHeader: View {
     }
 }
 
+/// A screen's large title and optional subtitle, inset on `WBMetrics.screenGutter`.
+struct WBScreenTitle: View {
+    private let title: String
+    private let subtitle: String?
+
+    init(_ title: String, subtitle: String? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.wbLargeTitle)
+                .foregroundStyle(WBColor.ink)
+                .accessibilityAddTraits(.isHeader)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, WBMetrics.screenGutter)
+    }
+}
+
 /// Inline status message. Drop-in for `HerbBanner`: same initializer.
 struct WBBanner: View {
     enum Severity { case info, success, warning, error }

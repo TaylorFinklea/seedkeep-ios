@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SeedkeepKit
 import SwiftData
 import Testing
@@ -50,6 +51,36 @@ struct FixtureEnvironmentTests {
         await env.syncIfPossible()
         #expect(!env.hasCloudCoordinator)
         #expect(!env.canUseCloudKit)
+        // No pass is left looking busy, so loading states settle.
+        #expect(!env.isCloudSyncRunning)
+        #expect(!env.isSyncingForDisplay)
+    }
+
+    @Test func aCloudSyncPassIsObservedFromItsStart() async throws {
+        defer { Self.clearFixtureSuite() }
+        let env = AppEnvironment.makeForFixture()
+        #expect(!env.isSyncingForDisplay)
+
+        // A view that read the flag while idle hears the first pass begin, although the
+        // coordinator reference itself is not observed.
+        let changed = ChangeFlag()
+        withObservationTracking {
+            _ = env.isSyncingForDisplay
+        } onChange: {
+            changed.fired = true
+        }
+        let ran = await env.runCloudSyncPass {
+            #expect(env.isSyncingForDisplay)
+            // An overlapping pass ending first doesn't clear the outer one.
+            let inner = await env.runCloudSyncPass { true }
+            #expect(inner)
+            #expect(env.isSyncingForDisplay)
+            return true
+        }
+        #expect(ran)
+        #expect(changed.fired)
+        #expect(!env.isSyncingForDisplay)
+        #expect(env.cloudSyncPassesInFlight == 0)
     }
 
     @Test func factorySeedsTheExpectedSampleGarden() throws {
@@ -72,3 +103,8 @@ struct FixtureEnvironmentTests {
 
 }
 #endif
+
+/// Records that an observation fired.
+private final class ChangeFlag: @unchecked Sendable {
+    var fired = false
+}

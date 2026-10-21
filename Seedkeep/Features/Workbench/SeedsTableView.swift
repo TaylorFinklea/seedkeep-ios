@@ -267,7 +267,7 @@ struct SeedsTableView: View {
     @ViewBuilder
     private func content(_ visible: [SeedTableRow]) -> some View {
         if rows.isEmpty {
-            if appEnv.sync.isSyncing {
+            if appEnv.isSyncingForDisplay {
                 ProgressView("Loading seeds…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

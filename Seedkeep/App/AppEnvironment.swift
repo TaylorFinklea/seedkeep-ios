@@ -526,7 +526,7 @@ public final class AppEnvironment {
                         if recovered { noteHouseholdMutation() }
                     }
                     let coordinator = ensureCloudCoordinator(household: household)
-                    let ran = await coordinator.sync()
+                    let ran = await runCloudSyncPass { await coordinator.sync() }
                     guard ran else { return }
                     // Household data syncs through CloudKit. Server-backed personal feeds are retired,
                     // so only CloudKit errors can reach the sync banner.
@@ -602,6 +602,26 @@ public final class AppEnvironment {
     /// Account-deletion checkpoints left from before the server was retired. While any exist,
     /// CloudKit stays off so a deleted garden is never re-provisioned (N1 quarantine).
     private(set) var pausedDeletionCheckpointCount = 0
+
+    /// CloudKit passes started through `runCloudSyncPass` that haven't finished. Observed, unlike
+    /// the coordinator reference, so a loading state can appear when the first pass begins; a count
+    /// so overlapping passes can't clear it early.
+    private(set) var cloudSyncPassesInFlight = 0
+
+    var isCloudSyncRunning: Bool { cloudSyncPassesInFlight > 0 }
+
+    /// Whether a screen with no rows yet should show a loading state: the legacy engine or a
+    /// CloudKit pass is running. (`sync.isSyncing` alone never turns on in the CloudKit path.)
+    var isSyncingForDisplay: Bool {
+        sync.isSyncing || isCloudSyncRunning || (cloudKit?.isSyncing ?? false)
+    }
+
+    /// Runs one CloudKit pass counted in `cloudSyncPassesInFlight`.
+    func runCloudSyncPass(_ pass: () async -> Bool) async -> Bool {
+        cloudSyncPassesInFlight += 1
+        defer { cloudSyncPassesInFlight -= 1 }
+        return await pass()
+    }
 
     /// Read-only access to the live CloudKit coordinator for the Settings diagnostics panel
     /// (nil until the first sync after the flag is toggled on, and while CloudKit is paused). Its

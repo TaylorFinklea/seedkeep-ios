@@ -82,6 +82,8 @@ enum WBMetrics {
     static let radiusSheet: CGFloat = 12
     static let gap: CGFloat = 8
     static let gapLarge: CGFloat = 12
+    /// Horizontal page inset for screen titles and full-width content.
+    static let screenGutter: CGFloat = 20
     /// Minimum touch target on iPhone and iPad.
     static let touchTarget: CGFloat = 44
     /// Minimum frame for a control's hit area: `touchTarget` on iOS, no minimum on Mac, where the

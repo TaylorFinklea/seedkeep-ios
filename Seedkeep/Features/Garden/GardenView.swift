@@ -24,16 +24,10 @@ struct GardenView: View {
                 WBScreenBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Garden")
-                                .font(.wbLargeTitle)
-                                .foregroundStyle(WBColor.ink)
-                                .accessibilityAddTraits(.isHeader)
-                            Text("\(activeBeds.count) \(activeBeds.count == 1 ? "bed" : "beds") in the household garden")
-                                .font(.wbFootnote)
-                                .foregroundStyle(WBColor.muted)
-                        }
-                        .padding(.horizontal, HerbSpace.titleGutter)
+                        WBScreenTitle(
+                            "Garden",
+                            subtitle: "\(activeBeds.count) \(activeBeds.count == 1 ? "bed" : "beds") in the household garden"
+                        )
                         .padding(.top, WBMetrics.gapLarge)
                         .padding(.bottom, WBMetrics.gapLarge)
                         if FeatureFlags.plantPetsEnabled {
@@ -49,7 +43,7 @@ struct GardenView: View {
                                         .font(.caption)
                                         .foregroundStyle(WBColor.faint)
                                 }
-                                .padding(.horizontal, HerbSpace.gutter)
+                                .padding(.horizontal, WBMetrics.screenGutter)
                                 .padding(.vertical, 12)
                             }
                             .buttonStyle(.plain)
@@ -65,7 +59,7 @@ struct GardenView: View {
                                     .buttonStyle(.plain)
                                 }
                             }
-                            .padding(.horizontal, HerbSpace.gutter)
+                            .padding(.horizontal, WBMetrics.screenGutter)
                             .padding(.bottom, HerbSpace.fabClearance)
                         }
                     }
@@ -180,7 +174,6 @@ private struct BedRow: View {
             Spacer()
         }
         .padding(.vertical, 10)
-        .padding(.horizontal, 4)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(WBColor.line)

@@ -99,13 +99,15 @@ struct JournalView: View {
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
                             RetrospectiveCard()
-                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                                .listRowInsets(EdgeInsets(
+                                    top: 4, leading: WBMetrics.screenGutter,
+                                    bottom: 8, trailing: WBMetrics.screenGutter))
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                         }
                     }
                     if entries.isEmpty {
-                        if appEnv.sync.isSyncing {
+                        if appEnv.isSyncingForDisplay {
                             VStack(spacing: 8) {
                                 ProgressView()
                                     .tint(WBColor.accent)
@@ -186,17 +188,8 @@ struct JournalView: View {
 
     @ViewBuilder
     private var headingBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Journal")
-                .font(.wbLargeTitle)
-                .foregroundStyle(WBColor.ink)
-                .accessibilityAddTraits(.isHeader)
-            Text("\(entries.count) entries · the household garden")
-                .font(.wbFootnote)
-                .foregroundStyle(WBColor.muted)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        WBScreenTitle("Journal", subtitle: "\(entries.count) entries · the household garden")
+            .padding(.vertical, 8)
     }
 
     @ViewBuilder

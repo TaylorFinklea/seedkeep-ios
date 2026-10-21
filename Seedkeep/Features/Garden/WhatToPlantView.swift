@@ -72,7 +72,7 @@ struct WhatToPlantView: View {
 
                 if grouped.plantNow.isEmpty && grouped.plantSoon.isEmpty
                     && grouped.laterAndMissed.isEmpty {
-                    if appEnv.sync.isSyncing {
+                    if appEnv.isSyncingForDisplay {
                         VStack(spacing: 8) {
                             ProgressView()
                                 .tint(WBColor.accent)

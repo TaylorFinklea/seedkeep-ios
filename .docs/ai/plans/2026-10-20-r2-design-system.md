@@ -261,3 +261,330 @@ size and at the largest accessibility size.
   (the Simulator has no camera) and regular-width iPad. The Simulator dropped
   taps too often to walk them; they are standard forms like the screens
   above. These stay open for R2c's accessibility acceptance.
+
+---
+
+# R2b contract
+
+R2b finishes the Workbench look for the remaining Herbarium screens: Seeds
+in the compact (tab) interface, Today, and Settings with You folded in, plus
+the polish items from the R2a screenshot review. Light mode stays forced
+until R2c.
+
+GPT-6.1 Sol critiqued the first draft and asked for a revision. Two
+confirmation rounds later it approved this version (2026-10-20). It
+resolves each of Sol's points:
+- Library information parity
+- verdict semantics
+- Today's actual journal and daylight rules
+- loading state
+- garden identity beside sharing
+- cross-platform scope
+- slice ownership and acceptance data
+
+## Platform scope
+
+- **Every platform:**
+  - **Today, Garden and Journal:** both interfaces render them, so S0, S2 and
+    S4 change them everywhere.
+  - **Settings:** S3 changes it on every platform.
+- **Compact interface only** (iPhone and compact-width iPad): S1, the Seeds
+  list. Regular-width iPad and Mac keep R1's Seeds table.
+
+## Invariants
+
+1. **Behaviour.**
+   - These stay the same: the data, actions, sheets, gating
+     (`ServerRetirement.isRetired`, `FeatureFlags`,
+     `AppPreferences.isHostedTierEnabled`), the N1/N2 invariants, and
+     persisted keys (`library.groupByType`,
+     `seedkeep.whatsNew.lastSeenBuild` with mark-seen-on-tap, and the
+     `seedkeep.notif.*` keys).
+   - The only intended behaviour changes are the ones marked *Change* below.
+2. **The R2a rules carry over:**
+   - text scales, and icons use `@ScaledMetric`
+   - text colour is `ink` or `muted`, and status colour goes on icons only
+   - icon-only controls have labels
+   - targets use `WBMetrics.minTouchTarget`
+   - section headers carry `.isHeader`
+3. **Testable logic.** Any new list, grouping, count, due, label or
+   accessibility-text logic lives in pure helpers with Swift Testing tests.
+   Shared Seeds helpers are additive, so R1's sorting, counts, selection and
+   export stay unchanged.
+4. **Large text is acceptance, not R2c.** Every R2b screen is
+   screenshot-checked at the default and largest accessibility sizes.
+5. **One `NavigationStack` per root.**
+
+## Order and ownership
+
+1. **S0 (parent) lands first.**
+2. **S1, S2 and S3 run in parallel** (workers):
+   - **S1:** `LibraryView.swift`, additive helpers in `SeedsTableModel.swift`,
+     and their tests.
+   - **S2:** `TodayView.swift`, a new `TodayDue.swift`,
+     `FixtureSampleGarden.swift` (acceptance data), and their tests.
+   - **S3:** all of `SettingsView.swift`, including the dead wrapper.
+3. **The parent owns the routing callers:**
+   - `MainTabView`, `AppEnvironment.AppTab`, `WorkbenchShell`
+   - the dead `TopBarSparkleButton` and `SproutFAB`
+   - `YouView`'s reachability
+4. **S4 (parent) runs after the merge**, on a fixed file list.
+
+## S0 — Shared title and gutter (parent)
+
+- `WBMetrics.screenGutter`, one value for the page inset.
+- `WBScreenTitle(_ title: String, subtitle: String? = nil)`:
+  - `wbLargeTitle` in `ink` with `.isHeader`
+  - the subtitle in `wbFootnote` `muted`
+  - leading-aligned on the gutter
+- GardenView and JournalView adopt it, which fixes the inset mismatch, with
+  their titles and subtitles unchanged. S1, S2 and S3 use it.
+- **Loading-state bridge** (*bounded correction*):
+  - `AppEnvironment.runCloudSyncPass(_:)` wraps the `coordinator.sync()` call
+    in `syncIfPossible`. It keeps an observed in-flight count, so passes that
+    overlap can't clear it early.
+  - `isSyncingForDisplay` is true when `sync.isSyncing`, that count is above
+    0, or `cloudKit?.isSyncing`. The coordinator reference is
+    `@ObservationIgnored`, so the observed count is what lets a view see the
+    first pass begin.
+  - JournalView, WhatToPlantView and R1's SeedsTableView switch to it, and
+    S1 and S2 use it.
+  - A test tracks `isSyncingForDisplay` with `withObservationTracking`,
+    checks that starting a pass fires the change, that the flag is true
+    during the pass, and that it settles to false afterwards, including for
+    two overlapping passes.
+
+## S1 — Seeds list, compact interface (worker)
+
+`LibraryView` keeps its type name and becomes a compact `List`.
+
+- **Rows:** `SeedTableRow.rows(...)`, scoped to the active household as in
+  `WorkbenchShell`. Each row shows:
+  - Line 1: the name (`row.name`).
+  - Line 2: type · variety, skipping blanks.
+  - Line 3: company · packed year, as a plain year, skipping blanks.
+  - **Verdict:** a trailing verdict dot and `row.verdictLabel` in `muted`
+    text, shown only when a recommendation exists (`row.verdict != nil`).
+    An unknown verdict shows "No window", as `SeedTableRow` already does.
+  - **VoiceOver:** one combined element whose text comes from a pure
+    `SeedsListText.accessibilityLabel(for:)`. It covers name, type, variety,
+    company, packed year and the verdict label when present, with
+    `.isButton`. Tapping pushes `SeedDetailView`.
+  - *Change:* a missing name reads "Untitled seed" (from `displayName`)
+    instead of "Untitled", and is trimmed.
+- **Subtitle:** `WBScreenTitle("Seeds", subtitle: "<N> seeds · <M>
+  active")`. N and M keep today's meaning: N is the live seeds in the active
+  garden, and M is those in the Active state (the old "of which M in the
+  active garden" wording misdescribed M). The arithmetic goes in a pure
+  helper, with singular and plural forms.
+- **State filter:**
+  - Active, Wishlist, Saved and Archived use `SeedStateFilter` titles with
+    the count. There is no "All", and the default is Active.
+  - It's a segmented `Picker` when it fits; otherwise (`ViewThatFits`) a menu
+    `Picker` showing the current state and count.
+  - VoiceOver hears the title, the count and the selection.
+  - *Change:* the titles match iPad and Mac ("Wished" → "Wishlist",
+    "Archive" → "Archived").
+- **Search:** R1's complete semantics, through `SeedsFilter.matchesSearch`:
+  the normalised display name, variety, company, type and notes, localized
+  case-insensitive, without tags.
+  - *Change:* type is now searched too.
+- **Counts:** from all live active-household rows, with the search applied
+  and no type filter, before the state filter (`SeedsTableModel.counts` with
+  `type == nil`).
+  - *Change:* the counts follow the search, as on iPad and Mac.
+- **Empty states**, classified on the selected state's rows before search:
+  - none → `WBEmptyState("No seeds yet", "Tap + to add a seed.")`
+  - some, but no search match → `WBEmptyState("No matches", "Try a different
+    search.")`
+  - The classification is a pure helper with tests.
+- **Sort:** most recently updated first, with ties by id, through a new pure
+  `SeedsTableModel.recentFirst(_:)`.
+- **Group by type:** the same toggle and key, through a new pure
+  `SeedsTableModel.groupedByType(_:)`:
+  - Buckets use the trimmed type and stay case-sensitive, so "Tomato" and
+    "tomato" remain separate.
+  - Sections sort case-insensitively, with ties by the raw string, and
+    "Untyped" (blank) comes last.
+  - Rows within a section are recent-first.
+  - Sections use `WBSectionHeader`.
+- **Unchanged:** the toolbar (options menu, random pick, scan on iOS, add),
+  the sheets, pull-to-refresh, and `publishesAssistantContext`.
+  - The scan presentation code (`showingScan` → `ScanFlow` → `scanPrefill` →
+    `AddSeedView(prefill:)`) moves over verbatim. The review checks it by
+    diff.
+- **Loading:** shown only when the active garden has no rows and sync is
+  running.
+  - *Change (bounded correction, S0):* "sync is running" becomes
+    `AppEnvironment.isSyncingForDisplay`. Today these screens used only the
+    legacy engine, which never runs in the shipping CloudKit path. Cached
+    rows always stay visible during sync.
+- No new swipe actions, context menus or selection.
+
+## S2 — Today (worker)
+
+The queries, predicates and refresh (midnight and foreground) stay the same.
+
+1. **Title:** `WBScreenTitle("Today", subtitle: <"EEEE, MMMM d">)`.
+2. **Daylight:** the same branch as today, keyed on `Solar.dayLight(...)`
+   returning a value:
+   - a value → `WBDaylightPanel`
+   - no cached location → a `wbPanel` with the existing message and the "Set
+     home location" button (same sheet)
+   - *Change:* a cached location but no sunrise or sunset (polar day or
+     night) → "No sunrise or sunset at your home location today." Today it
+     shows the set-location prompt, which is wrong there.
+3. **Due (`WBSectionHeader("Due")`):**
+   - **Queue:** one queue, as today: incomplete, non-deleted events with
+     `plannedFor <= today`, oldest first, scoped to the active household,
+     then a single `prefix(6)`.
+   - **Row line 1:** the seed name, or "Untitled seed" when the seed is
+     missing.
+   - **Row line 2:** kind · type in `muted`, skipping a blank type.
+     - *Change:* the kind is new. It uses
+       `PlantingEventKind(rawValue:)?.displayName`, or "Event" for an
+       unknown kind.
+   - **Trailing day label:**
+     - overdue: a warn icon plus "1 day overdue" / "N days overdue"
+     - today: "Today"
+     - future: "1 day left" / "N days left", kept for parity
+   - **VoiceOver:** one combined label: name, kind, day label.
+   - No tap action, as today.
+   - **Empty:** "Nothing due." **Loading:** `ProgressView("Syncing…")`, using
+     `isSyncingForDisplay` and only when the list is empty.
+4. **Journal (`WBSectionHeader("Journal")`):**
+   - The same query: the newest entry with `occurredOn >= yesterday` (no
+     upper bound, ties as the store returns them).
+   - Its body is shown in `wbBody` inside a `wbPanel`, or "—" when the body
+     is empty. It appears only when an entry exists.
+5. **Pet roll-call:** unchanged inside its `FeatureFlags` gate
+   (allowlisted).
+
+**Pure helpers with tests (`TodayDue`):**
+- `dayOffset(plannedFor:today:)` works on `yyyy-MM-dd` strings, parsed as
+  Gregorian dates in UTC, so DST can't shift them. An invalid date returns
+  0, matching today's "today" fallback.
+- `dayLabel(offset:)`, with singular and plural forms.
+- `kindLabel(_ raw:)`.
+- `rowAccessibilityLabel(...)`.
+
+**Acceptance data (DEBUG fixture only):** S2 adds these to the sample
+garden:
+- incomplete events: two overdue, one due today, and enough beyond those
+  for the queue to pass six
+- every kind, plus one event whose seed is missing
+- a journal entry dated today
+
+`FixtureEnvironmentTests` are updated if their counts change.
+
+## S3 — Settings replaces You (worker; the parent owns routing)
+
+**Routing (parent):**
+- `AppEnvironment.AppTab.you` → `.settings`, and `.library` → `.seeds`.
+- The tabs become Today, Seeds (`leaf`), Garden, Journal and Settings
+  (`gearshape`).
+- Both the Settings tab and the Workbench `.settings` route render
+  `NavigationStack { SettingsContent() }`.
+- The dead `TopBarSparkleButton` and `SproutFAB` are updated to compile.
+- A test pins the tab list.
+- **YouView becomes unreachable.** Its server-era entry points
+  (contributions, Delete account) were already hidden in every build
+  (`isRetired` is constant `true`). This contract explicitly accepts that
+  they become unreachable. Their implementation stays compiled until N3,
+  and N2-E designs the new "Delete Seedkeep data".
+
+**`SettingsContent` in Workbench (S3):** `.wbForm()`, `WBSectionHeader`, the
+title "Settings", and no hero or roman footer. The sections, in order:
+
+1. **Account:**
+   - "iCloud account" (from You).
+   - The household name and ID, from the signed-in identity as today,
+     labelled "Your household" so they aren't mistaken for a shared garden.
+2. **Seeds:** Locations, Tags.
+3. **Home and alerts:** Home location (same summary), Notifications.
+4. **AI:** Provider, API keys. Subscription stays behind both of its gates.
+5. **Sync:** everything it has today, in place and unchanged, including:
+   - Sync now, with its progress, success tick and error
+   - the CloudKit flag
+   - the status rows
+   - the whole sharing branch: participant status, journal recovery (its
+     scope and count, and the sheet), leave (and when it's disabled), share
+     (progress and errors)
+   
+   The server rows stay gated.
+6. **Diagnostics:** the paused-deletion row, under the same condition.
+7. **About:**
+   - What's New, with the same unseen dot and mark-seen-on-tap
+   - the data sources text
+   - the Privacy Policy and Support links
+   - *Change:* "Version <AppInfo.currentVersion> (<build>)" replaces the
+     roman build footer. A missing version shows "Build <n>", a missing
+     build shows "Version <v>", and if both are missing the row is hidden.
+
+S3 also removes the dead `SettingsView` wrapper. The "Settings → …" copy in
+`Copy.swift`, `BYOKExtractor` and `ChangelogData` stays valid.
+
+## S4 — Polish from the R2a review (parent, after the merge)
+
+Files: `BedDetailView`, `AttachedEntityPicker`, `SeedsInspector`,
+`AddSeedView`, `JournalEntryView`.
+
+- **Form section headers** in those files use `WBSectionHeader`.
+- **Add Seed:** drop the duplicate in-content heading. The navigation title
+  stays.
+- **Journal entry:**
+  - Hide only the empty thumbnail strip. "Add photos" and the new-entry
+    "save first" guidance stay.
+  - Don't repeat "Attached to" as both the header and the row label. The
+    picker keeps its accessibility name.
+
+## R2b verification (parent)
+
+- **Gate:** `scripts/test-gate.sh` passes (both packages, and both CloudKit
+  lanes on iOS and macOS).
+  - The existing pins keep passing: R1 search and counts, the verdict and
+    fallback copy, the Workbench route titles and Settings command, and the
+    warning copy.
+  - New tests: the S1 and S2 helpers and the tab list.
+- **Logic coverage:**
+  - deleted, completed and future exclusions
+  - scope before the limit, and more than six events
+  - every kind, and missing seeds
+  - journal boundaries, and date rollover and DST
+  - group ordering and case variants
+  - recent-first ties
+  - empty versus no-match
+  - The participant and rollback isolation tests stay.
+- **Reference audit:**
+  - LibraryView, TodayView (outside the pet gate) and SettingsView have no
+    Herbarium symbols.
+  - YouView is unreferenced.
+  - The allowlist is updated.
+- **Screenshots in sample-garden mode**, at the default and largest sizes,
+  of every screen R2b changes:
+  - iPhone:
+    - Seeds: grouped, ungrouped, no matches, an empty tab, a long name, and
+      the state filter falling back to a menu at the largest size, with no
+      compressed segments
+    - Today: with location, with overdue and today rows, and with the
+      journal panel
+    - Settings
+    - Garden, Journal, What to Plant (S0)
+    - bed detail, journal entry with the attachment picker, Add Seed (S4)
+  - Regular-width iPad: Today, Garden, Journal, What to Plant, Settings, the
+    Seeds table with its inspector, bed detail, journal entry with the
+    attachment picker, and Add Seed.
+  - Mac: the gate's macOS lanes build and test it. The visual check stays
+    with the owner (the Mac app can't be driven from here).
+- **Interactions:**
+  - pushes from grouped and ungrouped rows
+  - every toolbar sheet
+  - pull-to-refresh
+  - Settings pushes and back
+  - the What's New sheet
+  - the compact ↔ regular iPad transition
+- **Not provable in the Simulator:** scan cancel and save need a camera. The
+  scan presentation is checked by diff, and its device check moves to R5 QA.
+- **Accessibility:** the pure label helpers are tested. A VoiceOver pass
+  with Accessibility Inspector is R2c acceptance.
+- **Reviews:** Opus and Sol on the merged diff.
