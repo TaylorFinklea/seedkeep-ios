@@ -7,21 +7,48 @@ enum TodayDue {
     /// Rows shown in the Due section. The queue is cut to this after household scoping.
     static let queueLimit = 6
 
-    /// The Due queue: incomplete, non-deleted events for `householdID` planned on or before `today`
-    /// (`yyyy-MM-dd`). The order given is kept (the view's query sorts oldest first), and the cut to
-    /// `queueLimit` comes after scoping.
-    static func queue(
+    /// The whole Due set: incomplete, non-deleted events for `householdID` planned on or before `today`
+    /// (`yyyy-MM-dd`), in the order given (the view's query sorts oldest first). Nothing is cut here.
+    static func dueSet(
         _ events: [LocalPlantingEvent],
         householdID: String,
         today: String
     ) -> [LocalPlantingEvent] {
-        let due = events.filter {
+        events.filter {
             $0.householdID == householdID
                 && $0.deletedAt == nil
                 && $0.completedAt == nil
                 && $0.plannedFor <= today
         }
-        return Array(due.prefix(queueLimit))
+    }
+
+    /// The Due queue: the first `queueLimit` rows of `dueSet`, so the cut comes after scoping.
+    static func queue(
+        _ events: [LocalPlantingEvent],
+        householdID: String,
+        today: String
+    ) -> [LocalPlantingEvent] {
+        Array(dueSet(events, householdID: householdID, today: today).prefix(queueLimit))
+    }
+
+    /// How many due events the queue leaves out, counted from the whole `dueSet` before the cut. Zero when the
+    /// queue shows every due event.
+    static func moreCount(
+        _ events: [LocalPlantingEvent],
+        householdID: String,
+        today: String
+    ) -> Int {
+        max(0, dueSet(events, householdID: householdID, today: today).count - queueLimit)
+    }
+
+    /// The "more due" row's text: "1 more due", or "N more due".
+    static func moreLabel(count: Int) -> String {
+        "\(count) more due"
+    }
+
+    /// The "more due" row's VoiceOver label: its text, then that it opens Garden.
+    static func moreAccessibilityLabel(count: Int) -> String {
+        "\(moreLabel(count: count)), open Garden"
     }
 
     /// Whole days from `today` to `plannedFor`, both `yyyy-MM-dd`: negative when overdue, zero when

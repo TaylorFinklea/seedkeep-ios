@@ -2,7 +2,8 @@ import SwiftUI
 import SwiftData
 import SeedkeepKit
 
-/// Today: the daylight panel, the Due queue, and the newest journal entry since yesterday.
+/// Today: the daylight panel, This week (frost, then what to plant now or soon), the Due queue with
+/// its overflow row, and the newest journal entry since yesterday.
 ///
 /// `todayString` / `yesterdayString` are held as `@State` here and
 /// refreshed on `NSCalendarDayChanged` + foreground. The date-dependent
@@ -18,6 +19,9 @@ struct TodayView: View {
 
     /// Drives the "Set home location" sheet from the daylight empty state.
     @State private var showHomeLocationSheet: Bool = false
+
+    /// Presents Windows as a sheet from "See all in Windows" on the compact tab shell.
+    @State private var showWindowsSheet: Bool = false
 
     /// Date strings used as @Query predicate keys. Refreshed at midnight
     /// (NSCalendarDayChanged) and on foreground resume so the due-events
@@ -59,6 +63,7 @@ struct TodayView: View {
                         todayString: todayString,
                         yesterdayString: yesterdayString,
                         showHomeLocationSheet: $showHomeLocationSheet,
+                        showWindowsSheet: $showWindowsSheet,
                         workbench: workbench
                     )
                 }
@@ -68,12 +73,26 @@ struct TodayView: View {
             .navigationDestination(for: PetDetailDestination.self) { dest in
                 PetDetailView(plantingEventID: dest.plantingEventID)
             }
+            .navigationDestination(for: TodaySeedDestination.self) { dest in
+                SeedDetailView(seedID: dest.seedID)
+            }
             .sheet(isPresented: $showHomeLocationSheet) {
                 NavigationStack {
                     HomeLocationSettingsView()
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Close") { showHomeLocationSheet = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $showWindowsSheet) {
+                // The compact shell's Windows sheet, presented as Garden presents it, so Plan and New bed behave alike.
+                NavigationStack {
+                    WindowsView(host: .compactGardenSheet, workbench: nil)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showWindowsSheet = false }
                             }
                         }
                 }
@@ -132,6 +151,7 @@ private struct TodayQueryView: View {
     @Query private var departures: [LocalPetDeparture]
 
     @Binding var showHomeLocationSheet: Bool
+    @Binding var showWindowsSheet: Bool
 
     /// The workbench's model when the regular-width shell hosts Today; nil in the compact tab shell.
     private let workbench: WorkbenchModel?
@@ -148,6 +168,12 @@ private struct TodayQueryView: View {
     private var queue: [LocalPlantingEvent] {
         guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
         return TodayDue.queue(dueEvents, householdID: householdID, today: today)
+    }
+
+    /// The due events the queue leaves out, counted from the whole household-scoped due set.
+    private var moreDueCount: Int {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return 0 }
+        return TodayDue.moreCount(dueEvents, householdID: householdID, today: today)
     }
 
     private var activeLiveCandidates: [LocalPlantingEvent] {
@@ -173,6 +199,7 @@ private struct TodayQueryView: View {
         todayString: String,
         yesterdayString: String,
         showHomeLocationSheet: Binding<Bool>,
+        showWindowsSheet: Binding<Bool>,
         workbench: WorkbenchModel?
     ) {
         let today = todayString
@@ -199,6 +226,7 @@ private struct TodayQueryView: View {
                 event.deletedAt == nil && event.completedAt == nil
             })
         _showHomeLocationSheet = showHomeLocationSheet
+        _showWindowsSheet = showWindowsSheet
     }
 
     var body: some View {
@@ -206,13 +234,13 @@ private struct TodayQueryView: View {
             WBScreenTitle("Today", subtitle: scholarlyDate)
                 .padding(.top, WBMetrics.gapLarge)
 
-            frostBanner
-
             daylightBlock
                 .padding(.horizontal, WBMetrics.screenGutter)
 
             gardenRollCallBlock
                 .padding(.horizontal, WBMetrics.screenGutter)
+
+            thisWeekBlock
 
             dueBlock
 
@@ -301,18 +329,13 @@ private struct TodayQueryView: View {
         )
     }
 
-    @ViewBuilder
-    private var frostBanner: some View {
-        let count = frostWarningCount
-        if count > 0 {
-            WBBanner(
-                severity: .warning,
-                title: TodayFrost.warningTitle(count: count),
-                action: (label: TodayFrost.openGardenLabel, handler: openGarden)
-            )
-            .accessibilityIdentifier("today.frostBanner")
-            .padding(.horizontal, WBMetrics.screenGutter)
-        }
+    private func frostBanner(count: Int) -> some View {
+        WBBanner(
+            severity: .warning,
+            title: TodayFrost.warningTitle(count: count),
+            action: (label: TodayFrost.openGardenLabel, handler: openGarden)
+        )
+        .accessibilityIdentifier("today.frostBanner")
     }
 
     /// Switches to Garden from the host shell: the compact tab's `requestedTab`, or the workbench's route.
@@ -322,6 +345,156 @@ private struct TodayQueryView: View {
             appEnv.requestedTab = .garden
         case .gardenRoute:
             workbench?.route = .garden
+        }
+    }
+
+    // MARK: - This week
+
+    /// The day the planting windows are computed for: the recommendation store's day, as Windows reads it.
+    private var recommendationDay: CalendarDay {
+        let stamp = appEnv.recommendations.today
+        return CalendarDay.make(year: stamp.year, month: stamp.month, day: stamp.day) ?? CalendarDay.today()
+    }
+
+    /// The block's content. Without a home location no recommendation is computed, so it is empty.
+    private var weekContent: TodayWeek.Content {
+        guard !appEnv.recommendations.needsHomeLocation else { return .empty }
+        let inputs = activeSeeds.compactMap { seed -> TodayWeek.Input? in
+            guard let recommendation = appEnv.recommendations.recommendation(for: seed) else { return nil }
+            return TodayWeek.Input(
+                seed: WindowSeed(seed, recommendation: recommendation),
+                reason: recommendation.reason
+            )
+        }
+        return TodayWeek.content(inputs, today: recommendationDay)
+    }
+
+    /// Plant-now and plant-soon seeds, with the frost banner opening the block. Its rules are `TodayWeek`'s.
+    @ViewBuilder
+    private var thisWeekBlock: some View {
+        let week = weekContent
+        let parts = TodayWeek.parts(
+            frostCount: frostWarningCount,
+            hasHomeLocation: !appEnv.recommendations.needsHomeLocation
+        )
+        VStack(alignment: .leading, spacing: WBMetrics.gap) {
+            WBSectionHeader("This week")
+            ForEach(parts, id: \.self) { part in
+                switch part {
+                case .frostBanner(let count):
+                    frostBanner(count: count)
+                case .setHomeLocation:
+                    setHomeLocationLine
+                case .summary:
+                    weekSummary(week)
+                case .rows:
+                    weekRows(week)
+                case .seeAll:
+                    seeAllWindowsButton
+                }
+            }
+        }
+        .padding(.horizontal, WBMetrics.screenGutter)
+    }
+
+    @ViewBuilder
+    private func weekSummary(_ week: TodayWeek.Content) -> some View {
+        switch TodayWeek.status(
+            nowCount: week.nowCount,
+            soonCount: week.soonCount,
+            isLoading: appEnv.isSyncingForDisplay
+        ) {
+        case .loading:
+            ProgressView("Syncing…")
+                .tint(WBColor.accent)
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.muted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, WBMetrics.gap)
+        case .nothingThisWeek:
+            Text("Nothing to plant this week")
+                .font(.wbCallout)
+                .foregroundStyle(WBColor.muted)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("today.week.summary")
+        case .counts(let text):
+            Text(text)
+                .font(.wbHeadline)
+                .foregroundStyle(WBColor.ink)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("today.week.summary")
+        }
+    }
+
+    @ViewBuilder
+    private func weekRows(_ week: TodayWeek.Content) -> some View {
+        ForEach(week.rows) { row in
+            NavigationLink(value: TodaySeedDestination(seedID: row.id)) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.name)
+                        .font(.wbBody)
+                        .foregroundStyle(WBColor.ink)
+                    Text(TodayWeek.rowSubtitle(row))
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.muted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, WBMetrics.gapLarge)
+                .contentShape(Rectangle())
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(WBColor.line)
+                        .frame(height: 1)
+                }
+            }
+            .buttonStyle(.plain)
+            // One element per row, labelled "<name>, <group>, <timing>", as Due rows are.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(TodayWeek.rowAccessibilityLabel(row))
+            .accessibilityIdentifier("today.week.row.\(row.id)")
+        }
+    }
+
+    /// The one line shown without a home location. It opens the same home-location screen as the daylight panel.
+    private var setHomeLocationLine: some View {
+        Button {
+            showHomeLocationSheet = true
+        } label: {
+            Text(TodayWeek.noHomeLocationText)
+                .font(.wbCallout)
+                .foregroundStyle(WBColor.accent)
+                .frame(maxWidth: .infinity, minHeight: WBMetrics.minTouchTarget, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("today.week.setHomeLocation")
+    }
+
+    private var seeAllWindowsButton: some View {
+        Button(action: openWindows) {
+            HStack {
+                Text("See all in Windows")
+                Spacer(minLength: WBMetrics.gap)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .accessibilityHidden(true)
+            }
+            .font(.wbCallout.weight(.semibold))
+            .foregroundStyle(WBColor.accent)
+            .frame(maxWidth: .infinity, minHeight: WBMetrics.minTouchTarget, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("today.week.seeAll")
+    }
+
+    /// Shows Windows from the host shell: a sheet on compact, the workbench's Windows route on the workbench.
+    private func openWindows() {
+        switch TodayWeek.SeeAllRoute.route(for: host) {
+        case .sheet:
+            showWindowsSheet = true
+        case .route:
+            workbench?.route = .windows
         }
     }
 
@@ -399,9 +572,32 @@ private struct TodayQueryView: View {
                         climate: appEnv.preferences.homeClimate
                     )
                 }
+                if moreDueCount > 0 {
+                    moreDueRow(count: moreDueCount)
+                }
             }
         }
         .padding(.horizontal, WBMetrics.screenGutter)
+    }
+
+    /// The overflow row under the six due rows. It opens Garden through the same route as the frost banner.
+    private func moreDueRow(count: Int) -> some View {
+        Button(action: openGarden) {
+            HStack(spacing: WBMetrics.gap) {
+                Text(TodayDue.moreLabel(count: count))
+                Spacer(minLength: WBMetrics.gap)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .accessibilityHidden(true)
+            }
+            .font(.wbCallout.weight(.semibold))
+            .foregroundStyle(WBColor.accent)
+            .frame(maxWidth: .infinity, minHeight: WBMetrics.minTouchTarget, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(TodayDue.moreAccessibilityLabel(count: count))
+        .accessibilityIdentifier("today.moreDue")
     }
 
     private func seed(for event: LocalPlantingEvent) -> LocalSeed? {

@@ -156,4 +156,56 @@ struct TodayDueTests {
         let label = TodayDue.rowAccessibilityLabel(name: "Untitled seed", kind: "Note", dayLabel: "Today")
         #expect(label == "Untitled seed, Note, Today")
     }
+
+    // MARK: - Overflow ("<n> more due")
+
+    @Test func moreCountIsZeroAtZeroAndAtTheQueueLimit() {
+        #expect(TodayDue.moreCount([], householdID: "garden", today: Self.today) == 0)
+        let six = (1...6).map { Self.event("event-\($0)", planned: "2026-10-19") }
+        #expect(TodayDue.moreCount(six, householdID: "garden", today: Self.today) == 0)
+    }
+
+    @Test func moreCountIsOneAtSevenDueRows() {
+        let seven = (1...7).map { Self.event("event-\($0)", planned: "2026-10-19") }
+        #expect(TodayDue.moreCount(seven, householdID: "garden", today: Self.today) == 1)
+        #expect(TodayDue.queue(seven, householdID: "garden", today: Self.today).count == 6)
+    }
+
+    @Test func moreCountIsFourteenAtTwentyDueRows() {
+        let twenty = (1...20).map { Self.event("event-\($0)", planned: "2026-10-19") }
+        #expect(TodayDue.moreCount(twenty, householdID: "garden", today: Self.today) == 14)
+        #expect(TodayDue.queue(twenty, householdID: "garden", today: Self.today).count == 6)
+    }
+
+    @Test func moreCountIgnoresOtherHouseholdsDeletedCompletedAndFutureRows() {
+        var rows = (1...6).map { Self.event("mine-\($0)", planned: "2026-10-19") }
+        rows += (1...4).map { Self.event("other-\($0)", household: "other", planned: "2026-10-01") }
+        rows += [
+            Self.event("deleted", planned: "2026-10-19", deletedAt: 1),
+            Self.event("completed", planned: "2026-10-19", completedAt: 1),
+            Self.event("future", planned: "2026-10-30"),
+        ]
+        #expect(TodayDue.moreCount(rows, householdID: "garden", today: Self.today) == 0)
+
+        rows.append(Self.event("mine-7", planned: "2026-10-19"))
+        #expect(TodayDue.moreCount(rows, householdID: "garden", today: Self.today) == 1)
+    }
+
+    @Test func moreCountIsTakenBeforeTheCutAndKeepsTheQueueAtSix() {
+        // Other-household rows come first, so the queue's cut would hide them if it ran before scoping.
+        var rows = (1...7).map { Self.event("other-\($0)", household: "other", planned: "2026-10-01") }
+        rows += (1...8).map { Self.event("mine-\($0)", planned: "2026-10-19") }
+        let queue = TodayDue.queue(rows, householdID: "garden", today: Self.today)
+        #expect(queue.map(\.id) == ["mine-1", "mine-2", "mine-3", "mine-4", "mine-5", "mine-6"])
+        #expect(TodayDue.moreCount(rows, householdID: "garden", today: Self.today) == 2)
+    }
+
+    @Test func moreLabelsSayTheCountSingularAndPlural() {
+        #expect(TodayDue.moreLabel(count: 1) == "1 more due")
+        #expect(TodayDue.moreLabel(count: 14) == "14 more due")
+    }
+
+    @Test func moreAccessibilityLabelSaysItOpensGarden() {
+        #expect(TodayDue.moreAccessibilityLabel(count: 14) == "14 more due, open Garden")
+    }
 }
