@@ -1,5 +1,29 @@
 # Current State
 
+## R2d in progress (2026-10-21): accessibility audit
+
+- **Sample-garden mode is self-contained and repeatable** (0f56b3c).
+  - It makes no WeatherKit, Keychain or notification-permission calls.
+  - Launches are repeatable: fixture preferences, a fresh scratch
+    directory, a fixed random pick.
+  - The audit launch fails closed.
+  - Accessibility identifiers are on tabs, rows, Settings rows and screens.
+- **The audit harness** (5a57e35):
+  - `SeedkeepUITests` in its own `SeedkeepAccessibilityAudit` scheme,
+    outside the gate.
+  - Run it with `scripts/a11y-audit.sh <simulator UDID>`, about 30 minutes
+    for 4 iPhone configurations.
+  - The manual checklist is `.docs/ai/plans/2026-10-20-a11y-manual-checklist.md`.
+- **The first run found 512 issues:** Dynamic Type 244, contrast 182,
+  clipped text 86; 148 have no element.
+  - Many look like audit false positives (text that scales in the
+    screenshots, pixel sampling under translucent bars, system nav
+    buttons).
+  - The audit doesn't pass yet. Triage and fixes are the next step; how
+    deep to go is the owner's decision.
+- **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 1187 + 1, macOS
+  app 1202 + 1.
+
 ## Native Workbench redesign — R2c complete (2026-10-20)
 
 R2c turns dark mode on and fixes contrast, large-text and VoiceOver defects.
