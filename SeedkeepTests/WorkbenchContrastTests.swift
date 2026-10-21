@@ -100,6 +100,16 @@ struct WBContrastRequirement: Sendable, CustomTestStringConvertible {
         .text("accent on accentSoft", WBPalette.accent, on: WBPalette.accentSoft),
         .text("accentInk on accent", WBPalette.accentInk, on: WBPalette.accent),
         .text("warnInk on warn", WBPalette.warnInk, on: WBPalette.warn),
+        // The Garden grid's cell text (abbreviation, date or "done") on each cell background; panel2,
+        // the empty cell, is covered above.
+        .text("ink on kindSowing", WBPalette.ink, on: WBPalette.kindSowing),
+        .text("ink on kindTransplant", WBPalette.ink, on: WBPalette.kindTransplant),
+        .text("ink on kindHarvest", WBPalette.ink, on: WBPalette.kindHarvest),
+        .text("ink on kindNote", WBPalette.ink, on: WBPalette.kindNote),
+        .text("muted on kindSowing", WBPalette.muted, on: WBPalette.kindSowing),
+        .text("muted on kindTransplant", WBPalette.muted, on: WBPalette.kindTransplant),
+        .text("muted on kindHarvest", WBPalette.muted, on: WBPalette.kindHarvest),
+        .text("muted on kindNote", WBPalette.muted, on: WBPalette.kindNote),
     ]
 
     /// Graphics. `faint` on `panel` also covers the swatch ring.
@@ -111,6 +121,17 @@ struct WBContrastRequirement: Sendable, CustomTestStringConvertible {
         .graphic("verdictTooEarly on panel", WBPalette.verdictTooEarly, on: WBPalette.panel),
         .graphic("verdictTooLate on panel", WBPalette.verdictTooLate, on: WBPalette.panel),
         .graphic("faint on panel", WBPalette.faint, on: WBPalette.panel),
+        // The Garden grid's selection ring (accent) and frost ring (warn) on each cell background.
+        .graphic("accent ring on panel2", WBPalette.accent, on: WBPalette.panel2),
+        .graphic("accent ring on kindSowing", WBPalette.accent, on: WBPalette.kindSowing),
+        .graphic("accent ring on kindTransplant", WBPalette.accent, on: WBPalette.kindTransplant),
+        .graphic("accent ring on kindHarvest", WBPalette.accent, on: WBPalette.kindHarvest),
+        .graphic("accent ring on kindNote", WBPalette.accent, on: WBPalette.kindNote),
+        .graphic("warn ring on panel2", WBPalette.warn, on: WBPalette.panel2),
+        .graphic("warn ring on kindSowing", WBPalette.warn, on: WBPalette.kindSowing),
+        .graphic("warn ring on kindTransplant", WBPalette.warn, on: WBPalette.kindTransplant),
+        .graphic("warn ring on kindHarvest", WBPalette.warn, on: WBPalette.kindHarvest),
+        .graphic("warn ring on kindNote", WBPalette.warn, on: WBPalette.kindNote),
     ]
 }
 

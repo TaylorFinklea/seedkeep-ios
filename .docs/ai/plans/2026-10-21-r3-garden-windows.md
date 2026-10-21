@@ -302,6 +302,19 @@ add-a-bed prompt, never a Stop bar over the bed list or a gridless bed.
 Gridless beds list their events from `offGrid`'s `noGrid` bucket, with no
 "Place" action.
 
+*From the G1 and G3 reviews:*
+- Take `pendingPlan` on appear **and** in `onChange(of: pendingPlan)`: a
+  Plan from the Windows sheet arrives while Garden is already showing.
+- After New bed from a `.needsBed` prompt, resume the Plan (the brush is
+  still set) rather than making the user tap Plan again.
+- Route Escape to `GardenInteraction`'s `.cancel` (`GardenModeBar` has no
+  Escape shortcut, by design).
+- Return focus with `BedGridView`'s `focusRequest` from the sheet's
+  `onDismiss` (not from `onDeleted`, which fires mid-dismiss), and move
+  VoiceOver focus to the target cell after an accessibility Move action.
+- New/Edit bed: the 4 × 8 default and decimal fields replace
+  `AddBedView`'s current form (G3's `.needsBed` prompt presents it).
+
 - **iPad and Mac (`.garden`):**
   - **Toolbar:**
     - a bed switcher (segmented up to 5 beds, otherwise a menu)
