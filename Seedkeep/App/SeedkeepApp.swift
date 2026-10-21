@@ -22,27 +22,6 @@ struct SeedkeepApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
     #endif
 
-    init() {
-        #if os(iOS)
-        configureTabBarAppearance()
-        #endif
-    }
-
-    /// Apply the IM Fell English SC small-caps font to tab bar labels
-    /// while keeping the native liquid-glass tab bar chrome. The
-    /// PostScript name has underscores (not what the filename suggests).
-    #if os(iOS)
-    private func configureTabBarAppearance() {
-        guard let smallCapsFont = UIFont(name: "IM_FELL_English_SC", size: 10) else { return }
-        let labelAttrs: [NSAttributedString.Key: Any] = [
-            .font: smallCapsFont,
-            .kern: 1.2
-        ]
-        UITabBarItem.appearance().setTitleTextAttributes(labelAttrs, for: .normal)
-        UITabBarItem.appearance().setTitleTextAttributes(labelAttrs, for: .selected)
-    }
-    #endif
-
     var body: some Scene {
         WindowGroup(id: "main") {
             #if DEBUG
@@ -67,6 +46,8 @@ struct SeedkeepApp: App {
             // on-device. Dark variants exist in HerbColor but are gated
             // off until they've been verified screen-by-screen.
             .preferredColorScheme(.light)
+            // Workbench accent for controls, links and progress, on every platform.
+            .tint(WBColor.accent)
             .task {
                 // Hosted tests (iOS and Mac) share the developer's Keychain and CloudKit account.
                 // Keep startup entirely local so a test host never makes a live iCloud identity

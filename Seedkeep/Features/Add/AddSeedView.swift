@@ -357,7 +357,7 @@ struct AddSeedView: View {
     private var prefillBanner: some View {
         switch prefill {
         case .localExtraction(_, let fields, _):
-            HerbBanner(
+            WBBanner(
                 severity: .info,
                 title: "Read from the packet",
                 message: fields.self_confidence.map { "Please review. Self-confidence: \(String(format: "%.2f", $0))" }

@@ -35,11 +35,13 @@ make_fixture() {
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>Seedkeep</string>
 <key>CFBundleShortVersionString</key><string>$version</string>
 <key>CFBundleVersion</key><string>$build</string>
 <key>CFBundleIdentifier</key><string>$bundle_id</string>
 </dict></plist>
 PLIST
+    printf 'clean release executable\n' > "$app/Seedkeep"
     cat > "$app/fixture-entitlements" <<ENTITLEMENTS
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -112,6 +114,20 @@ assert_rejected 'APNs entitlement' "$(make_fixture bad-apns 1.0.0 53 app.seedkee
 assert_rejected 'CloudKit environment mismatch' "$(make_fixture bad-environment 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Development)"
 assert_rejected 'Sign in with Apple capability mismatch' "$(make_fixture bad-signin 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Production Wrong)"
 assert_rejected 'WeatherKit capability mismatch' "$(make_fixture bad-weatherkit 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Production Default false)"
+
+# Sample-garden markers are DEBUG-only and must never reach a Release archive.
+marked_executable="$(make_fixture marked-executable)"
+printf 'payload SeedkeepFixture payload\n' >> "$marked_executable/Products/Applications/Seedkeep.app/Seedkeep"
+assert_rejected 'sample-garden marker in executable' "$marked_executable"
+
+marked_dylib="$(make_fixture marked-dylib)"
+mkdir -p "$marked_dylib/Products/Applications/Seedkeep.app/Frameworks"
+printf 'payload app.seedkeep.fixture\n' > "$marked_dylib/Products/Applications/Seedkeep.app/Frameworks/Seedkeep.debug.dylib"
+assert_rejected 'sample-garden marker in debug dylib' "$marked_dylib"
+
+missing_executable="$(make_fixture missing-executable)"
+rm -f "$missing_executable/Products/Applications/Seedkeep.app/Seedkeep"
+assert_rejected 'missing executable' "$missing_executable"
 
 mkdir -p "$TEST_ROOT/missing.xcarchive/Products/Applications"
 assert_rejected 'missing-app' "$TEST_ROOT/missing.xcarchive"

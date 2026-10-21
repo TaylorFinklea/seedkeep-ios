@@ -1,13 +1,11 @@
-import SwiftUI
-
 /// One user-facing change in a release, tagged by category.
 struct ChangelogChange {
     let category: ChangelogCategory
     let text: String
 }
 
-/// The three change categories, each carrying its own display title, SF Symbol,
-/// and Herbarium tint — mirrors how `HerbBanner.Severity` owns its presentation.
+/// The three change categories, each carrying its own display title and SF Symbol. The colour
+/// is chosen by the view that shows them (`WhatsNewSheet`), so Core carries no design tokens.
 enum ChangelogCategory: CaseIterable {
     case new, improved, fixed
 
@@ -27,13 +25,6 @@ enum ChangelogCategory: CaseIterable {
         }
     }
 
-    var tint: Color {
-        switch self {
-        case .new:      HerbColor.sage
-        case .improved: HerbColor.ochre
-        case .fixed:    HerbColor.rose
-        }
-    }
 }
 
 /// One shipped release. `build` (CFBundleVersion) is the ordering + detection

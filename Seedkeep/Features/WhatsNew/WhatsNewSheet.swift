@@ -74,12 +74,14 @@ struct ReleaseDetailView: View {
     private func categorySection(_ category: ChangelogCategory, _ items: [ChangelogChange]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
+                // The category colour marks the icon only; the title is text, so it stays `ink`.
                 Image(systemName: category.symbolName)
+                    .foregroundStyle(category.tint)
                 Text(category.title.uppercased())
                     .font(HerbFont.smallCaps(size: 11))
                     .tracking(2.0)
+                    .foregroundStyle(WBColor.ink)
             }
-            .foregroundStyle(category.tint)
 
             ForEach(Array(items.enumerated()), id: \.offset) { _, change in
                 HStack(alignment: .top, spacing: 8) {
@@ -93,6 +95,18 @@ struct ReleaseDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+    }
+}
+
+/// Colour for each change category in this sheet. It replaces the Herbarium tints that
+/// `ChangelogCategory` used to carry in Core.
+private extension ChangelogCategory {
+    var tint: Color {
+        switch self {
+        case .new:      WBColor.accent
+        case .improved: WBColor.verdictPlantSoon
+        case .fixed:    WBColor.warn
         }
     }
 }

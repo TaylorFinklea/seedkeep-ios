@@ -102,5 +102,19 @@ if /usr/libexec/PlistBuddy -c 'Print :aps-environment' "$entitlements_path" >/de
     fail 'forbidden aps-environment entitlement is present'
 fi
 
+# Sample-garden mode is DEBUG-only (`-SeedkeepFixture`). Nothing from it may survive into an
+# archived app: no executable or dylib in the bundle may carry its markers. Fails closed when the
+# executable is missing.
+executable_name="$(plist_value CFBundleExecutable)" || fail 'missing or malformed CFBundleExecutable'
+[[ -n "$executable_name" ]] || fail 'archived app has an empty CFBundleExecutable'
+[[ -f "$app_path/$executable_name" ]] || fail 'archived app executable is missing'
+while IFS= read -r -d '' binary; do
+    for marker in SeedkeepFixture app.seedkeep.fixture FixtureSampleGarden; do
+        if grep -aq -- "$marker" "$binary"; then
+            fail "archived app contains DEBUG-only sample-garden code ($marker)"
+        fi
+    done
+done < <(find "$app_path" -type f \( -name "$executable_name" -o -name '*.dylib' \) -print0)
+
 printf 'PASS: archived app matches version %s (%s), Production CloudKit, and required entitlements\n' \
     "$expected_version" "$expected_build"

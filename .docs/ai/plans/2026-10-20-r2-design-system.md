@@ -57,6 +57,9 @@ has its own review and gate.
     states and secondary icons only, never essential text.
   - Verdict and warn colours are for icons, dots and bars. Their labels use
     `ink`.
+  - Interactive control labels (buttons, links) may use `WBColor.accent`,
+    which is at least 4.5:1 on `bg` and `panel` in light and dark. (Parent
+    refinement after the S0 review.)
 
 ---
 

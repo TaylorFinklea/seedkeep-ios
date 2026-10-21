@@ -51,6 +51,9 @@ public final class AppEnvironment {
     }
 
     public static func live() -> AppEnvironment {
+        #if DEBUG
+        if FixtureMode.isEnabled { return makeForFixture() }
+        #endif
         let bundleDefaultURL = Self.resolveBundleDefaultURL()
         let prefs = AppPreferences(bundleDefaultURL: bundleDefaultURL)
         let keychainService = Self.resolveKeychainService()
@@ -125,7 +128,8 @@ public final class AppEnvironment {
     /// durable side effect pointed at the caller's `defaults` and `durableStateDirectory`, and
     /// without the background services `live()` starts (weather observers, notifier). It never
     /// builds a CloudKit coordinator by itself; tests must keep `canUseCloudKit` false wherever
-    /// one would be built.
+    /// one would be built. `cloudKitPermitted: false` is the sample-garden seam (`makeForFixture`):
+    /// CloudKit is never used, whatever the identity says.
     static func makeForTesting(
         identity: any CloudIdentityProviding,
         tokenStore: any TokenStoring,
@@ -133,7 +137,8 @@ public final class AppEnvironment {
         container: ModelContainer,
         durableStateDirectory: URL,
         checkpointStore: AccountDeletionCheckpointStore,
-        scanStagingRoot: URL? = nil
+        scanStagingRoot: URL? = nil,
+        cloudKitPermitted: Bool = true
     ) -> AppEnvironment {
         let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://seedkeep.invalid")!)
         let client = makeServerClient(baseURL: prefs.bundleDefault)
@@ -164,11 +169,54 @@ public final class AppEnvironment {
             checkpointStore: checkpointStore,
             scanStagingRoot: scanStagingRoot ?? FileManager.default.temporaryDirectory
                 .appendingPathComponent("scan-staging-\(UUID().uuidString)", isDirectory: true),
-            startsBackgroundServices: false
+            startsBackgroundServices: false,
+            cloudKitPermitted: cloudKitPermitted
         )
         env.clearAppNotifications = {}
         return env
     }
+
+    #if DEBUG
+    /// Sample-garden mode (DEBUG, `-SeedkeepFixture`): the test seam's wiring with CloudKit off.
+    /// Background services stay off and every durable path points into a fixture directory. The
+    /// defaults suite is cleared at each launch, so the identity cache, home ZIP and garden marker
+    /// start empty. The store is in memory and seeded by `FixtureSampleGarden`. The identity is
+    /// fixed. The iCloud account and the retired server are not reached.
+    static func makeForFixture() -> AppEnvironment {
+        // Fail closed: without its own suite the fixture must not run, and must never fall back to
+        // `.standard` (the real app's identity cache and preferences). Fixture mode is a debug tool,
+        // so a missing suite stops the launch instead of starting the normal app.
+        let suite = FixtureMode.defaultsSuiteName
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            preconditionFailure("Sample-garden mode needs its own defaults suite (\(suite)); refusing to run without it")
+        }
+        defaults.removePersistentDomain(forName: suite)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seedkeep-fixture", isDirectory: true)
+        let container = makeModelContainer(inMemory: true)
+        let env = makeForTesting(
+            identity: FixtureCloudIdentityProvider(),
+            tokenStore: FixtureTokenStore(),
+            defaults: defaults,
+            container: container,
+            durableStateDirectory: root.appendingPathComponent("sync", isDirectory: true),
+            checkpointStore: AccountDeletionCheckpointStore(
+                directory: root.appendingPathComponent("AccountDeletion", isDirectory: true)),
+            scanStagingRoot: root.appendingPathComponent("scan-staging", isDirectory: true),
+            cloudKitPermitted: false
+        )
+        do {
+            try FixtureSampleGarden.seed(
+                into: container.mainContext,
+                householdID: FixtureCloudIdentityProvider.householdID,
+                preferences: env.preferences
+            )
+        } catch {
+            fatalError("Could not seed the sample garden: \(error)")
+        }
+        return env
+    }
+    #endif
 
     private init(
         client: SeedkeepClient,
@@ -186,8 +234,10 @@ public final class AppEnvironment {
         durableStateDirectory: URL = HouseholdCloudCoordinator.householdSyncDirURL(),
         checkpointStore: AccountDeletionCheckpointStore = AccountDeletionCheckpointStore(),
         scanStagingRoot: URL = ScanPhotoStaging.rootURL(),
-        startsBackgroundServices: Bool = true
+        startsBackgroundServices: Bool = true,
+        cloudKitPermitted: Bool = true
     ) {
+        self.cloudKitPermitted = cloudKitPermitted
         self.client = client
         self.auth = auth
         self.container = container
@@ -299,8 +349,8 @@ public final class AppEnvironment {
         }
         // N1: an iCloud account change re-resolves the identity. The notification alone never
         // wipes; AuthController wipes only for a confirmed different user. Never in the unit-test
-        // host, which must not make live CloudKit identity calls.
-        if FeatureFlags.canRunLiveAppStartup {
+        // host, which must not make live CloudKit identity calls. Sample-garden mode has no CloudKit either.
+        if FeatureFlags.canRunLiveAppStartup, cloudKitPermitted {
             accountChangeObserver = NotificationCenter.default.addObserver(
                 forName: .CKAccountChanged, object: nil, queue: .main
             ) { [weak self] _ in
@@ -355,6 +405,8 @@ public final class AppEnvironment {
     }
 
     @ObservationIgnored private var accountChangeObserver: (any NSObjectProtocol)?
+    /// False only in sample-garden mode, where CloudKit is never used (`canUseCloudKit` stays false).
+    @ObservationIgnored private let cloudKitPermitted: Bool
     /// Holds the participant marker and migration markers (`.standard` live; a test suite in tests).
     @ObservationIgnored private let stateDefaults: UserDefaults
     /// `HouseholdCloudCoordinator.householdSyncDir()` live; a temporary directory in tests.
@@ -542,8 +594,9 @@ public final class AppEnvironment {
     /// N1 (parent-owned seam): CloudKit use (coordinator creation, sync, saves, photo recovery,
     /// sharing) requires an iCloud identity confirmed this session and no paused account deletion.
     /// Slice A applies it at those call sites; slice B maintains `pausedDeletionCheckpointCount`.
+    /// Sample-garden mode (`cloudKitPermitted` false) is never CloudKit-enabled.
     var canUseCloudKit: Bool {
-        auth.isIdentityVerified && pausedDeletionCheckpointCount == 0
+        cloudKitPermitted && auth.isIdentityVerified && pausedDeletionCheckpointCount == 0
     }
 
     /// Account-deletion checkpoints left from before the server was retired. While any exist,
@@ -1325,7 +1378,7 @@ public final class AppEnvironment {
         return (info["KeychainService"] as? String) ?? "com.example.seedkeep"
     }
 
-    private static func makeModelContainer() -> ModelContainer {
+    private static func makeModelContainer(inMemory: Bool = FeatureFlags.isRunningUnitTests) -> ModelContainer {
         // Shared model list — see `SeedkeepSchema`. Hand-typed lists here
         // and in test containers diverged once (LocalForecastSnapshot was
         // registered only in tests, silently breaking all weather-warning
@@ -1346,7 +1399,7 @@ public final class AppEnvironment {
         let config = ModelConfiguration(
             "seedkeep",
             schema: schema,
-            isStoredInMemoryOnly: FeatureFlags.isRunningUnitTests,
+            isStoredInMemoryOnly: inMemory,
             cloudKitDatabase: .none
         )
         do {

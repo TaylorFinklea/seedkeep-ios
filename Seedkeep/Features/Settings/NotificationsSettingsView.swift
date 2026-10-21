@@ -209,7 +209,7 @@ struct NotificationsSettingsView: View {
     private var permissionBanner: some View {
         switch authStatus {
         case .denied:
-            HerbBanner(
+            WBBanner(
                 severity: .warning,
                 title: "Notifications blocked",
                 message: "Enable in iOS Settings → Seedkeep → Notifications to use the switches below."

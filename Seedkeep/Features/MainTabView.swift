@@ -64,7 +64,7 @@ struct MainTabView: View {
     @ViewBuilder
     private var bannerOverlay: some View {
         if let message = appEnv.bannerError {
-            HerbBanner(
+            WBBanner(
                 severity: .error,
                 title: "Sync hiccup",
                 message: message,
