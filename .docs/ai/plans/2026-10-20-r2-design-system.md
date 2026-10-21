@@ -1106,3 +1106,51 @@ second round, with one change, now included (2026-10-20).
   - A dark-mode glance on the phone.
   - Sharing under an appearance override.
 - **Next:** R2d, the automated accessibility audit (outlined above).
+
+## R2d first audit run (2026-10-21)
+
+- **The harness works** (`SeedkeepUITests`, scheme
+  `SeedkeepAccessibilityAudit`, `scripts/a11y-audit.sh <UDID>`).
+  - The gate's `Seedkeep` scheme has no UI tests.
+  - Each configuration's appearance and text size is confirmed in
+    effect: background luminance 0.96 light / 0.08 dark; the Today title
+    is 40.7 pt by default and 71.7 pt at XXXL.
+  - **Time:** about 7 to 8 minutes per configuration, about 30 minutes for
+    all four, plus the build.
+  - In one of three full runs, `performAccessibilityAudit` hung once (dark,
+    XXXL, at the planting panel). The script reported it as a timeout.
+- **Findings with an empty allowlist: 512.**
+  - **By configuration:** light/default 184, dark/default 175,
+    light/XXXL 79, dark/XXXL 74.
+  - **By type:** Dynamic Type 244, contrast 182, clipped text 86.
+  - 148 have no element.
+- **Triage, which isn't done yet:**
+  - **Dynamic Type, mostly at the default size, on text using text styles**
+    (Settings, Notifications, Home location, the planting panel):
+    - The R2a–R2c screenshots show this text scaling at the largest size,
+      so these look like audit false positives.
+    - Each needs checking before it's allowlisted as an accepted
+      limitation.
+    - The deliberately capped bed canvas is expected.
+  - **Contrast:**
+    - **Likely false positives from pixel sampling:**
+      - text under the translucent nav bar after scrolling (the Today
+        date)
+      - small caps headers whose token pairs pass the WCAG tests
+    - Each needs checking against the token tests.
+  - **System controls:**
+    - nav-bar text buttons (Cancel, Save, Done, Close) and UIKit text and
+      search fields
+    - fixed system styling, with Large Content Viewer
+    - candidates for "accepted limitation"
+  - **Issues with no element (148):**
+    - The contract fails these unconditionally, so they can't be
+      allowlisted.
+    - Their source needs investigating: probably decorative or empty
+      text-styled elements in the Seeds rows and the Settings section
+      chrome.
+- **Tab identifiers** reach the tab buttons only sometimes; the harness
+  falls back to the tab's label.
+- **Status:** the audit doesn't pass yet. Clearing it needs a triage and
+  fix pass, which is next. The manual checklist is in
+  `2026-10-20-a11y-manual-checklist.md`.

@@ -177,3 +177,33 @@ targets:
         # Contents/MacOS.
         "TEST_HOST[sdk=macosx*]": "$(BUILT_PRODUCTS_DIR)/Seedkeep.app/Contents/MacOS/Seedkeep"
         BUNDLE_LOADER: "$(TEST_HOST)"
+
+  # R2d accessibility audit. iOS only, and run only by its own scheme (scripts/a11y-audit.sh), so the
+  # Seedkeep scheme and the per-change gate never pick it up.
+  SeedkeepUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - SeedkeepUITests
+    dependencies:
+      - target: Seedkeep
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.seedkeep.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Seedkeep
+
+schemes:
+  # Shared Debug scheme holding only the audit bundle. Automatic screenshots are off: the audit
+  # attaches nothing from outside the app.
+  SeedkeepAccessibilityAudit:
+    build:
+      targets:
+        SeedkeepUITests: [test]
+    test:
+      config: Debug
+      gatherCoverageData: false
+      captureScreenshotsAutomatically: false
+      deleteScreenshotsWhenEachTestSucceeds: true
+      targets:
+        - SeedkeepUITests
