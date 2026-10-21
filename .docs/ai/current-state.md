@@ -1,6 +1,15 @@
 # Current State
 
-## R2d in progress (2026-10-21): accessibility audit
+## R2d done (2026-10-21): accessibility audit
+
+The owner's choice: fix the real defects, then move on to R3.
+- **Triage** (1b24c2b): the real fixes landed (filled-button text in dark
+  mode, form footer contrast, canvas label backgrounds, separators read by
+  VoiceOver), with 80 accepted limitations.
+- **Second run:** 289 unresolved findings, down from 512, recorded as
+  suspected audit noise in the R2 plan. Rerun before release.
+
+### Before the triage
 
 - **Sample-garden mode is self-contained and repeatable** (0f56b3c).
   - It makes no WeatherKit, Keychain or notification-permission calls.
