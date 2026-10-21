@@ -57,6 +57,7 @@ struct GardenView: View {
                                         BedRow(bed: bed, openEvents: openEventsFor(bedID: bed.id))
                                     }
                                     .buttonStyle(.plain)
+                                    .accessibilityIdentifier("garden.bed.\(bed.id)")
                                 }
                             }
                             .padding(.horizontal, WBMetrics.screenGutter)
@@ -87,6 +88,7 @@ struct GardenView: View {
                         Image(systemName: "calendar")
                     }
                     .accessibilityLabel("What to plant")
+                    .accessibilityIdentifier("garden.whatToPlant")
                 }
                 ToolbarItem(placement: .platformTrailing) {
                     Button {

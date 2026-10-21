@@ -198,6 +198,7 @@ struct NotificationsSettingsView: View {
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Notifications")
+        .accessibilityIdentifier("screen.notifications")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

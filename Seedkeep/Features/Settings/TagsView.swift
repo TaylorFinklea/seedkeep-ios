@@ -66,6 +66,7 @@ struct TagsView: View {
             }
         }
         .wbForm()
+        .accessibilityIdentifier("screen.tags")
         .navigationTitle("Tags")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

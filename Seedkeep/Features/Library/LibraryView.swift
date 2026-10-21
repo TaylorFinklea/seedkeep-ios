@@ -11,7 +11,8 @@ struct LibraryView: View {
     @State private var showingScan = false
     @State private var showingRandom = false
     @State private var scanPrefill: AddSeedView.Prefill?
-    @AppStorage("library.groupByType") private var groupByType = false
+    // Per device, in the fixture suite in sample-garden mode, so a sample-garden launch starts ungrouped.
+    @AppStorage("library.groupByType", store: DevicePreferences.store) private var groupByType = false
 
     @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var queriedSeeds: [LocalSeed]
     @Query private var queriedTags: [LocalTag]
@@ -121,6 +122,7 @@ struct LibraryView: View {
                             .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
                     }
                     .accessibilityLabel("Random pick")
+                    .accessibilityIdentifier("seeds.random")
                 }
                 if PlatformCapabilities.supportsCameraScanning {
                     ToolbarItem(placement: .platformTrailing) {
@@ -137,6 +139,7 @@ struct LibraryView: View {
                             .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
                     }
                     .accessibilityLabel("Add seed")
+                    .accessibilityIdentifier("seeds.add")
                 }
             }
             .sheet(isPresented: $showingAdd) { AddSeedView() }
@@ -236,6 +239,7 @@ struct LibraryView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(SeedsListText.accessibilityLabel(for: row))
             .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("seeds.row.\(row.id)")
         }
         .buttonStyle(.plain)
         // On the page background and the screen gutter, like the Journal list.

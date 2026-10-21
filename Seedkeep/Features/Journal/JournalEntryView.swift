@@ -163,6 +163,7 @@ struct JournalEntryView: View {
             }
         }
         .wbForm()
+        .accessibilityIdentifier("screen.journalEntry")
         .navigationTitle("")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

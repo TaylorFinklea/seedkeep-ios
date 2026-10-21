@@ -57,6 +57,7 @@ struct APIKeysSettingsView: View {
             }
         }
         .wbForm()
+        .accessibilityIdentifier("screen.apiKeys")
         .navigationTitle("API keys")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

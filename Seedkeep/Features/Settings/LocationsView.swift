@@ -24,6 +24,7 @@ struct LocationsView: View {
     var body: some View {
         listContent
             .wbForm()
+            .accessibilityIdentifier("screen.locations")
             .navigationTitle("Locations")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

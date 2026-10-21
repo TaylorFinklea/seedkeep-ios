@@ -154,6 +154,7 @@ struct JournalView: View {
                             NavigationLink(value: Route.existing(entry.id)) {
                                 entryRow(entry)
                             }
+                            .accessibilityIdentifier("journal.entry.\(entry.id)")
                             .listRowBackground(Color.clear)
                         }
                     }

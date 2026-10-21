@@ -4,10 +4,14 @@ import SwiftData
 struct RandomPickView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.dismiss) private var dismiss
-    @Query private var allSeeds: [LocalSeed]
+    // Sorted by id so a fixed random source (sample-garden mode) always picks the same seed.
+    @Query(sort: \LocalSeed.id) private var allSeeds: [LocalSeed]
 
     /// True when presented in a sheet (the Workbench), which needs its own Close action.
     var showsClose = false
+
+    /// The pick's random number in [0, 1). Sample-garden mode passes a fixed one (see `RandomPickSource`).
+    var randomSource: () -> Double = RandomPickSource.make(isSampleGarden: DevicePreferences.isSampleGarden)
 
     @State private var pickedSeedID: String?
 
@@ -41,6 +45,7 @@ struct RandomPickView: View {
                 .padding(.bottom, 24)
             }
             .background(WBColor.bg.ignoresSafeArea())
+            .accessibilityIdentifier("screen.randomPick")
             .navigationTitle("Random")
             .toolbar {
                 if showsClose {
@@ -103,8 +108,19 @@ struct RandomPickView: View {
         pickedSeedID = RandomSeedPicker.pick(
             from: candidates,
             currentYear: currentYear,
-            rng: { Double.random(in: 0..<1) }
+            rng: randomSource
         )?.id
+    }
+}
+
+/// The source of a pick's random number. Sample-garden mode always returns 0, so the pick is the first
+/// eligible seed on every launch. Other builds use the system generator.
+enum RandomPickSource {
+    static func make(isSampleGarden: Bool) -> () -> Double {
+        if isSampleGarden {
+            return { 0 }
+        }
+        return { Double.random(in: 0..<1) }
     }
 }
 

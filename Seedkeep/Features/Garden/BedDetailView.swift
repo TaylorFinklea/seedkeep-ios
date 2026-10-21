@@ -135,6 +135,7 @@ struct BedDetailView: View {
                 .task(id: allEvents.map(\.id)) {
                     await refreshCatalogsForEvents()
                 }
+                .accessibilityIdentifier("screen.bedDetail")
             } else {
                 ZStack {
                     WBScreenBackground()

@@ -10,6 +10,7 @@ struct WhatsNewSheet: View {
         NavigationStack {
             ReleaseDetailView(release: initialRelease)
                 .navigationTitle("What's New")
+                .accessibilityIdentifier("screen.whatsNew")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif

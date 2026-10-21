@@ -69,6 +69,7 @@ struct HomeLocationSettingsView: View {
             }
         }
         .wbForm()
+        .accessibilityIdentifier("screen.homeLocation")
         .navigationTitle("Home location")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

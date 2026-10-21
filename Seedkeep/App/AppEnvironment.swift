@@ -69,9 +69,25 @@ public final class AppEnvironment {
             case .settings: return "gearshape"
             }
         }
+
+        /// The tab's name in accessibility identifiers: `tab.<name>` on its tab button and `screen.<name>` on its root.
+        var identifier: String {
+            switch self {
+            case .today: return "today"
+            case .seeds: return "seeds"
+            case .garden: return "garden"
+            case .journal: return "journal"
+            case .settings: return "settings"
+            }
+        }
     }
 
     public static func live() -> AppEnvironment {
+        // Fail closed, in every build: an audit launch must be sample-garden mode. This runs before anything
+        // live is built.
+        if AuditLaunch.decision(arguments: CommandLine.arguments, sampleGarden: DevicePreferences.isSampleGarden) == .refuse {
+            preconditionFailure("-SeedkeepAuditLaunch needs sample-garden mode (a DEBUG build with -SeedkeepFixture); refusing a live launch")
+        }
         #if DEBUG
         if FixtureMode.isEnabled { return makeForFixture() }
         #endif
@@ -159,7 +175,9 @@ public final class AppEnvironment {
         durableStateDirectory: URL,
         checkpointStore: AccountDeletionCheckpointStore,
         scanStagingRoot: URL? = nil,
-        cloudKitPermitted: Bool = true
+        cloudKitPermitted: Bool = true,
+        forecastSource: @escaping RecommendationStore.ForecastSource = WeatherKitRefiner.fetchForecast,
+        apiKeys: APIKeyStore = APIKeyStore(service: "app.seedkeep.tests.\(UUID().uuidString)")
     ) -> AppEnvironment {
         let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://seedkeep.invalid")!)
         let client = makeServerClient(baseURL: prefs.bundleDefault)
@@ -180,9 +198,10 @@ public final class AppEnvironment {
         )
         let env = AppEnvironment(
             client: client, auth: auth, container: container,
-            sync: sync, recommendations: RecommendationStore(preferences: prefs),
+            sync: sync,
+            recommendations: RecommendationStore(preferences: prefs, forecastSource: forecastSource),
             journal: JournalStore(client: client, container: container), assistant: assistant,
-            preferences: prefs, apiKeys: APIKeyStore(service: "app.seedkeep.tests.\(UUID().uuidString)"),
+            preferences: prefs, apiKeys: apiKeys,
             subscriptions: SubscriptionManager(client: client),
             weatherWarnings: weatherWarnings,
             stateDefaults: defaults,
@@ -203,7 +222,12 @@ public final class AppEnvironment {
     /// defaults suite is cleared at each launch, so the identity cache, home ZIP and garden marker
     /// start empty. The store is in memory and seeded by `FixtureSampleGarden`. The identity is
     /// fixed. The iCloud account and the retired server are not reached.
-    static func makeForFixture() -> AppEnvironment {
+    /// `temporaryRoot` holds the launch's scratch directory (tests pass their own). The notification
+    /// override is process-wide, so it's installed only in a real sample-garden launch, never by tests.
+    static func makeForFixture(
+        temporaryRoot: URL = FileManager.default.temporaryDirectory,
+        installsNotificationOverride: Bool = FixtureMode.isEnabled
+    ) -> AppEnvironment {
         // Fail closed: without its own suite the fixture must not run, and must never fall back to
         // `.standard` (the real app's identity cache and preferences). Fixture mode is a debug tool,
         // so a missing suite stops the launch instead of starting the normal app.
@@ -212,8 +236,16 @@ public final class AppEnvironment {
             preconditionFailure("Sample-garden mode needs its own defaults suite (\(suite)); refusing to run without it")
         }
         defaults.removePersistentDomain(forName: suite)
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("seedkeep-fixture", isDirectory: true)
+        // The launch's appearance (`-SeedkeepAppearance`), written before any view exists.
+        if let appearance = AuditLaunch.appearanceOverride(arguments: CommandLine.arguments) {
+            defaults.set(appearance.rawValue, forKey: AppAppearance.storageKey)
+        }
+        // A fresh scratch directory per launch; older fixture directories are removed here.
+        let root = FixtureMode.prepareLaunchRoot(in: temporaryRoot)
+        // The fixture never reads the real authorization status: the Notifications screen reads this override.
+        if installsNotificationOverride {
+            NotificationsCenter.shared.authorizationStatusOverrideForTesting = FixtureMode.authorizationStatus
+        }
         let container = makeModelContainer(inMemory: true)
         let env = makeForTesting(
             identity: FixtureCloudIdentityProvider(),
@@ -224,7 +256,9 @@ public final class AppEnvironment {
             checkpointStore: AccountDeletionCheckpointStore(
                 directory: root.appendingPathComponent("AccountDeletion", isDirectory: true)),
             scanStagingRoot: root.appendingPathComponent("scan-staging", isDirectory: true),
-            cloudKitPermitted: false
+            cloudKitPermitted: false,
+            forecastSource: FixtureMode.forecastSource,
+            apiKeys: APIKeyStore(backend: InMemoryAPIKeyBackend())
         )
         do {
             try FixtureSampleGarden.seed(

@@ -88,11 +88,13 @@ struct SettingsContent: View {
                 } label: {
                     Label("Locations", systemImage: "tray")
                 }
+                .accessibilityIdentifier("settings.locations")
                 NavigationLink {
                     TagsView()
                 } label: {
                     Label("Tags", systemImage: "tag")
                 }
+                .accessibilityIdentifier("settings.tags")
             } header: {
                 WBSectionHeader("Seeds")
             }
@@ -108,11 +110,13 @@ struct SettingsContent: View {
                             .foregroundStyle(WBColor.muted)
                     }
                 }
+                .accessibilityIdentifier("settings.homeLocation")
                 NavigationLink {
                     NotificationsSettingsView()
                 } label: {
                     Label("Notifications", systemImage: "bell")
                 }
+                .accessibilityIdentifier("settings.notifications")
             } header: {
                 WBSectionHeader("Home and alerts")
             }
@@ -146,6 +150,7 @@ struct SettingsContent: View {
                             .foregroundStyle(WBColor.muted)
                     }
                 }
+                .accessibilityIdentifier("settings.aiProvider")
                 NavigationLink {
                     APIKeysSettingsView()
                 } label: {
@@ -156,6 +161,7 @@ struct SettingsContent: View {
                             .foregroundStyle(WBColor.muted)
                     }
                 }
+                .accessibilityIdentifier("settings.apiKeys")
                 if !ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled {
                     NavigationLink {
                         SubscriptionSettingsView()
@@ -322,6 +328,7 @@ struct SettingsContent: View {
                     }
                 }
                 .accessibilityLabel(SettingsText.whatsNewLabel(unseen: whatsNewUnseen))
+                .accessibilityIdentifier("settings.whatsNew")
 
                 Text("Data sources")
                     .font(.wbCaption.weight(.semibold))

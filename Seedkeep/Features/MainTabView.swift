@@ -17,14 +17,15 @@ struct MainTabView: View {
     /// a new error fires so the 8s clock resets.
     @State private var dismissTask: Task<Void, Never>?
 
+    /// Each tab's root carries `screen.<name>`, so a test knows which tab it is on.
     @ViewBuilder
     private func tabRoot(_ tab: AppEnvironment.AppTab) -> some View {
         switch tab {
-        case .today: TodayView()
-        case .seeds: LibraryView()
-        case .garden: GardenView()
-        case .journal: JournalView()
-        case .settings: NavigationStack { SettingsContent() }
+        case .today: TodayView().accessibilityIdentifier("screen.today")
+        case .seeds: LibraryView().accessibilityIdentifier("screen.seeds")
+        case .garden: GardenView().accessibilityIdentifier("screen.garden")
+        case .journal: JournalView().accessibilityIdentifier("screen.journal")
+        case .settings: NavigationStack { SettingsContent().accessibilityIdentifier("screen.settings") }
         }
     }
 
@@ -33,7 +34,10 @@ struct MainTabView: View {
             ForEach(AppEnvironment.AppTab.allCases, id: \.self) { tab in
                 tabRoot(tab)
                     .tag(tab)
-                    .tabItem { Label(tab.title, systemImage: tab.systemImage) }
+                    .tabItem {
+                        Label(tab.title, systemImage: tab.systemImage)
+                            .accessibilityIdentifier("tab.\(tab.identifier)")
+                    }
             }
         }
         .overlay(alignment: .top) { bannerOverlay }

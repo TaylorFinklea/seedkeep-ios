@@ -83,6 +83,7 @@ struct AIProviderSettingsView: View {
             }
         }
         .wbForm()
+        .accessibilityIdentifier("screen.aiProvider")
         .navigationTitle("AI provider")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

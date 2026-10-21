@@ -155,6 +155,7 @@ struct AddSeedView: View {
                 }
             }
             .wbForm()
+            .accessibilityIdentifier("screen.addSeed")
             // Once the seed exists, its details are fixed; only Retry (finish the save) remains.
             .disabled(seedCreated)
             .navigationTitle(prefill == nil ? "Add seed" : "Confirm seed")

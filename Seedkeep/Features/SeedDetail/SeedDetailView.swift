@@ -96,6 +96,7 @@ struct SeedDetailView: View {
                     deleteSection(seed)
                 }
                 .wbForm()
+                .accessibilityIdentifier("screen.seedDetail")
                 .sheet(isPresented: $showPlanEvent) {
                     AddPlantingEventView(bedID: nil, prefillSeedID: seedID)
                 }

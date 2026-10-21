@@ -5,6 +5,7 @@
 import CloudKit
 import Foundation
 import SeedkeepCloudKit
+import UserNotifications
 
 enum FixtureMode {
     static let launchArgument = "-SeedkeepFixture"
@@ -19,6 +20,48 @@ enum FixtureMode {
     static func isEnabled(arguments: [String], isRunningUnitTests: Bool) -> Bool {
         !isRunningUnitTests && arguments.contains(launchArgument)
     }
+
+    /// Scratch-directory names the fixture owns: `seedkeep-fixture` and `seedkeep-fixture-<UUID>`.
+    static let rootNamePrefix = "seedkeep-fixture"
+
+    /// The fixture's scratch root for one launch, `seedkeep-fixture-<UUID>` in `temporary`. Older fixture
+    /// roots are removed first, so a launch never reads files a previous session left behind.
+    static func prepareLaunchRoot(
+        in temporary: URL = FileManager.default.temporaryDirectory,
+        id: UUID = UUID()
+    ) -> URL {
+        removeStaleRoots(in: temporary)
+        return temporary.appendingPathComponent("\(rootNamePrefix)-\(id.uuidString)", isDirectory: true)
+    }
+
+    /// A directory the fixture owns: the old fixed name, or `seedkeep-fixture-<UUID>`. Anything else,
+    /// such as `seedkeep-fixture-backup`, is left alone.
+    static func isFixtureRootName(_ name: String) -> Bool {
+        if name == rootNamePrefix { return true }
+        let prefix = rootNamePrefix + "-"
+        guard name.hasPrefix(prefix) else { return false }
+        return UUID(uuidString: String(name.dropFirst(prefix.count))) != nil
+    }
+
+    /// Removes every fixture directory in `temporary`. Other files and directories are left alone.
+    static func removeStaleRoots(in temporary: URL) {
+        let fileManager = FileManager.default
+        let items = (try? fileManager.contentsOfDirectory(
+            at: temporary,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )) ?? []
+        for item in items where isFixtureRootName(item.lastPathComponent) {
+            guard (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            try? fileManager.removeItem(at: item)
+        }
+    }
+
+    /// The fixture forecast: empty and immediate, so no WeatherKit request is made and every window keeps
+    /// its baseline.
+    static let forecastSource: RecommendationStore.ForecastSource = { _, _ in [] }
+
+    /// The notification status a sample-garden launch reports, without asking the system.
+    static let authorizationStatus: @Sendable () async -> UNAuthorizationStatus = { .authorized }
 }
 
 /// A fixed iCloud identity for sample-garden mode: an available account that owns one garden.

@@ -3,6 +3,7 @@ import Observation
 import SeedkeepKit
 import SwiftData
 import Testing
+import UserNotifications
 @testable import Seedkeep
 
 #if DEBUG
@@ -16,6 +17,16 @@ struct FixtureEnvironmentTests {
             .removePersistentDomain(forName: FixtureMode.defaultsSuiteName)
     }
 
+    /// A sample-garden environment whose scratch directory lives in this suite's own temporary folder,
+    /// so the factory's cleanup never touches the host's real temporary directory.
+    private static let isolatedTemporary = FileManager.default.temporaryDirectory
+        .appendingPathComponent("fixture-tests-\(UUID().uuidString)", isDirectory: true)
+
+    private static func makeFixture() -> AppEnvironment {
+        try? FileManager.default.createDirectory(at: isolatedTemporary, withIntermediateDirectories: true)
+        return AppEnvironment.makeForFixture(temporaryRoot: isolatedTemporary, installsNotificationOverride: false)
+    }
+
     @Test func usesItsOwnDefaultsSuiteAndNeverStandard() async throws {
         defer { Self.clearFixtureSuite() }
         let homeZipKey = "seedkeep.location.homeZip"
@@ -24,7 +35,7 @@ struct FixtureEnvironmentTests {
         let homeZipBefore = standard.string(forKey: homeZipKey)
         let identityBefore = standard.data(forKey: identityKey)
 
-        let env = AppEnvironment.makeForFixture()
+        let env = Self.makeFixture()
         await env.auth.restoreSession()
 
         let suite = try #require(UserDefaults(suiteName: FixtureMode.defaultsSuiteName))
@@ -36,7 +47,7 @@ struct FixtureEnvironmentTests {
 
     @Test func buildsNoCloudKitCoordinatorAndKeepsCloudKitOff() async throws {
         defer { Self.clearFixtureSuite() }
-        let env = AppEnvironment.makeForFixture()
+        let env = Self.makeFixture()
         #expect(!env.canUseCloudKit)
 
         await env.auth.restoreSession()
@@ -58,7 +69,7 @@ struct FixtureEnvironmentTests {
 
     @Test func aCloudSyncPassIsObservedFromItsStart() async throws {
         defer { Self.clearFixtureSuite() }
-        let env = AppEnvironment.makeForFixture()
+        let env = Self.makeFixture()
         #expect(!env.isSyncingForDisplay)
 
         // A view that read the flag while idle hears the first pass begin, although the
@@ -85,7 +96,7 @@ struct FixtureEnvironmentTests {
 
     @Test func factorySeedsTheExpectedSampleGarden() throws {
         defer { Self.clearFixtureSuite() }
-        let env = AppEnvironment.makeForFixture()
+        let env = Self.makeFixture()
         let context = env.container.mainContext
 
         let seeds = try context.fetch(FetchDescriptor<LocalSeed>())
@@ -115,7 +126,7 @@ struct FixtureEnvironmentTests {
         }
         let before = snapshot(standard)
 
-        let env = AppEnvironment.makeForFixture()
+        let env = Self.makeFixture()
         await env.auth.restoreSession()
 
         // The What's New baseline and the notification toggles go through the store the app selects
@@ -126,6 +137,62 @@ struct FixtureEnvironmentTests {
         #expect(WhatsNewGate.lastSeenBuild(defaults: store) == 99)
         #expect(store.bool(forKey: "seedkeep.notif.frost"))
         #expect(snapshot(standard) == before)
+    }
+
+    @Test func launchRootIsFreshAndOlderFixtureDirectoriesAreRemoved() throws {
+        let fileManager = FileManager.default
+        let base = fileManager.temporaryDirectory
+            .appendingPathComponent("fixture-root-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: base) }
+        for name in ["seedkeep-fixture", "seedkeep-fixture-\(UUID().uuidString)", "unrelated"] {
+            try fileManager.createDirectory(
+                at: base.appendingPathComponent(name, isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        }
+
+        let id = UUID()
+        let root = FixtureMode.prepareLaunchRoot(in: base, id: id)
+
+        #expect(root.lastPathComponent == "seedkeep-fixture-\(id.uuidString)")
+        // Every older fixture directory is gone; a directory the fixture doesn't own is kept.
+        #expect(try fileManager.contentsOfDirectory(atPath: base.path) == ["unrelated"])
+    }
+
+    @Test func fixtureAPIKeysStayInMemoryAcrossLaunches() {
+        defer { Self.clearFixtureSuite() }
+        let first = Self.makeFixture()
+        first.apiKeys.save(.anthropic, key: "test-key-not-real")
+        #expect(first.apiKeys.has(.anthropic))
+
+        // A Keychain item would survive into the next launch. The fixture's in-memory store does not.
+        let second = Self.makeFixture()
+        #expect(!second.apiKeys.has(.anthropic))
+    }
+
+    @Test func fixtureNotificationStatusIsAuthorizedWithoutAskingTheSystem() async {
+        // The status a sample-garden launch installs. Tests never install it: the override is
+        // process-wide and other suites own it.
+        #expect(await FixtureMode.authorizationStatus() == .authorized)
+        #expect(!FixtureMode.isEnabled)
+    }
+
+    @Test func cleanupRemovesOnlyDirectoriesTheFixtureOwns() {
+        #expect(FixtureMode.isFixtureRootName("seedkeep-fixture"))
+        #expect(FixtureMode.isFixtureRootName("seedkeep-fixture-\(UUID().uuidString)"))
+        #expect(!FixtureMode.isFixtureRootName("seedkeep-fixture-backup"))
+        #expect(!FixtureMode.isFixtureRootName("seedkeep-fixtures"))
+        #expect(!FixtureMode.isFixtureRootName("unrelated"))
+    }
+
+    @Test func fixtureLaunchStartsSeedsUngrouped() {
+        defer { Self.clearFixtureSuite() }
+        let store = DevicePreferences.store(isFixture: true)
+        store.set(true, forKey: "library.groupByType")
+
+        // The launch wipes the fixture suite, so the Seeds list starts ungrouped on every launch.
+        _ = Self.makeFixture()
+        #expect(store.object(forKey: "library.groupByType") == nil)
     }
 
 }

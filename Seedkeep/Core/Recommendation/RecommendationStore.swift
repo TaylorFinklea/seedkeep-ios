@@ -9,7 +9,12 @@ import Foundation
 @MainActor
 @Observable
 public final class RecommendationStore {
+    /// Returns the daily forecast for a coordinate. The app uses `WeatherKitRefiner.fetchForecast`; sample-garden
+    /// mode and tests inject their own.
+    typealias ForecastSource = @Sendable (_ latitude: Double, _ longitude: Double) async throws -> [ForecastDay]
+
     private let preferences: AppPreferences
+    private let forecastSource: ForecastSource
 
     /// The local calendar day the windows are computed for. It is observed, so a view that shows a window re-renders
     /// when the day or the time zone changes, instead of holding yesterday's advice.
@@ -33,8 +38,13 @@ public final class RecommendationStore {
 
     // MARK: - Init
 
-    public init(preferences: AppPreferences) {
+    public convenience init(preferences: AppPreferences) {
+        self.init(preferences: preferences, forecastSource: WeatherKitRefiner.fetchForecast)
+    }
+
+    init(preferences: AppPreferences, forecastSource: @escaping ForecastSource) {
         self.preferences = preferences
+        self.forecastSource = forecastSource
         // Midnight, a time-zone change, and returning to the app can each change the day.
         let names: [Notification.Name] = [
             .NSCalendarDayChanged,
@@ -180,7 +190,7 @@ public final class RecommendationStore {
         }
 
         do {
-            let fresh = try await WeatherKitRefiner.fetchForecast(latitude: key.latitude, longitude: key.longitude)
+            let fresh = try await forecastSource(key.latitude, key.longitude)
             guard currentForecastKey() == key else { return nil }
             cachedForecast = fresh
             forecastKey = key

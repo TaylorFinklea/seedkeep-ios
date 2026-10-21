@@ -99,6 +99,7 @@ struct WhatToPlantView: View {
             }
         }
         .wbForm()
+        .accessibilityIdentifier("screen.whatToPlant")
         .navigationTitle("What to plant")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
