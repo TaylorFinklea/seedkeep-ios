@@ -4,6 +4,8 @@
 #
 # Usage: scripts/a11y-audit.sh <simulator UDID>
 #
+# Skips SeedkeepUITests/R3ScreenshotTests, which scripts/r3-screenshots.sh runs.
+#
 # Fails on: zero tests, any skipped test, a missing configuration, an audit execution error, a timeout,
 # or any finding not in SeedkeepUITests/AuditAllowlist.swift.
 #
@@ -66,6 +68,7 @@ xcodebuild \
     -destination "platform=iOS Simulator,id=$SIM_UDID" \
     -derivedDataPath "$DERIVED_DATA" \
     -resultBundlePath "$RESULT_BUNDLE" \
+    -skip-testing:SeedkeepUITests/R3ScreenshotTests \
     -parallel-testing-enabled NO \
     -disable-concurrent-destination-testing \
     -collect-test-diagnostics never \
