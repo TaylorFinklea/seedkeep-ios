@@ -84,12 +84,39 @@ struct FixtureModeTests {
         // Every seed has growing info, so its planting window can show.
         #expect(seeds.allSatisfy { $0.growingInfo?.days_to_maturity_min != nil })
         #expect(try context.fetchCount(FetchDescriptor<LocalBed>()) == 2)
-        #expect(try context.fetchCount(FetchDescriptor<LocalPlantingEvent>()) == 16)
+        #expect(try context.fetchCount(FetchDescriptor<LocalPlantingEvent>()) == 19)
         #expect(try context.fetchCount(FetchDescriptor<LocalJournalEntry>()) == 6)
         #expect(try context.fetchCount(FetchDescriptor<LocalJournalChecklistItem>()) == 8)
         #expect(try context.fetchCount(FetchDescriptor<LocalTag>()) == 4)
         #expect(try context.fetchCount(FetchDescriptor<LocalLocation>()) == 3)
         #expect(preferences.homeClimate?.zip == FixtureSampleGarden.homeZip)
+
+        // R3: the home climate keeps the ZIP's real frost dates, and the tender sowing is still flagged.
+        let climate = try #require(preferences.homeClimate)
+        let real = try #require(ClimateLookup.climate(forZip: FixtureSampleGarden.homeZip))
+        #expect(climate.avgLastFrost == real.avgLastFrost)
+        #expect(climate.avgFirstFrost == real.avgFirstFrost)
+        let events = try context.fetch(FetchDescriptor<LocalPlantingEvent>())
+        let seedsByID = Dictionary(uniqueKeysWithValues: seeds.map { ($0.id, $0) })
+        let flagged = try #require(events.first { $0.id == FixtureSampleGarden.frostFlaggedEventID })
+        #expect(flagged.seedID == FixtureSampleGarden.tenderSeedID)
+        #expect(seedsByID[FixtureSampleGarden.tenderSeedID]?.growingInfo?.frost_tolerance == "tender")
+        #expect(seedsByID[FixtureSampleGarden.tenderSeedID]?.state == .active)
+        #expect(FrostCheck.check(flagged, seed: seedsByID[flagged.seedID ?? ""], climate: climate).isFlagged)
+
+        // One unplaced event and one outside its bed's grid.
+        let beds = try context.fetch(FetchDescriptor<LocalBed>())
+        func placement(_ id: String) throws -> GridPlacement {
+            let event = try #require(events.first { $0.id == id })
+            let bed = try #require(beds.first { $0.id == event.bedID })
+            let frost = FrostCheck.check(event, seed: seedsByID[event.seedID ?? ""], climate: climate)
+            return GardenGrid.placement(
+                of: GridEvent(event, isFrostFlagged: frost.isFlagged),
+                in: GardenGrid.size(widthFeet: bed.widthFeet, lengthFeet: bed.lengthFeet))
+        }
+        #expect(try placement(FixtureSampleGarden.unplacedEventID) == .unplaced)
+        #expect(try placement(FixtureSampleGarden.outsideGridEventID) == .outside)
+        #expect(try placement(FixtureSampleGarden.frostFlaggedEventID) != .outside)
     }
 }
 #endif

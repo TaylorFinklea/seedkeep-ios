@@ -155,6 +155,8 @@ struct WorkbenchShell: View {
             SeedsTableView(model: model, rows: rows, seedsByID: seedsByID)
         case .today: TodayView()
         case .garden: GardenView()
+        // What to Plant stands in for the Windows screen until R3 G3 replaces it.
+        case .windows: NavigationStack { WhatToPlantView() }
         case .journal: JournalView()
         case .settings: NavigationStack { SettingsContent() }
         }

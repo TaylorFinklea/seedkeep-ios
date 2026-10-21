@@ -24,6 +24,9 @@ enum FixtureSampleGarden {
         preferences.saveHomeClimate(climate)
 
         let clock = SampleClock(now: now)
+        let today = CalendarDay.today(now: now)
+        let flaggedDays = today.days(to: FixtureFrostEvent.flaggedDay(
+            today: today, lastFrost: climate.avgLastFrost, firstFrost: climate.avgFirstFrost))
         for (index, name) in locationNames.enumerated() {
             context.insert(LocalLocation(
                 id: id(5, index + 1), householdID: householdID, name: name, sortOrder: index,
@@ -51,11 +54,12 @@ enum FixtureSampleGarden {
                 sortOrder: index, createdAt: clock.ms(-70), updatedAt: clock.ms(-70)))
         }
         for (index, event) in plantingSpecs.enumerated() {
-            let stamp = clock.ms(event.planned)
+            let days = event.planned ?? flaggedDays
+            let stamp = clock.ms(days)
             context.insert(LocalPlantingEvent(
                 id: id(3, index + 1), householdID: householdID,
                 bedID: id(2, event.bed + 1), seedID: event.seed.map { id(1, $0 + 1) },
-                kindRaw: event.kind.rawValue, plannedFor: clock.day(event.planned),
+                kindRaw: event.kind.rawValue, plannedFor: clock.day(days),
                 completedAt: event.done ? stamp : nil, notes: event.notes,
                 xFeet: event.position?.x, yFeet: event.position?.y,
                 createdAt: clock.ms(-40), updatedAt: stamp))
@@ -83,6 +87,15 @@ enum FixtureSampleGarden {
     private static func id(_ kind: Int, _ n: Int) -> String {
         String(format: "00000000-0000-4000-8000-%04ld%08ld", kind, n)
     }
+
+    /// Black Beauty zucchini, a frost-tender active seed.
+    static let tenderSeedID = id(1, 8)
+    /// Its sowing in North bed, on the day `FixtureFrostEvent` picks, always frost-flagged.
+    static let frostFlaggedEventID = id(3, 17)
+    /// A sowing in Herb bed with no position.
+    static let unplacedEventID = id(3, 18)
+    /// A transplant in North bed placed beyond its 4-foot width.
+    static let outsideGridEventID = id(3, 19)
 
     // MARK: - Locations, tags, beds
 
@@ -220,8 +233,8 @@ enum FixtureSampleGarden {
         let bed: Int
         /// Index into `seedSpecs`.
         let seed: Int?
-        /// Days from today.
-        let planned: Int
+        /// Days from today; nil for the frost-flagged sowing, whose day `FixtureFrostEvent` picks.
+        let planned: Int?
         let done: Bool
         let position: (x: Double, y: Double)?
         let notes: String?
@@ -248,6 +261,11 @@ enum FixtureSampleGarden {
         PlantingSpec(kind: .sowing, bed: 0, seed: 5, planned: 0, done: false, position: nil, notes: nil),
         PlantingSpec(kind: .transplant, bed: 0, seed: 9, planned: 0, done: false, position: nil, notes: nil),
         PlantingSpec(kind: .sowing, bed: 1, seed: 2, planned: 0, done: false, position: nil, notes: nil),
+        // R3 Garden: the frost-flagged tender sowing, an unplaced event, and one outside the grid.
+        PlantingSpec(kind: .sowing, bed: 0, seed: 7, planned: nil,
+                     done: false, position: (1.5, 2.5), notes: nil),
+        PlantingSpec(kind: .sowing, bed: 1, seed: 8, planned: 10, done: false, position: nil, notes: nil),
+        PlantingSpec(kind: .transplant, bed: 0, seed: 10, planned: 12, done: false, position: (4.5, 2.0), notes: nil),
     ]
 
     // MARK: - Journal

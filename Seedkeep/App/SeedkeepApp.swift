@@ -101,6 +101,8 @@ struct RootView: View {
     @Binding var pendingHandoff: AccountDeletionHandoffLink?
     @State private var whatsNewRelease: ChangelogRelease?
     @State private var workbenchModel = WorkbenchModel()
+    /// The window's Garden state, shared by both shells so a Plan survives a size-class switch.
+    @State private var gardenSession = GardenSession()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
@@ -170,6 +172,8 @@ struct RootView: View {
                 workbenchModel.resetForScopeChange()
             }
         }
+        .environment(gardenSession)
+        .modifier(GardenSessionReconciler(session: gardenSession))
         .sheet(item: Binding(
             get: { pendingInviteCode.map { InviteRoute(code: $0) } },
             set: { newValue in pendingInviteCode = newValue?.code }

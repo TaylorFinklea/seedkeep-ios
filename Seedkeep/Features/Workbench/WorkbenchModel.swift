@@ -14,7 +14,7 @@ enum SeedsRequest: Equatable, Sendable {
 }
 
 enum WorkbenchRoute: String, CaseIterable, Identifiable, Sendable {
-    case today, seeds, garden, journal, settings
+    case today, seeds, garden, windows, journal, settings
     var id: String { rawValue }
 
     var title: String {
@@ -22,6 +22,7 @@ enum WorkbenchRoute: String, CaseIterable, Identifiable, Sendable {
         case .today: return "Today"
         case .seeds: return "Seeds"
         case .garden: return "Garden"
+        case .windows: return "Windows"
         case .journal: return "Journal"
         case .settings: return "Settings"
         }
@@ -33,6 +34,7 @@ enum WorkbenchRoute: String, CaseIterable, Identifiable, Sendable {
         case .today: return "sun.max"
         case .seeds: return "leaf"
         case .garden: return "square.grid.3x3"
+        case .windows: return "calendar"
         case .journal: return "book"
         case .settings: return "gearshape"
         }

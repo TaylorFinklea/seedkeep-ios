@@ -104,7 +104,7 @@ struct FixtureEnvironmentTests {
         #expect(Set(seeds.map(\.state)) == Set(SeedState.allCases))
         #expect(seeds.allSatisfy { $0.householdID == FixtureCloudIdentityProvider.householdID })
         #expect(try context.fetchCount(FetchDescriptor<LocalBed>()) == 2)
-        #expect(try context.fetchCount(FetchDescriptor<LocalPlantingEvent>()) == 16)
+        #expect(try context.fetchCount(FetchDescriptor<LocalPlantingEvent>()) == 19)
         #expect(try context.fetchCount(FetchDescriptor<LocalJournalEntry>()) == 6)
         #expect(try context.fetchCount(FetchDescriptor<LocalJournalChecklistItem>()) == 8)
         #expect(try context.fetchCount(FetchDescriptor<LocalTag>()) == 4)

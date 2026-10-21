@@ -38,6 +38,7 @@ struct WorkbenchCommandsTests {
             (.go(.today), .today),
             (.go(.seeds), .seeds),
             (.go(.garden), .garden),
+            (.go(.windows), .windows),
             (.go(.journal), .journal),
             (.go(.settings), .settings)
         ]
@@ -49,6 +50,15 @@ struct WorkbenchCommandsTests {
             #expect(model.route == route)
             #expect(model.takeSeedsRequests().isEmpty)
         }
+    }
+
+    @Test("Go shortcuts keep their numbers; Windows is ⌘5 and Settings has none")
+    func goShortcuts() {
+        #expect(WorkbenchGoShortcut.routes == [.today, .seeds, .garden, .windows, .journal])
+        #expect(WorkbenchGoShortcut.routes.map { WorkbenchGoShortcut.key(for: $0) } == ["1", "2", "3", "5", "4"])
+        #expect(WorkbenchGoShortcut.key(for: .settings) == nil)
+        // Every route but Settings (⌘,) is in the Go menu.
+        #expect(Set(WorkbenchGoShortcut.routes) == Set(WorkbenchRoute.allCases).subtracting([.settings]))
     }
 
     @Test("Command Palette toggles the model state")

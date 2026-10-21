@@ -295,6 +295,13 @@ above both shells and injected into the environment):
 
 ## G2 — Garden screens (worker; after G1)
 
+*From the G0 review:* the Garden screen in **both** shells calls
+`takePendingPlan()` (otherwise a leftover Plan fires on a later
+size-class switch). A `.needsBed` brush with no grid bed shows the
+add-a-bed prompt, never a Stop bar over the bed list or a gridless bed.
+Gridless beds list their events from `offGrid`'s `noGrid` bucket, with no
+"Place" action.
+
 - **iPad and Mac (`.garden`):**
   - **Toolbar:**
     - a bed switcher (segmented up to 5 beds, otherwise a menu)
@@ -406,15 +413,17 @@ with findings resolved, before each commit.
     tests extended)
 - **Fixture (DEBUG):**
   - a tender seed with stable ids
-  - in sample-garden mode, a pure `FixtureFrostDates.make(today:)` sets the
-    home climate's frost dates so that a tender event planned 3 days ahead
-    is always flagged. Tests cover every month boundary and the new year.
-    - **Fall case** (today from Mar 10 to Dec 28): last frost is 03-01,
-      first frost is today−5. The event is on or after first frost in the
-      same year.
-    - **Spring case** (Dec 29 to Mar 9): last frost is 04-15, first frost
-      is 10-15. The event, possibly in the next year, falls before last
-      frost.
+  - in sample-garden mode, the home climate keeps the sample ZIP's real
+    frost dates, so planting windows stay realistic. A pure
+    `FixtureFrostEvent.flaggedDay(today:lastFrost:firstFrost:)` dates the
+    tender sowing: today+3 when that is frost-flagged (spring and fall,
+    inside Today's 14-day banner), otherwise that year's average first frost
+    (mid-season; flagged on the grid, but no Today banner). Tests sweep
+    every day of a common and a leap year.
+    - *Amended after the G0 review:* the original design overrode the frost
+      dates (last 03-01, first today−5), which the planting engine also
+      reads, so it emptied the sample garden's windows for most of the
+      year.
   - one unplaced event
   - one event outside the grid
 - **Audit:** the manifest, driver and tests are updated:

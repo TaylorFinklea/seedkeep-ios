@@ -105,10 +105,9 @@ struct WorkbenchCommands: Commands {
         }
 
         CommandMenu("Go") {
-            routeButton("Today", route: .today, key: "1")
-            routeButton("Seeds", route: .seeds, key: "2")
-            routeButton("Garden", route: .garden, key: "3")
-            routeButton("Journal", route: .journal, key: "4")
+            ForEach(WorkbenchGoShortcut.routes, id: \.self) { route in
+                routeButton(route)
+            }
             Divider()
             Button("Settings") { WorkbenchCommandAction.go(.settings).perform(on: model) }
                 .keyboardShortcut(",", modifiers: .command)
@@ -116,10 +115,31 @@ struct WorkbenchCommands: Commands {
         }
     }
 
-    @ViewBuilder private func routeButton(_ title: String, route: WorkbenchRoute, key: KeyEquivalent) -> some View {
-        Button(title) { WorkbenchCommandAction.go(route).perform(on: model) }
-            .keyboardShortcut(key, modifiers: .command)
+    @ViewBuilder private func routeButton(_ route: WorkbenchRoute) -> some View {
+        let button = Button(route.title) { WorkbenchCommandAction.go(route).perform(on: model) }
             .disabled(!WorkbenchCommandAvailability.hasModel(model))
+        if let key = WorkbenchGoShortcut.key(for: route) {
+            button.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
+        } else {
+            button
+        }
+    }
+}
+
+/// The Go menu's numbered routes. Numbers stay with their routes, so Windows (added in R3) is ⌘5
+/// though it is listed after Garden.
+enum WorkbenchGoShortcut {
+    static let routes: [WorkbenchRoute] = [.today, .seeds, .garden, .windows, .journal]
+
+    static func key(for route: WorkbenchRoute) -> Character? {
+        switch route {
+        case .today: return "1"
+        case .seeds: return "2"
+        case .garden: return "3"
+        case .journal: return "4"
+        case .windows: return "5"
+        case .settings: return nil
+        }
     }
 }
 

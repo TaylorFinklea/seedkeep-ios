@@ -40,8 +40,9 @@ struct WorkbenchShellTests {
 
     @Test("routes retain their titles and symbols")
     func routesHaveStableTitlesAndSymbols() {
-        #expect(WorkbenchRoute.allCases.map(\.title) == ["Today", "Seeds", "Garden", "Journal", "Settings"])
-        #expect(WorkbenchRoute.allCases.map(\.symbol) == ["sun.max", "leaf", "square.grid.3x3", "book", "gearshape"])
+        #expect(WorkbenchRoute.allCases.map(\.title) == ["Today", "Seeds", "Garden", "Windows", "Journal", "Settings"])
+        #expect(WorkbenchRoute.allCases.map(\.symbol)
+            == ["sun.max", "leaf", "square.grid.3x3", "calendar", "book", "gearshape"])
     }
 }
 
