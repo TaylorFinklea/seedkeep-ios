@@ -628,3 +628,271 @@ Files: `BedDetailView`, `AttachedEntityPicker`, `SeedsInspector`,
   - **R1 problem for R2c:** in iPad portrait, with the sidebar and inspector
     open, the table's Name column scrolls out of view.
   - **Mac:** the visual check stays with the owner.
+
+---
+
+# R2c contract
+
+R2c turns dark mode on and fixes the known contrast, large-text and
+VoiceOver defects. Owner decision (2026-10-20): appearance follows the
+system, with a Light / Dark / System override in Settings.
+
+Sol critiqued the first draft and asked for a revision. Two more
+confirmation rounds followed, and it approved this version (2026-10-20). Its main result: the automated accessibility
+audit is a separate phase, R2d, with its own scheme, kept out of the
+per-change gate.
+
+## Facts (verified 2026-10-20)
+
+- **Forced appearances:**
+  - Light mode is forced once, at `SeedkeepApp.swift:48`. The only scene is
+    `WindowGroup("main")`.
+  - Two intentional dark exceptions stay: `ScanFlow`'s dark navigation bar
+    (`ScanFlow.swift:65`) and the camera controller's black background
+    (`CameraView.swift:89`).
+- **Native sharing doesn't go through SwiftUI sheets:**
+  `UICloudSharingController` on iOS and `NSSharingService` on macOS
+  (`CloudSharingControllerView.swift`).
+- **Launch screen:** it uses `systemBackground` (`project.yml:62`). It
+  follows the device's appearance before the app can read its own
+  preference.
+- **Token contrast (WCAG, light / dark):** every token passes against
+  `bg`, `panel` and `panel2`:
+  - `ink`: 15.3 / 13.6
+  - `muted`: 6.0 / 7.0
+  - `accent`: 7.8 / 8.1
+  - `accentInk` on `accent`: 8.5 / 8.7
+  - `warn`: 5.9 / 7.6
+  - the lowest verdict: 3.4 / 5.9
+  - `faint`: 3.8 / 5.0
+  
+  `line2` on `panel` is 1.56 / 1.58 and is used only for rules and borders.
+- **Real failures are in combinations of tokens:**
+  - **Photo retry icons:** white on `warn` is 2.3:1 in dark
+    (`SeedDetailView.swift:189`, `JournalEntryView.swift:250`).
+  - **Chart marker:** `ink` over full-strength `verdictPlantNow` is 3.1
+    light / 1.6 dark (`RecommendationPanel.swift:391`).
+  - **`faint` used for readable text:**
+    - the garden chooser's dates (`GardenChooserView.swift:106,111`)
+    - the command palette's group label (`CommandPaletteView.swift:111`),
+      which is 3.4 / 3.9 on `paletteSelection`
+  - **The Seeds search field's border:** it's `line2` on `panel2`
+    (`SeedsToolbar.swift:136`).
+- **No UI-test target exists.** The chart's text summary is already done and
+  tested (R2a).
+
+## Permitted behaviour changes
+
+- the appearance preference
+- bed-canvas move actions for VoiceOver, and hidden overlapping labels
+- picker style at accessibility sizes (iOS)
+- the bulk bar's reflow
+- the inspector's initial state in narrow Seeds layouts
+- the bed-position bounds fix
+- the "new" label on What's New
+
+Everything else is unchanged. The R2a and R2b rules carry over.
+
+## Order and ownership
+
+The lead plans, integrates, takes the screenshots and decides; workers
+implement.
+1. C0 and C1 (one worker) land first, including the fixture isolation that
+   the C2 screenshots depend on.
+2. C2: the lead takes the screenshots and a worker fixes what they show.
+3. C3 workers in disjoint file groups:
+   - C3-a: Journal and Settings (What's New)
+   - C3-b: the bed canvas, its new helper and tests
+   - C3-c: the seed detail and Add Seed pickers
+   - C3-d: the inspector policy, model and table, the bulk bar, and the
+     toolbar
+4. Merge, screenshots, gate, then reviews.
+
+## C0 — Appearance and fixture isolation (worker)
+
+- **Model:** `AppAppearance` (`system`, `light`, `dark`), raw values
+  `"system"`, `"light"` and `"dark"`.
+  - **Storage:** `AppAppearance.storageKey = "seedkeep.appearance"`, read
+    with `@AppStorage(..., store: AppAppearance.store)`.
+  - `store` is the fixture suite in sample-garden mode and `.standard`
+    otherwise. It's per device, shared by all of the app's windows,
+    independent of the garden, and never synced.
+  - An unset or unknown value means `system`.
+- **Applied once** at `mainRoot` as `.preferredColorScheme(appearance.colorScheme)`,
+  where nil follows the system and its changes. The forced light mode and its
+  Herbarium comment are removed.
+- **Settings:** an "Appearance" section after Account, with a picker:
+  System, Light, Dark.
+- **Native sharing on iOS:** the presenter sets the controller's
+  `overrideUserInterfaceStyle` from the preference (unspecified for System).
+- **Native sharing on macOS:** if `NSSharingService` can't follow the
+  override, that's recorded as a known exception.
+- **Launch screen:** a `LaunchBackground` asset with `bg`'s light and dark
+  values, set as `UILaunchScreen.UIColorName` in `project.yml`. It follows
+  the device, so when the override differs, a brief switch at launch is
+  accepted and documented.
+- **Fixture isolation**, before any R2c screenshot:
+  - In sample-garden mode, `WhatsNewGate` (startup baseline and
+    mark-seen) and the Notifications toggles (`seedkeep.notif.*`) read and
+    write the fixture defaults suite.
+  - Notification permission requests, scheduling, and every clear, remove
+    or cancel of pending or delivered notifications are skipped there. The
+    toggles only store their value, so a fixture session can't change the
+    device's real notifications.
+  - A test shows a fixture launch leaves `UserDefaults.standard` unchanged
+    for these keys.
+- **Tests:**
+  - raw-value mapping, the default, and an unknown value → system
+  - `colorScheme` mapping
+  - the store choice in fixture mode
+
+## C1 — Contrast (same worker as C0)
+
+- **One table:** `WBPalette`, with each token's light and dark hex values.
+  `WBColor` builds its colours from it.
+- **Tests compute WCAG contrast in both appearances.** Text pairs need 4.5:1:
+  - `ink` and `muted` on `bg`, `panel`, `panel2`, `accentSoft`, `warnSoft`,
+    `selection` and `paletteSelection`
+  - `accent` on `bg`, `panel`, `panel2` and `accentSoft`
+  - `accentInk` on `accent`
+  - the new `warnInk` on `warn`
+
+  Graphics need 3:1:
+  - `warn`, the verdict colours and `faint` on `panel`
+  - `faint` (the swatch ring) on `panel`
+- **Resolution tests:** a token resolves to its light value under a light
+  trait or appearance, and to its dark value under a dark one, on iOS
+  (`UITraitCollection`) and macOS (`NSAppearance`).
+- **Fixes:**
+  - **New `warnInk` token** (white light, `#1A0F0A` dark) for icons on
+    `warn`. The retry icons use it.
+  - **Chart marker:** an `ink` bar with a 1pt `panel` halo. A test checks
+    that the marker or its halo reaches 3:1 against every segment colour
+    the ramp can draw (`line`, and `verdictPlantNow` at opacity 0.25–1 over
+    `panel`), in both appearances.
+  - **Readable `faint` text → `muted`:** the garden chooser's dates and the
+    command palette's group labels. Every remaining
+    `foregroundStyle(WBColor.faint)` on a `Text` is listed in the review
+    as decorative or disabled.
+  - **Swatch rings stay `faint`.**
+  - **`line2` stays for rules and borders.** The Seeds search field's
+    magnifying-glass icon (`SeedsToolbar.swift:112`) changes from `faint` to
+    `muted`, so the icon and the system placeholder identify the field and
+    its `line2` border is decorative. That's recorded here as a product
+    choice (WCAG 1.4.11 doesn't require decorative borders to contrast).
+
+## C2 — Dark-mode pass (parent screenshots, worker fixes)
+
+- **Checklist**, in dark at the default size: every iPhone tab root, seed
+  detail with the planting panel, Add Seed, bed detail, What to Plant,
+  Journal entry, random pick, Settings and each sub-screen, What's New, and
+  the entry screens (sign in to iCloud, the garden chooser, through their
+  DEBUG previews where the fixture can't reach them).
+- **Plus**, if the owner approves the simulator: the regular-width iPad
+  Seeds table, inspector and command palette.
+- **Repairs are limited to** contrast, appearance and readability.
+  `.primary` and `.secondary` → `ink` and `muted`, for consistency.
+- **Not reachable in the fixture**, so checked by code review against the
+  token rules: photo-upload failure, participant and recovery UI, and entry
+  failures.
+
+## C3 — Large text and VoiceOver fixes (workers)
+
+1. **Journal list (C3-a):** at accessibility sizes the date sits above the
+   text, in the locale's abbreviated format, and may wrap. The row keeps its
+   combined accessibility label.
+2. **What's New (C3-a):** one button. Its label is "What's New, new" when
+   the unseen dot shows (`SettingsText.whatsNewLabel(unseen:)`, tested in
+   both states). Mark-seen-on-tap is unchanged.
+3. **Bed canvas (C3-b):**
+   - **One movement helper**, used by both drag and the new actions:
+     `BedPlacementMath.moved(x:y:dx:dy:widthFeet:lengthFeet:)` returns nil
+     for a no-op.
+   - **Positions** snap to the 0.5 ft grid and clamp to the last grid point
+     within the bed. That fixes the clamp-before-round bug, where a 2.3 ft
+     bed allowed 2.5.
+   - **Coordinates:** the bed's y increases upward. The canvas draws
+     `screenY = originY + (lengthFeet - y) * scale`.
+   - **Each placement is one accessibility element**, labelled "<name>, <x>
+     feet from the left, <y> feet from the bottom". When moving is enabled
+     it has the custom actions Move left (x decreases), Move right (x
+     increases), Move up (y increases) and Move down (y decreases), each one
+     0.5 ft.
+   - **Moving:** a no-op writes nothing. Focus stays on the element, and its
+     label updates.
+   - **Labels:** each label reports its rendered frame through a preference
+     key.
+     - A pure helper, `BedLabelLayout.visibleIDs(frames:order:)`, keeps a
+       label only if its rectangle doesn't intersect one already kept. The
+       order is by y descending (top of the drawn bed first), then x, then
+       id. Hidden labels stay out of the layout until frames change.
+     - Tests use rectangles, including a touching-but-not-intersecting case.
+     - The name stays in the accessibility label.
+   - **Dots** keep their 18pt look, with a 44pt hit area wherever that
+     doesn't overlap a neighbour's dot.
+   - Tests cover the grid, the bounds, the no-op case and the overlap rule.
+4. **Pickers (C3-c, iOS only):** at accessibility sizes, the seed detail and
+   Add Seed menu pickers (State, Location, Source) use
+   `.pickerStyle(.navigationLink)`.
+   - **macOS is unchanged:** that style doesn't exist there.
+   - **Saving is unchanged:** seed detail saves each selection once, through
+     the existing bindings, and Add Seed changes stay a draft until Save.
+   - Back navigation is checked.
+5. **Bulk bar and toolbar (C3-d):** `SeedsBulkBar` wraps by available width
+   (`ViewThatFits(in: .horizontal)`: one row, otherwise two), on iPad and
+   Mac. The actions, the delete confirmation and the keyboard order are
+   unchanged. `SeedsToolbar` gets the same treatment if it truncates at the
+   largest size.
+6. **Narrow Seeds layout (C3-d):**
+   - **On entering the Seeds route:** if the detail column is narrower than
+     the table's minimum width plus the inspector's minimum, the inspector
+     starts closed.
+   - **User control wins:** a user toggle holds until the route is left, and
+     `reveal(seedID:)` still opens the inspector.
+   - **Resizing never toggles it automatically.**
+   - **Acceptance:** in iPad portrait the Name column is visible at launch
+     and after rotation, and details stay reachable. If closing the
+     inspector isn't enough, the parent decides on the sidebar before
+     merge.
+
+## R2c verification (parent)
+
+- **Gate:** `scripts/test-gate.sh` passes, with the new C0, C1 and C3 tests.
+- **Screenshots:**
+  - the C2 checklist in dark at the default size
+  - the C3 screens at the largest size, in light and dark
+  - the iPad screens if the owner approves the simulator
+- **Reviews:** Opus and Sol on the merged diff.
+- **Owner:**
+  - the Mac visual check, including the appearance picker and the sharing
+    sheet under an override
+  - a dark-mode glance on the phone
+  - VoiceOver on the bed canvas move actions
+
+# R2d contract (outline; full contract before it starts)
+
+- **Target and scheme:** a `SeedkeepUITests` target (`bundle.ui-testing`)
+  in a separate iOS scheme, `SeedkeepAccessibilityAudit`. The `Seedkeep`
+  scheme and `scripts/test-gate.sh` don't include it.
+- **Launch:**
+  - Arguments: `-SeedkeepFixture`, a fixed locale and time zone, the text
+    size as a launch argument, and the appearance through the argument
+    domain (`-seedkeep.appearance dark`), which is never persisted.
+  - **Fail closed:** in a debug build, if `-SeedkeepFixture` is present but
+    fixture mode can't activate, the app stops (`preconditionFailure`)
+    before any live environment is built.
+  - The test also checks a fixture marker before it navigates.
+  - What's New and the Notifications toggles move to the fixture defaults
+    suite in fixture mode. The audit never activates "Check iCloud
+    account", sharing or the API key fields.
+- **Navigation:** accessibility identifiers on the tabs and key rows; a
+  measured readiness wait.
+- **Matrix:** iPhone, plus regular-width iPad when approved; light and
+  dark; default and largest text.
+  - Runtime is measured on one screen before the full matrix is budgeted.
+  - `.xcresult` and screenshots are kept.
+- **Findings:** each is either fixed or allowlisted by screen, type and
+  element, with a reason and a condition for rechecking. Anything new fails
+  the run. It runs as `scripts/a11y-audit.sh`.
+- **Manual VoiceOver checklist:** read order on Today, Seeds and Settings;
+  bed move actions; picker navigation; inspector access; macOS keyboard.
