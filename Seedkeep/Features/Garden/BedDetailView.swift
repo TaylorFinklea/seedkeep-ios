@@ -39,21 +39,22 @@ struct BedDetailView: View {
         Group {
             if let bed = beds.first {
                 ZStack {
-                    VellumBackground()
+                    WBScreenBackground()
                     Form {
                         Section {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Plot · the abbey grounds")
-                                    .font(HerbFont.smallCaps(size: 10))
-                                    .tracking(2)
-                                    .foregroundStyle(HerbColor.sepia)
+                                Text("Garden bed")
+                                    .font(.wbSectionLabel)
+                                    .tracking(0.6)
+                                    .foregroundStyle(WBColor.muted)
                                     .textCase(.uppercase)
                                 Text(bed.name)
-                                    .font(HerbFont.display(size: 30))
-                                    .foregroundStyle(HerbColor.ink)
+                                    .font(.wbTitle)
+                                    .foregroundStyle(WBColor.ink)
+                                    .accessibilityAddTraits(.isHeader)
                                 Text(formatDims(bed) ?? "—")
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .font(.wbFootnote)
+                                    .foregroundStyle(WBColor.muted)
                             }
                             .listRowBackground(Color.clear)
                             .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
@@ -64,7 +65,7 @@ struct BedDetailView: View {
                         LabeledContent("Name", value: bed.name)
                         if let desc = bed.bedDescription, !desc.isEmpty {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Description").font(.caption).foregroundStyle(.secondary)
+                                Text("Description").font(.caption).foregroundStyle(WBColor.muted)
                                 Text(desc)
                             }
                         }
@@ -133,11 +134,14 @@ struct BedDetailView: View {
                     await refreshCatalogsForEvents()
                 }
             } else {
-                ContentUnavailableView(
-                    "Bed unavailable",
-                    systemImage: "tray.full",
-                    description: Text("This bed may have been deleted on another device.")
-                )
+                ZStack {
+                    WBScreenBackground()
+                    WBEmptyState(
+                        title: "Bed unavailable",
+                        message: "This bed may have been deleted on another device.",
+                        systemImage: "tray.full"
+                    )
+                }
             }
         }
     }
@@ -262,17 +266,18 @@ struct BedDetailView: View {
                             if event.completedAt == nil {
                                 Button("Done") {
                                     markCompleted(event)
-                                }.tint(HerbColor.sage)
+                                }.tint(WBColor.accent)
                             } else {
                                 Button("Undo") {
                                     markIncomplete(event)
-                                }.tint(HerbColor.sepia)
+                                }.tint(WBColor.accent)
                             }
                             Button(role: .destructive) {
                                 eventPendingDelete = event
                             } label: {
-                                Image(systemName: "trash")
+                                Label("Delete", systemImage: "trash")
                             }
+                            .accessibilityLabel("Delete planting event")
                         }
                 }
             }
@@ -280,7 +285,7 @@ struct BedDetailView: View {
             Section(title) {
                 Text("Nothing planned yet.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WBColor.muted)
             }
         }
     }
@@ -388,32 +393,35 @@ private struct EventRow: View {
     let event: LocalPlantingEvent
     let seedName: String?
 
+    @ScaledMetric private var iconColumn: CGFloat = 22
+
     var body: some View {
         let kind = PlantingEventKind(rawValue: event.kindRaw)
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: kind?.systemImage ?? "calendar")
-                .foregroundStyle(event.completedAt == nil ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                .frame(width: 22)
+                .foregroundStyle(event.completedAt == nil ? AnyShapeStyle(.tint) : AnyShapeStyle(WBColor.faint))
+                .frame(width: iconColumn)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(kind?.displayName ?? event.kindRaw.capitalized)
                         .font(.body.weight(.medium))
+                        .foregroundStyle(WBColor.ink)
                         .strikethrough(event.completedAt != nil)
                     if let name = seedName {
-                        Text("·").foregroundStyle(.secondary)
+                        Text("·").foregroundStyle(WBColor.muted)
                         Text(name)
                             .font(.body)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(WBColor.muted)
                             .strikethrough(event.completedAt != nil)
                     }
                 }
                 Text(humanDate(event.plannedFor))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WBColor.muted)
                 if let notes = event.notes, !notes.isEmpty {
                     Text(notes)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(WBColor.muted)
                         .lineLimit(2)
                 }
             }

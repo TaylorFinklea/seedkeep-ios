@@ -46,14 +46,15 @@ struct JournalEntryView: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(entryID == nil ? "Press a new leaf" : "Tend the record")
-                        .font(HerbFont.smallCaps(size: 10))
-                        .tracking(2)
-                        .foregroundStyle(HerbColor.sepia)
+                    Text("Journal")
+                        .font(.wbSectionLabel)
+                        .tracking(0.6)
+                        .foregroundStyle(WBColor.muted)
                         .textCase(.uppercase)
                     Text(entryID == nil ? "New entry" : "Edit entry")
-                        .font(HerbFont.display(size: 30))
-                        .foregroundStyle(HerbColor.ink)
+                        .font(.wbTitle)
+                        .foregroundStyle(WBColor.ink)
+                        .accessibilityAddTraits(.isHeader)
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
@@ -62,13 +63,13 @@ struct JournalEntryView: View {
             Section {
                 DatePicker("Occurred on", selection: $occurredOn, displayedComponents: .date)
             } header: {
-                Rubric(text: "date")
+                WBSectionHeader("date")
             }
             Section {
                 TextField("What happened?", text: $entryBody, axis: .vertical)
                     .lineLimit(3...12)
             } header: {
-                Rubric(text: "entry")
+                WBSectionHeader("entry")
             }
             Section {
                 AttachedEntityPicker(
@@ -76,14 +77,14 @@ struct JournalEntryView: View {
                     bedID: $bedID,
                     plantingEventID: $plantingEventID)
             } header: {
-                Rubric(text: "attached to")
+                WBSectionHeader("attached to")
             }
 
             Section {
                 if photos.isEmpty && entryID == nil {
                     Text("Save the entry before adding photos")
-                        .font(.footnote)
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.muted)
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -110,14 +111,14 @@ struct JournalEntryView: View {
                     }
                 }
             } header: {
-                Rubric(text: "photos")
+                WBSectionHeader("photos")
             }
 
             Section {
                 if checklistItems.isEmpty && entryID == nil {
                     Text("Save the entry before adding checklist items")
-                        .font(.footnote)
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.muted)
                 } else {
                     ForEach(checklistItems) { item in
                         checklistRow(item)
@@ -131,23 +132,35 @@ struct JournalEntryView: View {
                                 Task { await addItem(entryID: entryID) }
                             } label: {
                                 Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.tint)
+                                    .foregroundStyle(newItemIsEmpty ? WBColor.faint : WBColor.accent)
+                                    .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                                    .contentShape(Rectangle())
                             }
-                            .disabled(newItemText.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Add checklist item")
+                            .disabled(newItemIsEmpty)
                         }
                     }
                 }
             } header: {
-                Rubric(text: "checklist")
+                WBSectionHeader("checklist")
             }
 
             if let errorMessage {
                 Section {
-                    Text(errorMessage).foregroundStyle(HerbColor.rose)
+                    Label {
+                        Text(errorMessage)
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.ink)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(WBColor.warn)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
         }
-        .vellumForm()
+        .wbForm()
         .navigationTitle("")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -232,8 +245,9 @@ struct JournalEntryView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise.circle.fill")
                             .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, HerbColor.rose)
-                            .padding(4)
+                            .foregroundStyle(.white, WBColor.warn)
+                            .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Retry photo sync")
@@ -262,12 +276,17 @@ struct JournalEntryView: View {
                 Task { await toggle(item) }
             } label: {
                 Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(item.completed ? HerbColor.sage : HerbColor.inkSoft)
+                    .foregroundStyle(item.completed ? WBColor.accent : WBColor.muted)
+                    .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(item.completed ? "Mark \(item.text) incomplete" : "Mark \(item.text) complete")
             Text(item.text)
-                .strikethrough(item.completed, color: HerbColor.inkSoft)
-                .foregroundStyle(item.completed ? HerbColor.inkSoft : HerbColor.ink)
+                .strikethrough(item.completed, color: WBColor.muted)
+                .foregroundStyle(item.completed ? WBColor.muted : WBColor.ink)
+                // The button's label already says the item, so VoiceOver doesn't read it twice.
+                .accessibilityHidden(true)
             Spacer()
         }
         .swipeActions(edge: .trailing) {
@@ -277,6 +296,11 @@ struct JournalEntryView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    /// The add-item button stays faint and disabled until there is text to add.
+    private var newItemIsEmpty: Bool {
+        newItemText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private func addItem(entryID: String) async {
@@ -414,10 +438,10 @@ private struct JournalPhotoThumbnail: View {
                     .scaledToFill()
             } else if isLoading {
                 ProgressView()
-                    .herbProgressStyle()
+                    .tint(WBColor.accent)
             } else {
                 Image(systemName: "photo")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WBColor.muted)
             }
         }
         .task {

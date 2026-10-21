@@ -14,12 +14,11 @@ struct InviteAcceptView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                Spacer()
+            ScrollView {
                 InviteRetirementNotice()
-                Spacer()
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
             }
-            .padding(.horizontal, 24)
             .navigationTitle("Household invite")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -41,20 +40,22 @@ struct InviteRetirementNotice: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "envelope.slash")
-                .font(.system(size: 36))
-                .foregroundStyle(HerbColor.sepia.opacity(0.65))
+                .font(.wbLargeTitle)
+                .foregroundStyle(WBColor.muted)
+                .accessibilityHidden(true)
             Text("Household invites have moved")
-                .font(HerbFont.display(size: 22))
-                .foregroundStyle(HerbColor.ink)
+                .font(.wbTitle)
+                .foregroundStyle(WBColor.ink)
                 .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
             Text(FeatureFlags.legacyInviteRetirementMessage)
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
+                .font(.wbBody)
+                .foregroundStyle(WBColor.muted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
+        .padding(.vertical, 16)
     }
 }
 

@@ -84,6 +84,13 @@ enum WBMetrics {
     static let gapLarge: CGFloat = 12
     /// Minimum touch target on iPhone and iPad.
     static let touchTarget: CGFloat = 44
+    /// Minimum frame for a control's hit area: `touchTarget` on iOS, no minimum on Mac, where the
+    /// pointer doesn't need a padded target.
+    #if os(iOS)
+    static let minTouchTarget: CGFloat = 44
+    #else
+    static let minTouchTarget: CGFloat = 0
+    #endif
 }
 
 extension Font {

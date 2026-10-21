@@ -50,6 +50,10 @@ has its own review and gate.
 
   A **reference audit** lists every Herbarium symbol in live files and maps
   each one to an allowlist entry. Anything unmapped fails the phase.
+- **Layout constants:** `HerbSpace` (gutters and the tab-bar clearance) is
+  layout, not styling, so live screens may keep it through R2. It's renamed
+  or folded into `WBMetrics` when N3 deletes the Herbarium code. (Recorded
+  after the R2a review.)
 - **Contrast.**
   - Text uses `WBColor.ink` or `WBColor.muted` on `bg`, `panel` or
     `panel2`. Both are at least 4.5:1 in light and dark.

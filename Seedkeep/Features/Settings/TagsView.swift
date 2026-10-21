@@ -33,10 +33,10 @@ struct TagsView: View {
     var body: some View {
         Group {
             if activeTags.isEmpty {
-                ContentUnavailableView(
-                    "no tags yet",
-                    systemImage: "tag",
-                    description: Text("Tags help you slice the library — try 'heirloom', 'salsa', or 'native'.")
+                WBEmptyState(
+                    title: "No tags yet",
+                    message: "Tags help you slice the library — try 'heirloom', 'salsa', or 'native'.",
+                    systemImage: "tag"
                 )
             } else {
                 List {
@@ -49,19 +49,23 @@ struct TagsView: View {
                                 Circle()
                                     .fill(colorFor(hex: tag.color))
                                     .frame(width: 14, height: 14)
-                                    .overlay(Circle().strokeBorder(HerbColor.inkFaint, lineWidth: 0.5))
+                                    .overlay(Circle().strokeBorder(WBColor.faint, lineWidth: 0.5))
                                 Text(tag.name)
+                                    .foregroundStyle(WBColor.ink)
                                 Spacer()
                                 Image(systemName: "pencil")
-                                    .foregroundStyle(HerbColor.inkFaint)
+                                    .foregroundStyle(WBColor.faint)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityHint("Rename")
                     }
                     .onDelete(perform: delete)
                 }
             }
         }
+        .wbForm()
         .navigationTitle("Tags")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -135,11 +139,11 @@ struct TagsView: View {
     }
 
     private func colorFor(hex: String?) -> Color {
-        guard let hex else { return Color.gray.opacity(0.5) }
+        guard let hex else { return WBColor.faint }
         if let match = palette.first(where: { $0.hex.caseInsensitiveCompare(hex) == .orderedSame }) {
             return match.color
         }
-        return Color.gray.opacity(0.5)
+        return WBColor.faint
     }
 }
 
@@ -160,7 +164,7 @@ private struct NewTagSheet: View {
                         .textInputAutocapitalization(.words)
                         #endif
                 } header: {
-                    Rubric(text: "name")
+                    WBSectionHeader("name")
                 }
                 Section {
                     ForEach(palette, id: \.hex) { entry in
@@ -171,8 +175,9 @@ private struct NewTagSheet: View {
                                 Circle()
                                     .fill(entry.color)
                                     .frame(width: 18, height: 18)
-                                    .overlay(Circle().strokeBorder(HerbColor.inkFaint, lineWidth: 0.5))
+                                    .overlay(Circle().strokeBorder(WBColor.faint, lineWidth: 0.5))
                                 Text(entry.name)
+                                    .foregroundStyle(WBColor.ink)
                                 Spacer()
                                 if selectedHex == entry.hex {
                                     Image(systemName: "checkmark").foregroundStyle(.tint)
@@ -182,10 +187,10 @@ private struct NewTagSheet: View {
                         .buttonStyle(.plain)
                     }
                 } header: {
-                    Rubric(text: "color")
+                    WBSectionHeader("color")
                 }
             }
-            .vellumForm()
+            .wbForm()
             .navigationTitle("New tag")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

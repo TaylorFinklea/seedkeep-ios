@@ -101,12 +101,12 @@ struct WBBanner: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(spokenSummary)
                 if let action {
-                    // The 44pt frame and the hit shape sit inside the label, so the whole target grows.
+                    // The minimum frame and the hit shape sit inside the label, so the whole target grows.
                     Button(action: action.handler) {
                         Text(action.label)
                             .font(.wbCallout.weight(.semibold))
                             .foregroundStyle(WBColor.accent)
-                            .frame(minWidth: WBMetrics.touchTarget, minHeight: WBMetrics.touchTarget, alignment: .leading)
+                            .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget, alignment: .leading)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -227,10 +227,10 @@ struct WBEmptyState: View {
                 }
             }
             if let action {
-                // The 44pt frame and the hit shape sit inside the label, so the whole target grows.
+                // The minimum frame and the hit shape sit inside the label, so the whole target grows.
                 Button(action: action.handler) {
                     Text(action.label)
-                        .frame(minWidth: WBMetrics.touchTarget, minHeight: WBMetrics.touchTarget)
+                        .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.bordered)

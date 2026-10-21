@@ -1,12 +1,11 @@
 import SwiftUI
 import SwiftData
 
-/// Collapsible "Daybook" section embedded inside a parent entity's
+/// Collapsible "Journal" section embedded inside a parent entity's
 /// detail view. Shows the most recent N entries for that entity with a
 /// "See all" link that pushes the full Journal feed pre-filtered.
 ///
-/// Herbarium chrome: sepia Rubric header, sage left-border on each row,
-/// italic date + body in Spectral.
+/// Workbench rows: a thin accent rule on each row, the date in mono above the body.
 struct EntityScopedJournalSection: View {
     enum Parent: Hashable {
         case seed(String)
@@ -44,8 +43,8 @@ struct EntityScopedJournalSection: View {
         Section {
             if entries.isEmpty {
                 Text("No entries yet")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
             } else {
                 ForEach(entries.prefix(maxEntries)) { entry in
                     NavigationLink {
@@ -56,25 +55,19 @@ struct EntityScopedJournalSection: View {
                 }
                 if entries.count > maxEntries {
                     Text("\(entries.count - maxEntries) more")
-                        .font(HerbFont.bodyItalic(size: 11))
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
                 }
             }
             NavigationLink {
                 JournalView(filterParent: parent)
             } label: {
-                HStack(spacing: 6) {
-                    Text("◇")
-                        .foregroundStyle(HerbColor.sepia)
-                    Text("See all daybook entries")
-                        .font(HerbFont.smallCaps(size: 10))
-                        .tracking(1.4)
-                        .foregroundStyle(HerbColor.sepia)
-                        .textCase(.uppercase)
-                }
+                Text("See all journal entries")
+                    .font(.wbCallout.weight(.semibold))
+                    .foregroundStyle(WBColor.accent)
             }
         } header: {
-            Rubric(text: "daybook")
+            WBSectionHeader("Journal")
         }
     }
 
@@ -82,17 +75,15 @@ struct EntityScopedJournalSection: View {
     private func entryRow(_ entry: LocalJournalEntry) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Rectangle()
-                .fill(HerbColor.sage.opacity(0.6))
+                .fill(WBColor.accent.opacity(0.6))
                 .frame(width: 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(formattedDate(entry.occurredOn))
-                    .font(HerbFont.smallCaps(size: 9))
-                    .tracking(1.3)
-                    .foregroundStyle(HerbColor.sepia)
-                    .textCase(.uppercase)
+                    .font(.wbMonoCaption)
+                    .foregroundStyle(WBColor.muted)
                 Text(entry.body.isEmpty ? "no entries" : entry.body)
-                    .font(HerbFont.body(size: 13))
-                    .foregroundStyle(HerbColor.ink)
+                    .font(.wbCallout)
+                    .foregroundStyle(WBColor.ink)
                     .lineLimit(2)
             }
         }

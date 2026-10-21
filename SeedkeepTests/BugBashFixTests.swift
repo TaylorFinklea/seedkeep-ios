@@ -222,7 +222,7 @@ struct JournalDatePresentationTests {
 
             #expect(parts.monthAbbrev == "AUG")
             #expect(parts.day == 28)
-            #expect(parts.yearRoman == "MMXXVI")
+            #expect(parts.year == "2026")
         }
     }
 

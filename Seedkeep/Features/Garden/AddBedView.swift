@@ -24,13 +24,13 @@ struct AddBedView: View {
                         .textInputAutocapitalization(.sentences)
                         #endif
                 } header: {
-                    Rubric(text: "name")
+                    WBSectionHeader("name")
                 }
                 Section {
                     TextField("What's special about this bed?", text: $description, axis: .vertical)
                         .lineLimit(2...4)
                 } header: {
-                    Rubric(text: "description")
+                    WBSectionHeader("description")
                 }
                 Section {
                     HStack {
@@ -42,7 +42,7 @@ struct AddBedView: View {
                             #endif
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 80)
-                        Text("ft").foregroundStyle(HerbColor.inkSoft)
+                        Text("ft").foregroundStyle(WBColor.muted)
                     }
                     HStack {
                         Text("Length")
@@ -53,23 +53,29 @@ struct AddBedView: View {
                             #endif
                             .multilineTextAlignment(.trailing)
                             .frame(maxWidth: 80)
-                        Text("ft").foregroundStyle(HerbColor.inkSoft)
+                        Text("ft").foregroundStyle(WBColor.muted)
                     }
                 } header: {
-                    Rubric(text: "dimensions")
+                    WBSectionHeader("dimensions")
                 } footer: {
                     Text("Used later for spatial layout. You can fill these in any time.")
                 }
 
                 if let error {
                     Section {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(HerbColor.rose)
+                        Label {
+                            Text(error)
+                                .font(.wbFootnote)
+                                .foregroundStyle(WBColor.ink)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(WBColor.warn)
+                                .accessibilityHidden(true)
+                        }
                     }
                 }
             }
-            .vellumForm()
+            .wbForm()
             .navigationTitle("New bed")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

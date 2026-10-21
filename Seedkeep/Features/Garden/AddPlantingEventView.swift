@@ -60,7 +60,7 @@ struct AddPlantingEventView: View {
                 notesSection
                 errorSection
             }
-            .vellumForm()
+            .wbForm()
             .navigationTitle("Plan event")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -86,25 +86,25 @@ struct AddPlantingEventView: View {
                 }
             }
             // Strict window check: when the chosen date sits outside the
-            // recommendation's outdoor window we tint the DatePicker and
-            // append a caption row.  Information only — Save remains enabled
+            // recommendation's outdoor window we append a warning caption row
+            // (the warn colour stays on its icon).  Information only — Save remains enabled
             // (a power-user planning a late succession shouldn't be blocked).
             DatePicker("Planned for", selection: $plannedFor, displayedComponents: .date)
-                .tint(outOfWindowMessage != nil ? HerbColor.ochre : HerbColor.sepia)
-                .foregroundStyle(outOfWindowMessage != nil ? HerbColor.ochre : Color.primary)
+                .tint(WBColor.accent)
+                .foregroundStyle(WBColor.ink)
             if let msg = outOfWindowMessage {
                 Label {
                     Text(msg)
-                        .font(.caption)
-                        .foregroundStyle(HerbColor.ochre)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.ink)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(HerbColor.ochre)
+                        .foregroundStyle(WBColor.warn)
                         .font(.caption)
                 }
             }
         } header: {
-            Rubric(text: "action")
+            WBSectionHeader("action")
         }
     }
 
@@ -169,7 +169,7 @@ struct AddPlantingEventView: View {
                 }
             }
         } header: {
-            Rubric(text: "where + what")
+            WBSectionHeader("where + what")
         }
     }
 
@@ -204,7 +204,7 @@ struct AddPlantingEventView: View {
                     }
                 }
             } header: {
-                Rubric(text: "planting window")
+                WBSectionHeader("planting window")
             } footer: {
                 Text("Computed on this device from the seed's growing info and your home location.")
             }
@@ -222,17 +222,17 @@ struct AddPlantingEventView: View {
                         Text("X")
                         Slider(value: $xFeet, in: 0...width, step: 0.5)
                         Text("\(formatFt(xFeet))′")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(HerbColor.inkSoft)
-                            .frame(width: 36, alignment: .trailing)
+                            .font(.wbMonoCaption)
+                            .foregroundStyle(WBColor.muted)
+                            .frame(minWidth: 36, alignment: .trailing)
                     }
                     HStack {
                         Text("Y")
                         Slider(value: $yFeet, in: 0...length, step: 0.5)
                         Text("\(formatFt(yFeet))′")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(HerbColor.inkSoft)
-                            .frame(width: 36, alignment: .trailing)
+                            .font(.wbMonoCaption)
+                            .foregroundStyle(WBColor.muted)
+                            .frame(minWidth: 36, alignment: .trailing)
                     }
                     BedLayoutCanvas(
                         widthFeet: width,
@@ -251,7 +251,7 @@ struct AddPlantingEventView: View {
                     .listRowBackground(Color.clear)
                 }
             } header: {
-                Rubric(text: "position")
+                WBSectionHeader("position")
             } footer: {
                 Text("Distance in feet from the bottom-left corner of the bed.")
             }
@@ -264,7 +264,7 @@ struct AddPlantingEventView: View {
             TextField("Optional", text: $notes, axis: .vertical)
                 .lineLimit(2...6)
         } header: {
-            Rubric(text: "notes")
+            WBSectionHeader("notes")
         }
     }
 
@@ -297,9 +297,15 @@ struct AddPlantingEventView: View {
     private var errorSection: some View {
         if let error {
             Section {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(HerbColor.rose)
+                Label {
+                    Text(error)
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.ink)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(WBColor.warn)
+                        .accessibilityHidden(true)
+                }
             }
         }
     }

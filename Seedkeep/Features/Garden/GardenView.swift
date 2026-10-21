@@ -21,38 +21,36 @@ struct GardenView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                VellumBackground()
+                WBScreenBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        FolioStrip(section: "Hortus", folio: max(activeBeds.count, 1))
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Abbey grounds")
-                                .font(HerbFont.display(size: 38))
-                                .foregroundStyle(HerbColor.ink)
-                            Text("\(activeBeds.count) \(activeBeds.count == 1 ? "plot" : "plots") in the household garden")
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
+                            Text("Garden")
+                                .font(.wbLargeTitle)
+                                .foregroundStyle(WBColor.ink)
+                                .accessibilityAddTraits(.isHeader)
+                            Text("\(activeBeds.count) \(activeBeds.count == 1 ? "bed" : "beds") in the household garden")
+                                .font(.wbFootnote)
+                                .foregroundStyle(WBColor.muted)
                         }
                         .padding(.horizontal, HerbSpace.titleGutter)
-                        ScholarRule(verticalMargin: 12)
-                            .padding(.horizontal, HerbSpace.gutter)
+                        .padding(.top, WBMetrics.gapLarge)
+                        .padding(.bottom, WBMetrics.gapLarge)
                         if FeatureFlags.plantPetsEnabled {
                             NavigationLink(value: MenagerieDestination()) {
                                 HStack {
                                     Image(systemName: "pawprint")
-                                        .foregroundStyle(HerbColor.inkSoft)
+                                        .foregroundStyle(WBColor.muted)
                                     Text("Menagerie")
-                                        .font(HerbFont.smallCaps(size: 11))
-                                        .tracking(1.6)
-                                        .textCase(.uppercase)
-                                        .foregroundStyle(HerbColor.ink)
+                                        .font(.wbCallout.weight(.semibold))
+                                        .foregroundStyle(WBColor.ink)
                                     Spacer()
                                     Image(systemName: "chevron.right")
                                         .font(.caption)
-                                        .foregroundStyle(HerbColor.inkFaint)
+                                        .foregroundStyle(WBColor.faint)
                                 }
                                 .padding(.horizontal, HerbSpace.gutter)
-                                .padding(.vertical, 10)
+                                .padding(.vertical, 12)
                             }
                             .buttonStyle(.plain)
                         }
@@ -60,9 +58,9 @@ struct GardenView: View {
                             emptyState
                         } else {
                             VStack(spacing: 0) {
-                                ForEach(Array(activeBeds.enumerated()), id: \.element.id) { (idx, bed) in
+                                ForEach(activeBeds, id: \.id) { bed in
                                     NavigationLink(value: bed.id) {
-                                        BedRow(bed: bed, romanIndex: idx + 1, openEvents: openEventsFor(bedID: bed.id))
+                                        BedRow(bed: bed, openEvents: openEventsFor(bedID: bed.id))
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -140,67 +138,42 @@ struct GardenView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "square.grid.3x3.topleft.filled")
-                .font(.system(size: 32))
-                .foregroundStyle(HerbColor.sepia.opacity(0.6))
-            Text("No plots yet")
-                .font(HerbFont.display(size: 22))
-                .foregroundStyle(HerbColor.ink)
-            Text("Beds are the spaces you plant in — 'south wall', 'dooryard', 'cloister herb plot'. Each one carries its own timeline.")
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Button {
-                showAddBed = true
-            } label: {
-                Text("Lay out your first plot")
-                    .font(HerbFont.smallCaps(size: 11))
-                    .tracking(2)
-                    .textCase(.uppercase)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(HerbColor.sepia)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
+        WBEmptyState(
+            title: "No beds yet",
+            message: "Beds are the spaces you plant in, such as 'Herb bed' or 'South wall'. Each one carries its own timeline.",
+            systemImage: "square.grid.3x3.topleft.filled",
+            action: (label: "Add your first bed", handler: { showAddBed = true })
+        )
     }
 }
 
 private struct BedRow: View {
     let bed: LocalBed
-    let romanIndex: Int
     let openEvents: [LocalPlantingEvent]
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(HerbRomanNumeral.string(for: romanIndex, lowercase: false))
-                .font(HerbFont.smallCaps(size: 14))
-                .foregroundStyle(HerbColor.sepia)
-                .frame(width: 28, alignment: .center)
             VStack(alignment: .leading, spacing: 2) {
                 Text(bed.name)
-                    .font(HerbFont.bodyEmph(size: 14))
-                    .foregroundStyle(HerbColor.ink)
+                    .font(.wbHeadline)
+                    .foregroundStyle(WBColor.ink)
                 HStack(spacing: 6) {
                     if let dimensions = formattedDimensions {
                         Text(dimensions)
-                            .font(HerbFont.bodyItalic(size: 11))
-                            .foregroundStyle(HerbColor.inkSoft)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
                         Text("·")
-                            .foregroundStyle(HerbColor.inkFaint)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.faint)
                     }
                     if let next = nextEvent {
                         Text("\(PlantingEventKind(rawValue: next.kindRaw)?.displayName ?? next.kindRaw) · \(humanDate(next.plannedFor))")
-                            .font(HerbFont.bodyItalic(size: 11))
-                            .foregroundStyle(HerbColor.inkSoft)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
                     } else {
                         Text("no upcoming events")
-                            .font(HerbFont.bodyItalic(size: 11))
-                            .foregroundStyle(HerbColor.inkFaint)
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.muted)
                     }
                 }
             }
@@ -210,8 +183,8 @@ private struct BedRow: View {
         .padding(.horizontal, 4)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(HerbColor.inkFaint)
-                .frame(height: 0.5)
+                .fill(WBColor.line)
+                .frame(height: 1)
         }
     }
 

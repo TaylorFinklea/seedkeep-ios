@@ -26,35 +26,33 @@ struct RetrospectiveCard: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Image(systemName: "clock.arrow.circlepath")
-                            .foregroundStyle(.tint)
+                            .foregroundStyle(WBColor.accent)
                         Text("Today in your garden")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.wbCallout.weight(.semibold))
+                            .foregroundStyle(WBColor.ink)
                     }
                     ForEach(response.years, id: \.year) { yearBlock in
                         DisclosureGroup {
                             ForEach(yearBlock.entries, id: \.id) { entry in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(entry.occurredOn)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(.wbMonoCaption)
+                                        .foregroundStyle(WBColor.muted)
                                     Text(entry.body)
-                                        .font(.body)
+                                        .font(.wbCallout)
+                                        .foregroundStyle(WBColor.ink)
                                         .lineLimit(3)
                                 }
                                 .padding(.vertical, 2)
                             }
                         } label: {
                             Text("\(String(yearBlock.year)) · \(yearBlock.entries.count) \(yearBlock.entries.count == 1 ? "entry" : "entries")")
-                                .font(.footnote)
+                                .font(.wbFootnote)
+                                .foregroundStyle(WBColor.ink)
                         }
                     }
                 }
-                .padding()
-                #if os(iOS)
-                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
-                #else
-                .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 10))
-                #endif
+                .wbPanel(padding: 16)
             }
         }
         .task {

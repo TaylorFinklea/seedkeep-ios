@@ -18,8 +18,8 @@ struct APIKeysSettingsView: View {
         Form {
             Section {
                 Label("These keys never leave your device. The Seedkeep server never sees them — every BYOK extraction goes from your iPhone directly to the model provider.", systemImage: "lock.shield")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbCaption)
+                    .foregroundStyle(WBColor.muted)
             }
 
             keySection(
@@ -40,23 +40,23 @@ struct APIKeysSettingsView: View {
                 if let preferred = appEnv.apiKeys.preferredProvider() {
                     LabeledContent("Active") {
                         Text(preferred.displayName)
-                            .foregroundStyle(HerbColor.sage)
+                            .foregroundStyle(WBColor.ink)
                     }
                 } else {
                     LabeledContent("Active") {
                         Text("None")
-                            .foregroundStyle(HerbColor.inkSoft)
+                            .foregroundStyle(WBColor.muted)
                     }
                 }
             } header: {
-                Rubric(text: "active provider")
+                WBSectionHeader("active provider")
             } footer: {
                 Text("If both keys are set, BYOK extractions prefer Anthropic (matches the server's Hosted-tier model family).")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbCaption)
+                    .foregroundStyle(WBColor.muted)
             }
         }
-        .vellumForm()
+        .wbForm()
         .navigationTitle("API keys")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -80,34 +80,53 @@ struct APIKeysSettingsView: View {
                 .textInputAutocapitalization(.never)
                 #endif
                 .autocorrectionDisabled()
-                .font(HerbFont.body(size: 14).monospaced())
+                .font(.wbMono)
 
             if let warning = warning.wrappedValue {
-                Text(warning)
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.ochre)
+                Label {
+                    Text(warning)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.ink)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.warn)
+                }
             }
 
             HStack {
-                Button("Save") { save(provider: provider, draft: draft, saved: saved, warning: warning) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button {
+                    save(provider: provider, draft: draft, saved: saved, warning: warning)
+                } label: {
+                    // The minimum frame and the hit shape sit inside the label, so the whole target grows.
+                    Text("Save")
+                        .frame(minHeight: WBMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Spacer()
                 if saved.wrappedValue {
-                    Button("Clear", role: .destructive) {
+                    Button(role: .destructive) {
                         appEnv.apiKeys.clear(provider)
                         draft.wrappedValue = ""
                         saved.wrappedValue = false
                         warning.wrappedValue = nil
+                    } label: {
+                        Text("Clear")
+                            .frame(minHeight: WBMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
                     }
+                    // Borderless, so only the label is tappable: the row's empty space can't trigger Clear.
+                    .buttonStyle(.borderless)
                 }
             }
         } header: {
-            Rubric(text: provider.displayName.lowercased())
+            WBSectionHeader(provider.displayName.lowercased())
         } footer: {
             Text(provider.keyHelpText)
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
+                .font(.wbCaption)
+                .foregroundStyle(WBColor.muted)
         }
     }
 

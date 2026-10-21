@@ -500,3 +500,66 @@ struct PlantingWindowDaysTests {
         #expect(PlantingWindowDays.label(verdict: "too_early", rangeStart: "2026-05-19", rangeEnd: "2026-06-01", today: (2026, 5, 19)) == nil)
     }
 }
+
+@MainActor
+@Suite("Planting chart summary")
+struct PlantingChartSummaryTests {
+    @Test("a window reads its dates and today's verdict")
+    func windowSummary() {
+        let text = RecommendationPanel.chartSummary(
+            rangeStart: "2026-05-04", rangeEnd: "2026-06-01", verdict: "plant_soon", userDate: nil)
+        #expect(text.hasPrefix("Best from May 4 to Jun 1; today: "))
+        #expect(!text.contains("your date"))
+    }
+
+    @Test("no window says so instead of reading missing dates")
+    func noWindowSummary() {
+        let text = RecommendationPanel.chartSummary(
+            rangeStart: nil, rangeEnd: nil, verdict: "unknown", userDate: nil)
+        #expect(text.hasPrefix("No planting window; today: "))
+        #expect(!text.contains("no start date"))
+    }
+
+    @Test("a planned date is spoken as the local day the picker shows",
+          arguments: [("America/Chicago", 21), ("Asia/Tokyo", 0), ("UTC", 12)])
+    func userDateSummary(zone: String, hour: Int) {
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = TimeZone(identifier: zone)!
+        // 9 p.m. in Chicago is already May 13 in UTC; midnight in Tokyo is still May 11.
+        let date = local.date(from: DateComponents(year: 2026, month: 5, day: 12, hour: hour))!
+        let text = RecommendationPanel.chartSummary(
+            rangeStart: "2026-05-04", rangeEnd: "2026-06-01", verdict: "plant_now",
+            userDate: date, calendar: local)
+        #expect(text.contains("your date: May 12"))
+    }
+
+    @Test("the chart marks the local day as its UTC midnight")
+    func plannedDayIsLocalDay() {
+        var chicago = Calendar(identifier: .gregorian)
+        chicago.timeZone = TimeZone(identifier: "America/Chicago")!
+        let evening = chicago.date(from: DateComponents(year: 2026, month: 5, day: 12, hour: 21))!
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        #expect(RecommendationPanel.plannedDay(evening, calendar: chicago)
+            == utc.date(from: DateComponents(year: 2026, month: 5, day: 12)))
+    }
+
+    @Test("a non-Gregorian system calendar still reads the Gregorian day")
+    func plannedDayIgnoresCalendarSystem() {
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = TimeZone(identifier: "America/Chicago")!
+        var chicago = Calendar(identifier: .gregorian)
+        chicago.timeZone = buddhist.timeZone
+        let evening = chicago.date(from: DateComponents(year: 2026, month: 5, day: 12, hour: 21))!
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        // Buddhist year 2569 is 2026; reading it as Gregorian would push the marker off the chart.
+        #expect(RecommendationPanel.plannedDay(evening, calendar: buddhist)
+            == utc.date(from: DateComponents(year: 2026, month: 5, day: 12)))
+        let text = RecommendationPanel.chartSummary(
+            rangeStart: "2026-05-04", rangeEnd: "2026-06-01", verdict: "plant_now",
+            userDate: evening, calendar: buddhist)
+        #expect(text.contains("your date: May 12"))
+    }
+}
+

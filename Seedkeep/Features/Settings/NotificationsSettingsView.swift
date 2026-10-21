@@ -34,7 +34,7 @@ struct NotificationsSettingsView: View {
 
     var body: some View {
         ZStack {
-            VellumBackground()
+            WBScreenBackground()
             Form {
                 Section {
                     permissionBanner
@@ -48,8 +48,8 @@ struct NotificationsSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Label("Frost warnings", systemImage: "snowflake")
                             Text("8am the morning before any forecast low ≤ 33°F")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
                         }
                     }
                     .onChange(of: frostEnabled) { _, newValue in
@@ -59,8 +59,8 @@ struct NotificationsSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Label("Heat warnings", systemImage: "thermometer.sun")
                             Text("7pm the evening before a heat-index ≥ 100°F day or a 4+ day heatwave")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
                         }
                     }
                     .onChange(of: heatEnabled) { _, newValue in
@@ -70,8 +70,8 @@ struct NotificationsSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Label("Watering reminders", systemImage: "drop")
                             Text("8am after 5 dry days with no soaking rain in the 3-day forecast")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
                         }
                     }
                     .onChange(of: waterEnabled) { _, newValue in
@@ -81,8 +81,8 @@ struct NotificationsSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Label("Planting reminders", systemImage: "calendar")
                             Text("7am on the morning of any planned planting event")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
                         }
                     }
                     .onChange(of: eventsEnabled) { _, newValue in
@@ -92,8 +92,8 @@ struct NotificationsSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Label("Correction outcomes", systemImage: "doc.text.magnifyingglass")
                             Text("When off, new corrections still appear in House → your contributions. Past notifications already on your lock screen aren't removed.")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
                         }
                     }
                     .onChange(of: catalogEnabled) { _, newValue in
@@ -102,11 +102,11 @@ struct NotificationsSettingsView: View {
                         }
                     }
                 } header: {
-                    Rubric(text: "what to notify")
+                    WBSectionHeader("what to notify")
                 } footer: {
                     Text("All notifications are scheduled on-device. Seedkeep doesn't send anything through Apple's push servers.")
-                        .font(HerbFont.bodyItalic(size: 11))
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
                 }
 
                 if FeatureFlags.plantPetsEnabled {
@@ -115,8 +115,8 @@ struct NotificationsSettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Label("Wilting warnings", systemImage: "leaf")
                                 Text("When a pet's mood drops to wilted")
-                                    .font(HerbFont.bodyItalic(size: 11))
-                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .font(.wbCaption)
+                                    .foregroundStyle(WBColor.muted)
                             }
                         }
                         .onChange(of: petWiltedEnabled) { _, newValue in
@@ -126,8 +126,8 @@ struct NotificationsSettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Label("Departure farewells", systemImage: "envelope.open")
                                 Text("When a pet leaves with a goodbye note")
-                                    .font(HerbFont.bodyItalic(size: 11))
-                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .font(.wbCaption)
+                                    .foregroundStyle(WBColor.muted)
                             }
                         }
                         .onChange(of: petDepartedEnabled) { _, newValue in
@@ -137,15 +137,15 @@ struct NotificationsSettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Label("Sunday roundup", systemImage: "calendar.badge.clock")
                                 Text("Weekly summary of every companion's mood")
-                                    .font(HerbFont.bodyItalic(size: 11))
-                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .font(.wbCaption)
+                                    .foregroundStyle(WBColor.muted)
                             }
                         }
                         .onChange(of: petRoundupEnabled) { _, newValue in
                             Task { await applyPetRoundup(enabled: newValue) }
                         }
                     } header: {
-                        Rubric(text: "plant pets")
+                        WBSectionHeader("plant pets")
                     }
                 }
 
@@ -163,20 +163,18 @@ struct NotificationsSettingsView: View {
                         } label: {
                             HStack(spacing: 6) {
                                 if refreshing {
-                                    ProgressView().controlSize(.small).tint(HerbColor.sepia)
+                                    ProgressView().controlSize(.small).tint(WBColor.accent)
                                 } else {
-                                    Text("↻").foregroundStyle(HerbColor.sepia)
+                                    Text("↻").foregroundStyle(WBColor.accent)
                                 }
                                 Text("Refresh forecast")
-                                    .font(HerbFont.smallCaps(size: 10))
-                                    .tracking(1.4)
-                                    .foregroundStyle(HerbColor.sepia)
-                                    .textCase(.uppercase)
+                                    .font(.wbBody)
+                                    .foregroundStyle(WBColor.accent)
                             }
                         }
                         .disabled(refreshing)
                     } header: {
-                        Rubric(text: "weather watch")
+                        WBSectionHeader("weather watch")
                     } footer: {
                         // Apple WeatherKit attribution — App Store
                         // review requirement (spec §8).
@@ -186,9 +184,11 @@ struct NotificationsSettingsView: View {
                             }
                         } label: {
                             Text("Weather")
-                                .font(HerbFont.bodyItalic(size: 11))
-                                .foregroundStyle(HerbColor.inkSoft)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.accent)
                                 .underline()
+                                .frame(minHeight: WBMetrics.minTouchTarget, alignment: .leading)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -314,13 +314,11 @@ private struct WarningStatusSection: View {
         case .permissionDenied(let url):
             tappableRow(
                 text: "Notifications are off for Seedkeep in iOS Settings.",
-                color: HerbColor.rose,
                 deepLink: url
             )
         case .provisionalDelivery:
             tappableRow(
                 text: "Notifications deliver quietly — tap to allow alerts.",
-                color: HerbColor.ochre,
                 deepLink: nil
             )
         case .partialData(let validDays, _, let waterSuppressed):
@@ -400,38 +398,53 @@ private struct WarningStatusSection: View {
     @ViewBuilder
     private func watchingRow(text: String) -> some View {
         HStack(spacing: 8) {
-            Text("✓").foregroundStyle(HerbColor.verdictNow)
+            Text("✓").foregroundStyle(WBColor.verdictPlantNow)
             Text(text)
-                .font(HerbFont.bodyItalic(size: 13))
-                .foregroundStyle(HerbColor.ink)
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.ink)
         }
     }
 
     @ViewBuilder
     private func mutedRow(text: String) -> some View {
         Text(text)
-            .font(HerbFont.bodyItalic(size: 11))
-            .foregroundStyle(HerbColor.inkSoft)
+            .font(.wbCaption)
+            .foregroundStyle(WBColor.muted)
     }
 
+    /// Warnings carry the warn tint on the icon only; the text stays ink.
     @ViewBuilder
     private func errorRow(text: String) -> some View {
-        Text(text)
-            .font(HerbFont.bodyItalic(size: 11))
-            .foregroundStyle(HerbColor.rose)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.wbCaption)
+                .foregroundStyle(WBColor.warn)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.wbCaption)
+                .foregroundStyle(WBColor.ink)
+        }
     }
 
     @ViewBuilder
-    private func tappableRow(text: String, color: Color, deepLink: URL?) -> some View {
+    private func tappableRow(text: String, deepLink: URL?) -> some View {
         Button {
             if let deepLink {
                 openURL(deepLink)
             }
         } label: {
-            Text(text)
-                .font(HerbFont.bodyItalic(size: 11))
-                .foregroundStyle(color)
-                .underline(deepLink != nil)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.wbCaption)
+                    .foregroundStyle(WBColor.warn)
+                    .accessibilityHidden(true)
+                Text(text)
+                    .font(.wbCaption)
+                    .foregroundStyle(deepLink != nil ? WBColor.accent : WBColor.ink)
+                    .underline(deepLink != nil)
+            }
+            .frame(minHeight: WBMetrics.minTouchTarget, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(deepLink == nil)

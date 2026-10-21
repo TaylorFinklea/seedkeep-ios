@@ -23,10 +23,10 @@ struct JournalRecoveryReviewView: View {
     var body: some View {
         Group {
             if items.isEmpty {
-                ContentUnavailableView(
-                    "Nothing to review",
-                    systemImage: "checkmark.seal",
-                    description: Text("Every recovered journal entry has been reviewed.")
+                WBEmptyState(
+                    title: "Nothing to review",
+                    message: "Every recovered journal entry has been reviewed.",
+                    systemImage: "checkmark.seal"
                 )
             } else {
                 List {
@@ -36,6 +36,7 @@ struct JournalRecoveryReviewView: View {
                 }
             }
         }
+        .wbForm()
         .navigationTitle("Journal items need review")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -59,30 +60,37 @@ struct JournalRecoveryReviewView: View {
         let snapshot = ParticipantRowRecovery.decodeSnapshot(item.snapshotJSON)
         VStack(alignment: .leading, spacing: 6) {
             Text(snapshot?.occurredOn ?? "Unknown date")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(HerbColor.ink)
+                .font(.wbCallout.weight(.semibold))
+                .foregroundStyle(WBColor.ink)
             if let body = snapshot?.body {
                 Text(body)
-                    .font(.footnote)
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
                     .lineLimit(2)
             }
             HStack(spacing: 8) {
-                Button("Share to garden") {
+                Button {
                     Task {
                         busyItemID = item.id
                         await appEnv.shareJournalRecoveryItem(item)
                         busyItemID = nil
                     }
+                } label: {
+                    // The minimum frame and the hit shape sit inside the label, so the whole target grows.
+                    Text("Share to garden")
+                        .frame(minHeight: WBMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.mini)
                 .disabled(busyItemID == item.id)
-                Button("Keep private", role: .destructive) {
+                Button(role: .destructive) {
                     appEnv.keepJournalRecoveryItemPrivate(item)
+                } label: {
+                    Text("Keep private")
+                        .frame(minHeight: WBMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.mini)
                 .disabled(busyItemID == item.id)
             }
         }

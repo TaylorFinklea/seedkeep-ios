@@ -81,14 +81,8 @@ struct SeedDetailView: View {
         Group {
             if let seed = seedQuery.first {
                 Form {
-                    Section {
-                        herbariumHero(seed)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                    }
-                    identitySection(seed)
                     photosSection(seed)
+                    identitySection(seed)
                     growingInfoSection(seed)
                     lifecycleSection(seed)
                     if seed.state != .wishlist {
@@ -101,7 +95,7 @@ struct SeedDetailView: View {
                     EntityScopedJournalSection(parent: .seed(seed.id))
                     deleteSection(seed)
                 }
-                .vellumForm()
+                .wbForm()
                 .sheet(isPresented: $showPlanEvent) {
                     AddPlantingEventView(bedID: nil, prefillSeedID: seedID)
                 }
@@ -147,85 +141,16 @@ struct SeedDetailView: View {
                     }
                 }
             } else {
-                ContentUnavailableView(
-                    "Seed unavailable",
-                    systemImage: "leaf.slash",
-                    description: Text("This seed may have been deleted on another device.")
-                )
-            }
-        }
-    }
-
-    // MARK: - Herbarium hero
-
-    /// Top "specimen page" block — scholarly binomial + italic display
-    /// name, central pressed-plant illustration with a hand-drawn ruler.
-    /// Pulled into the Form as a section-less row with transparent
-    /// background so it floats on the vellum.
-    @ViewBuilder
-    private func herbariumHero(_ seed: LocalSeed) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(scientificDisplay(seed))
-                .font(HerbFont.bodyItalic(size: 14))
-                .foregroundStyle(HerbColor.sepia)
-            Text(seed.customName ?? "Untitled specimen")
-                .font(HerbFont.display(size: 32))
-                .foregroundStyle(HerbColor.ink)
-                .lineSpacing(0)
-            Text(familyLine(seed))
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-                .padding(.top, 2)
-            ScholarRule(verticalMargin: 8)
-            ZStack {
-                PressedPlant(kind: PressedPlant.Kind.from(seed.customType), size: 200)
-                    .frame(height: 200)
-                HStack {
-                    Spacer()
-                    rulerColumn
-                }
-                .padding(.trailing, 12)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 6)
-    }
-
-    @ViewBuilder
-    private var rulerColumn: some View {
-        VStack(spacing: 0) {
-            ForEach(0..<9) { i in
-                HStack(spacing: 4) {
-                    Text("\(i)")
-                        .font(HerbFont.smallCaps(size: 7))
-                        .foregroundStyle(HerbColor.sepia)
-                    Rectangle()
-                        .fill(HerbColor.sepia)
-                        .frame(width: 10, height: 0.6)
-                }
-                if i < 8 {
-                    Rectangle()
-                        .fill(HerbColor.sepia)
-                        .frame(width: 0.6, height: 20)
+                ZStack {
+                    WBScreenBackground()
+                    WBEmptyState(
+                        title: "Seed unavailable",
+                        message: "This seed may have been deleted on another device.",
+                        systemImage: "leaf.slash"
+                    )
                 }
             }
-            Text("INCHES")
-                .font(HerbFont.smallCaps(size: 7))
-                .tracking(1)
-                .foregroundStyle(HerbColor.sepia)
-                .padding(.top, 4)
         }
-    }
-
-    private func scientificDisplay(_ seed: LocalSeed) -> String {
-        if let snap = seed.growingInfo?.scientific_name, !snap.isEmpty { return snap }
-        return seed.customType ?? "—"
-    }
-
-    private func familyLine(_ seed: LocalSeed) -> String {
-        let variety = seed.customVariety.map { ", \($0)" } ?? ""
-        return "cv. \((seed.customCompany ?? "—").lowercased())\(variety)"
     }
 
     // MARK: - Sections
@@ -235,8 +160,8 @@ struct SeedDetailView: View {
         Section {
             if photoQuery.isEmpty {
                 Text("No photos yet")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
@@ -261,8 +186,9 @@ struct SeedDetailView: View {
                                         } label: {
                                             Image(systemName: "arrow.clockwise.circle.fill")
                                                 .symbolRenderingMode(.palette)
-                                                .foregroundStyle(.white, HerbColor.rose)
-                                                .padding(4)
+                                                .foregroundStyle(.white, WBColor.warn)
+                                                .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                                                .contentShape(Rectangle())
                                         }
                                         .buttonStyle(.plain)
                                         .accessibilityLabel("Retry photo sync")
@@ -301,16 +227,22 @@ struct SeedDetailView: View {
                 }
                 .disabled(uploadingPhoto)
                 if uploadingPhoto {
-                    ProgressView().controlSize(.small).herbProgressStyle()
+                    ProgressView().controlSize(.small).tint(WBColor.accent)
                 }
             }
             if let uploadError {
-                Text(uploadError)
-                    .font(.footnote)
-                    .foregroundStyle(HerbColor.rose)
+                Label {
+                    Text(uploadError)
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.ink)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(WBColor.warn)
+                        .accessibilityHidden(true)
+                }
             }
         } header: {
-            Rubric(text: "photos")
+            WBSectionHeader("Photos")
         }
         .onChange(of: pickedPhoto) { _, item in
             guard let item else { return }
@@ -426,9 +358,9 @@ struct SeedDetailView: View {
                 if let inst = info.instructions, !inst.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Instructions")
-                            .font(HerbFont.smallCaps(size: 10))
+                            .font(.wbCaption.weight(.semibold))
                             .tracking(1.4)
-                            .foregroundStyle(HerbColor.sepia)
+                            .foregroundStyle(WBColor.muted)
                         Text(inst)
                             .font(.body)
                     }
@@ -441,19 +373,15 @@ struct SeedDetailView: View {
                     Button {
                         showCatalogFeedback = true
                     } label: {
-                        HStack(spacing: 6) {
-                            Text("◇")
-                                .foregroundStyle(HerbColor.sepia)
-                            Text("Suggest a correction")
-                                .font(HerbFont.smallCaps(size: 10))
-                                .tracking(1.4)
-                                .foregroundStyle(HerbColor.sepia)
-                                .textCase(.uppercase)
-                        }
+                        Text("Suggest a correction")
+                            .font(.wbCaption.weight(.semibold))
+                            .tracking(1.4)
+                            .foregroundStyle(WBColor.accent)
+                            .textCase(.uppercase)
                     }
                 }
             } header: {
-                Rubric(text: "growing info")
+                WBSectionHeader("Growing info")
             }
             .sheet(isPresented: $showCatalogFeedback) {
                 if let catalogID = seed.catalogID {
@@ -626,7 +554,7 @@ struct SeedDetailView: View {
                     }
                 }
         } header: {
-            Rubric(text: "identity")
+            WBSectionHeader("Identity")
         }
         .onAppear {
             if !identityHydrated {
@@ -665,7 +593,7 @@ struct SeedDetailView: View {
                 Text("Archive").tag(SeedState.archived)
             }
         } header: {
-            Rubric(text: "lifecycle")
+            WBSectionHeader("Lifecycle")
         }
     }
 
@@ -688,7 +616,7 @@ struct SeedDetailView: View {
                 in: 0...100
             )
         } header: {
-            Rubric(text: "quantity")
+            WBSectionHeader("Quantity")
         }
     }
 
@@ -739,7 +667,7 @@ struct SeedDetailView: View {
                 }
             }
         } header: {
-            Rubric(text: "storage")
+            WBSectionHeader("Storage")
         }
     }
 
@@ -780,7 +708,7 @@ struct SeedDetailView: View {
                 )
             )
         } header: {
-            Rubric(text: "provenance")
+            WBSectionHeader("Provenance")
         }
     }
 
@@ -808,7 +736,7 @@ struct SeedDetailView: View {
             )
             .lineLimit(3...8)
         } header: {
-            Rubric(text: "notes")
+            WBSectionHeader("Notes")
         }
         .onDisappear {
             Task { try? await appEnv.sync.flushPending() }
@@ -840,7 +768,7 @@ struct SeedDetailView: View {
                 )
             }
         } header: {
-            Rubric(text: "planting window")
+            WBSectionHeader("Planting window")
         }
     }
 

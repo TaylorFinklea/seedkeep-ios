@@ -288,6 +288,21 @@
 
 **Rationale**: Everything these features need fits on the device. The same inputs give the same windows as the server, without hosting.
 
+## 2026-10-20 — Workbench components, contrast rules and a debug sample garden (R2a)
+
+**Context**: The owner chose one look, Workbench everywhere, with no Herbarium flourishes (umbrella `decisions.md` [2026-10-20]). Herbarium fonts never scaled with Dynamic Type, and its colours mixed status and text.
+
+**Decision**:
+- Live screens use `Font.wb*` (built on system text styles) and the `WB*` components. Herbarium code stays compiled until N3, only in dead files, hidden features and the screens R2b migrates. `HerbSpace` counts as layout and stays until N3.
+- Text is `WBColor.ink` or `muted`. Verdict and warn colours mark icons, dots and bars, never text. Interactive labels may use `accent`. `faint` is decoration only.
+- Touch targets use `WBMetrics.minTouchTarget`: 44pt on iOS, intrinsic size on Mac.
+- The planting chart compares the user's local day, read in Gregorian and rebuilt at UTC midnight (`RecommendationPanel.plannedDay`), with its UTC anchor. That's the day the picker shows and the day that's saved, whatever the system calendar.
+- A `#if DEBUG` sample-garden mode (`-SeedkeepFixture`) gives screenshot runs an in-memory garden with CloudKit off. It fails closed outside a debug, non-test run, and the release archive check rejects it.
+
+**Alternatives considered**: Keeping Herbarium on iPhone (the owner chose one look); restyling everything in one phase (Sol judged it too large, so R2 is split into R2a, R2b and R2c); screenshotting against the owner's real garden (personal data, and it needs a signed iCloud build).
+
+**Rationale**: Text that scales and readable contrast are release requirements. Shared components keep the three phases consistent, and the sample garden makes visual review repeatable.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in

@@ -23,24 +23,23 @@ struct RandomPickView: View {
                     }
                     .buttonStyle(.plain)
                 } else {
-                    ContentUnavailableView(
-                        "No active seeds to pick from.",
-                        systemImage: "leaf"
-                    )
+                    WBEmptyState(title: "No active seeds to pick from.", systemImage: "leaf")
                 }
                 Spacer()
                 Button {
                     pick()
                 } label: {
                     Label(pickedSeed == nil ? "Pick a seed" : "Pick another", systemImage: "shuffle")
-                        .font(.headline)
+                        .font(.wbHeadline)
                         .frame(maxWidth: .infinity)
+                        .frame(minHeight: WBMetrics.minTouchTarget)
                         .padding(.vertical, 12)
                 }
                 .buttonStyle(.borderedProminent)
                 .padding(.horizontal)
                 .padding(.bottom, 24)
             }
+            .background(WBColor.bg.ignoresSafeArea())
             .navigationTitle("Random")
             .toolbar {
                 if showsClose {
@@ -112,25 +111,26 @@ private struct SeedCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(seed.displayName)
-                .font(.title.weight(.semibold))
+                .font(.wbTitle)
                 .multilineTextAlignment(.leading)
             if let company = seed.customCompany?.trimmedNonEmpty {
                 Text(company)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.wbCallout)
+                    .foregroundStyle(WBColor.muted)
             }
             HStack(spacing: 8) {
                 Tag(text: "\(seed.packetCount) packet\(seed.packetCount == 1 ? "" : "s")")
                 Tag(text: seed.yearPacked.map { "packed \($0)" } ?? "Year unknown")
             }
             Text(seed.notes?.trimmedNonEmpty.map { "Notes: \($0)" } ?? "No notes")
-                .font(.body)
-                .foregroundStyle(.primary)
+                .font(.wbBody)
+                .foregroundStyle(WBColor.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: .rect(cornerRadius: 18))
+        .background(WBColor.panel, in: .rect(cornerRadius: WBMetrics.radiusPanel))
+        .overlay(RoundedRectangle(cornerRadius: WBMetrics.radiusPanel).strokeBorder(WBColor.line, lineWidth: 1))
         .padding(.horizontal)
     }
 }
@@ -140,10 +140,10 @@ private struct Tag: View {
 
     var body: some View {
         Text(text)
-            .font(.caption.weight(.medium))
+            .font(.wbCaption.weight(.medium))
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(.tint.opacity(0.18), in: .capsule)
-            .foregroundStyle(.tint)
+            .background(WBColor.accentSoft, in: .capsule)
+            .foregroundStyle(WBColor.ink)
     }
 }

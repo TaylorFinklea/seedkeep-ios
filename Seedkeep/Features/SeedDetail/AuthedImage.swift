@@ -24,7 +24,7 @@ struct AuthedImage: View {
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
             } else if isLoading {
-                ProgressView().controlSize(.small).herbProgressStyle()
+                ProgressView().controlSize(.small).tint(WBColor.accent)
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)

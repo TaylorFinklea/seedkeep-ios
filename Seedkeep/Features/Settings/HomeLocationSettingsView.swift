@@ -31,11 +31,11 @@ struct HomeLocationSettingsView: View {
                         lookup = .none
                     }
             } header: {
-                Rubric(text: "zip code")
+                WBSectionHeader("zip code")
             } footer: {
                 Text("Enter your home ZIP code. Seedkeep uses it to look up your USDA hardiness zone and average frost dates on this device.")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbCaption)
+                    .foregroundStyle(WBColor.muted)
             }
 
             switch lookup {
@@ -48,21 +48,27 @@ struct HomeLocationSettingsView: View {
                     LabeledContent("Avg last frost", value: frostLabel(climate.avgLastFrost))
                     LabeledContent("Avg first frost", value: frostLabel(climate.avgFirstFrost))
                 } header: {
-                    Rubric(text: "location")
+                    WBSectionHeader("location")
                 } footer: {
                     Text("Frost dates are estimates for your hardiness zone, not measurements for your ZIP.")
-                        .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
                 }
             case .unknown:
                 Section {
-                    Text("We don't have climate data for that ZIP.")
-                        .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.rose)
+                    Label {
+                        Text("We don't have climate data for that ZIP.")
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.ink)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.wbCaption)
+                            .foregroundStyle(WBColor.warn)
+                    }
                 }
             }
         }
-        .vellumForm()
+        .wbForm()
         .navigationTitle("Home location")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

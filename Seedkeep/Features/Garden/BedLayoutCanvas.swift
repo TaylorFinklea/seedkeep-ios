@@ -59,10 +59,10 @@ struct BedLayoutCanvas: View {
             ZStack(alignment: .topLeading) {
                 // Bed rectangle
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.brown.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [4, 4]))
+                    .stroke(WBColor.muted, style: StrokeStyle(lineWidth: 2, dash: [4, 4]))
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.brown.opacity(0.07))
+                            .fill(WBColor.line.opacity(0.5))
                     )
                     .frame(width: bedW, height: bedH)
                     .offset(x: originX - inset, y: originY - inset)
@@ -71,7 +71,7 @@ struct BedLayoutCanvas: View {
                 // Footprint scale label in the corner.
                 Text("\(Self.fmt(widthFeet))′ × \(Self.fmt(lengthFeet))′")
                     .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(WBColor.muted)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(.thinMaterial, in: .capsule)
@@ -89,11 +89,7 @@ struct BedLayoutCanvas: View {
             }
         }
         .frame(height: canvasHeight)
-        #if os(iOS)
-        .background(Color(.systemGroupedBackground))
-        #else
-        .background(Color(nsColor: .windowBackgroundColor))
-        #endif
+        .background(WBColor.panel2)
         .clipShape(.rect(cornerRadius: 10))
     }
 
@@ -116,10 +112,10 @@ struct BedLayoutCanvas: View {
         if p.spacingFeet > 0 {
             let diameter = max(8, p.spacingFeet * scale)
             Circle()
-                .stroke(p.isSowing ? HerbColor.sepia.opacity(0.5) : Color.gray.opacity(0.4),
+                .stroke(p.isSowing ? WBColor.accent.opacity(0.5) : WBColor.faint.opacity(0.6),
                         style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
                 .background(
-                    Circle().fill(p.isSowing ? HerbColor.sepia.opacity(0.12) : Color.gray.opacity(0.10))
+                    Circle().fill(p.isSowing ? WBColor.accent.opacity(0.12) : WBColor.faint.opacity(0.10))
                 )
                 .frame(width: diameter, height: diameter)
                 .position(x: cx, y: cy)
@@ -128,7 +124,7 @@ struct BedLayoutCanvas: View {
 
         // Dot itself — draggable when onMove is wired up.
         Circle()
-            .fill(p.isSowing ? HerbColor.sepia : Color.gray)
+            .fill(p.isSowing ? WBColor.accent : WBColor.muted)
             .frame(width: draggable ? 18 : 12, height: draggable ? 18 : 12)
             .shadow(color: .black.opacity(0.18), radius: draggable ? 2 : 0)
             .position(x: cx, y: cy)
@@ -141,6 +137,7 @@ struct BedLayoutCanvas: View {
         if !p.label.isEmpty, cy + 18 <= originY + bedH + inset {
             Text(p.label)
                 .font(.caption2.weight(.medium))
+                .foregroundStyle(WBColor.ink)
                 .lineLimit(1)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)

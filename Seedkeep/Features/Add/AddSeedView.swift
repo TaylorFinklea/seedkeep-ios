@@ -56,14 +56,15 @@ struct AddSeedView: View {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(prefill == nil ? "Lay a new packet" : "Confirm specimen")
-                            .font(HerbFont.smallCaps(size: 10))
-                            .tracking(2)
-                            .foregroundStyle(HerbColor.sepia)
+                        Text("Seeds")
+                            .font(.wbSectionLabel)
+                            .tracking(0.6)
+                            .foregroundStyle(WBColor.muted)
                             .textCase(.uppercase)
-                        Text(prefill == nil ? "Add seed" : "Specimen review")
-                            .font(HerbFont.display(size: 30))
-                            .foregroundStyle(HerbColor.ink)
+                        Text(prefill == nil ? "Add seed" : "Review the scan")
+                            .font(.wbTitle)
+                            .foregroundStyle(WBColor.ink)
+                            .accessibilityAddTraits(.isHeader)
                     }
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
@@ -81,7 +82,7 @@ struct AddSeedView: View {
                         Text("Archive").tag(SeedState.archived)
                     }
                 } header: {
-                    Rubric(text: "lifecycle")
+                    WBSectionHeader("lifecycle")
                 }
 
                 Section {
@@ -98,14 +99,14 @@ struct AddSeedView: View {
                         .textInputAutocapitalization(.words)
                         #endif
                 } header: {
-                    Rubric(text: "identity")
+                    WBSectionHeader("identity")
                 }
 
                 if state != .wishlist {
                     Section {
                         Stepper("\(packetCount) packet\(packetCount == 1 ? "" : "s")", value: $packetCount, in: 0...100)
                     } header: {
-                        Rubric(text: "quantity")
+                        WBSectionHeader("quantity")
                     }
                 }
 
@@ -124,12 +125,12 @@ struct AddSeedView: View {
                                 Text("Tags")
                                 Spacer()
                                 Text(selectedTagIDs.isEmpty ? "None" : "\(selectedTagIDs.count) selected")
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(WBColor.muted)
                             }
                         }
                     }
                 } header: {
-                    Rubric(text: "storage")
+                    WBSectionHeader("storage")
                 }
 
                 Section {
@@ -141,25 +142,31 @@ struct AddSeedView: View {
                     }
                     YearField(year: $yearPacked)
                 } header: {
-                    Rubric(text: "provenance")
+                    WBSectionHeader("provenance")
                 }
 
                 Section {
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(3...6)
                 } header: {
-                    Rubric(text: "notes")
+                    WBSectionHeader("notes")
                 }
 
                 if let saveError {
                     Section {
-                        Text(saveError)
-                            .font(.footnote)
-                            .foregroundStyle(HerbColor.rose)
+                        Label {
+                            Text(saveError)
+                                .font(.wbFootnote)
+                                .foregroundStyle(WBColor.ink)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(WBColor.warn)
+                                .accessibilityHidden(true)
+                        }
                     }
                 }
             }
-            .vellumForm()
+            .wbForm()
             // Once the seed exists, its details are fixed; only Retry (finish the save) remains.
             .disabled(seedCreated)
             .navigationTitle(prefill == nil ? "Add seed" : "Confirm seed")
@@ -261,7 +268,7 @@ struct AddSeedView: View {
                     LabeledContent("Hardiness zones", value: zones)
                 }
             } header: {
-                Rubric(text: "growing info (extracted)")
+                WBSectionHeader("growing info (extracted)")
             } footer: {
                 Text("Read from the packet photos. Saved with this seed.")
             }

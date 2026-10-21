@@ -60,29 +60,7 @@ struct RecommendationPanel: View {
     private func verdictBadge(for rec: PlantingRecommendation) -> some View {
         let effectiveVerdict = refined?.verdict ?? rec.verdict
         let info = VerdictInfo(raw: effectiveVerdict)
-        let herbColor = herbVerdictColor(for: effectiveVerdict)
-        return HStack(spacing: 8) {
-            Circle()
-                .fill(herbColor)
-                .frame(width: 9, height: 9)
-            Text(info.label)
-                .font(HerbFont.smallCaps(size: 11))
-                .tracking(1.4)
-                .foregroundStyle(HerbColor.ink)
-                .textCase(.uppercase)
-            Spacer()
-        }
-    }
-
-    private func herbVerdictColor(for raw: String) -> Color {
-        switch raw {
-        case "plant_now":  return HerbColor.verdictNow
-        case "plant_soon": return HerbColor.verdictSoon
-        case "too_early":  return HerbColor.verdictEarly
-        case "late":       return HerbColor.verdictClose
-        case "too_late":   return HerbColor.verdictMiss
-        default:           return HerbColor.inkFaint
-        }
+        return WBStatusChip(info.label, tone: .verdict(effectiveVerdict))
     }
 
     // MARK: - Window dates
@@ -91,35 +69,35 @@ struct RecommendationPanel: View {
     private func windowDates(for rec: PlantingRecommendation) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             if let start = rec.rangeStart, let end = rec.rangeEnd {
-                let startStr = formattedDate(start) ?? start
-                let endStr = formattedDate(end) ?? end
+                let startStr = Self.formattedDate(start) ?? start
+                let endStr = Self.formattedDate(end) ?? end
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("OUTDOOR")
-                        .font(HerbFont.smallCaps(size: 9))
+                        .font(.wbCaption.weight(.semibold))
                         .tracking(1.4)
-                        .foregroundStyle(HerbColor.sepia)
+                        .foregroundStyle(WBColor.muted)
                     Text("\(startStr) – \(endStr)")
-                        .font(HerbFont.bodyItalic(size: 13))
-                        .foregroundStyle(HerbColor.ink)
+                        .font(.wbBody)
+                        .foregroundStyle(WBColor.ink)
                 }
             } else if rec.rangeStart == nil && rec.rangeEnd == nil {
                 Text(Self.noWindowNote(for: rec.reason))
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if let iStart = rec.indoorStart, let iEnd = rec.indoorEnd {
-                let iStartStr = formattedDate(iStart) ?? iStart
-                let iEndStr = formattedDate(iEnd) ?? iEnd
+                let iStartStr = Self.formattedDate(iStart) ?? iStart
+                let iEndStr = Self.formattedDate(iEnd) ?? iEnd
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("INDOORS")
-                        .font(HerbFont.smallCaps(size: 9))
+                        .font(.wbCaption.weight(.semibold))
                         .tracking(1.4)
-                        .foregroundStyle(HerbColor.sepia)
+                        .foregroundStyle(WBColor.muted)
                     Text("\(iStartStr) – \(iEndStr)")
-                        .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbBody)
+                        .foregroundStyle(WBColor.muted)
                 }
             }
         }
@@ -140,25 +118,46 @@ struct RecommendationPanel: View {
             )
             .frame(height: 28)
             .clipShape(.rect(cornerRadius: 6))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.chartSummary(
+                rangeStart: rec.rangeStart, rangeEnd: rec.rangeEnd,
+                verdict: refined?.verdict ?? rec.verdict, userDate: userDate))
 
             // Date axis labels
             HStack {
                 Text(shortDate(anchorStr) ?? "Today")
-                    .font(HerbFont.smallCaps(size: 8))
+                    .font(.wbCaption.weight(.semibold))
                     .tracking(1.2)
-                    .foregroundStyle(HerbColor.sepia)
+                    .foregroundStyle(WBColor.muted)
                 Spacer()
                 Text("+30D")
-                    .font(HerbFont.smallCaps(size: 8))
+                    .font(.wbCaption.weight(.semibold))
                     .tracking(1.2)
-                    .foregroundStyle(HerbColor.sepia)
+                    .foregroundStyle(WBColor.muted)
                 Spacer()
                 Text("+60D")
-                    .font(HerbFont.smallCaps(size: 8))
+                    .font(.wbCaption.weight(.semibold))
                     .tracking(1.2)
-                    .foregroundStyle(HerbColor.sepia)
+                    .foregroundStyle(WBColor.muted)
             }
         }
+    }
+
+    /// What VoiceOver reads for the 60-day chart, which is drawn in a Canvas: the window, today's
+    /// verdict and, when one is set, the date being planned.
+    static func chartSummary(rangeStart: String?, rangeEnd: String?, verdict: String,
+                             userDate: Date?, calendar: Calendar = .current) -> String {
+        var parts: [String] = []
+        if let start = rangeStart.flatMap(formattedDate), let end = rangeEnd.flatMap(formattedDate) {
+            parts.append("Best from \(start) to \(end)")
+        } else {
+            parts.append("No planting window")
+        }
+        parts.append("today: \(VerdictInfo(raw: verdict).label.lowercased())")
+        if let userDate {
+            parts.append("your date: \(utcMonthDay(plannedDay(userDate, calendar: calendar)))")
+        }
+        return parts.joined(separator: "; ")
     }
 
     // MARK: - Weather note
@@ -168,11 +167,11 @@ struct RecommendationPanel: View {
         if let note = refined?.weatherNote {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "cloud.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(HerbColor.sepia)
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
                 Text(note)
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.muted)
             }
         }
     }
@@ -184,8 +183,8 @@ struct RecommendationPanel: View {
     private func confidenceRow(for rec: PlantingRecommendation) -> some View {
         if let note = Self.confidenceNote(for: rec) {
             Text(note)
-                .font(HerbFont.bodyItalic(size: 11))
-                .foregroundStyle(HerbColor.inkSoft)
+                .font(.wbBody)
+                .foregroundStyle(WBColor.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -230,8 +229,8 @@ struct RecommendationPanel: View {
     private func reasoningRow(for rec: PlantingRecommendation) -> some View {
         if let reasoning = rec.reasoning, !reasoning.isEmpty {
             Text(reasoning)
-                .font(HerbFont.bodyItalic(size: 11))
-                .foregroundStyle(HerbColor.inkSoft)
+                .font(.wbBody)
+                .foregroundStyle(WBColor.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -240,19 +239,38 @@ struct RecommendationPanel: View {
 
     private var noGrowingInfo: some View {
         Text(Self.noRecommendationNote(hasGrowingInfo: hasGrowingInfo))
-            .font(HerbFont.bodyItalic(size: 12))
-            .foregroundStyle(HerbColor.inkSoft)
+            .font(.wbBody)
+            .foregroundStyle(WBColor.muted)
     }
 
     // MARK: - Helpers
 
     /// Parses a "YYYY-MM-DD" string and returns a readable "May 18" string.
-    private func formattedDate(_ yyyymmdd: String) -> String? {
+    private static func formattedDate(_ yyyymmdd: String) -> String? {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")
         guard let date = f.date(from: yyyymmdd) else { return nil }
+        return utcMonthDay(date)
+    }
+
+    /// The day the user picked, as UTC midnight. The picker and the saved date use the local day,
+    /// while the chart's anchor and labels are UTC days, so the local year, month and day are
+    /// rebuilt in UTC before they're compared or formatted. Only `calendar`'s time zone is used:
+    /// the day is always read in Gregorian, like the saved "yyyy-MM-dd", so a Buddhist or other
+    /// system calendar can't shift the year.
+    nonisolated static func plannedDay(_ date: Date, calendar: Calendar = .current) -> Date {
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = calendar.timeZone
+        let parts = local.dateComponents([.year, .month, .day], from: date)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        return utc.date(from: parts) ?? date
+    }
+
+    /// A UTC day as "May 18".
+    private static func utcMonthDay(_ date: Date) -> String {
         let out = DateFormatter()
         out.dateFormat = "MMM d"
         out.locale = Locale(identifier: "en_US_POSIX")
@@ -262,7 +280,7 @@ struct RecommendationPanel: View {
 
     /// Short date label for the axis — just "MMM d".
     private func shortDate(_ yyyymmdd: String) -> String? {
-        formattedDate(yyyymmdd)
+        Self.formattedDate(yyyymmdd)
     }
 
     // MARK: - No-location variant
@@ -272,16 +290,16 @@ struct RecommendationPanel: View {
     static var needsLocation: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "nosign")
-                .font(.system(size: 14))
-                .foregroundStyle(HerbColor.ochre)
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.warn)
             VStack(alignment: .leading, spacing: 4) {
                 Text("LOCATION REQUIRED")
-                    .font(HerbFont.smallCaps(size: 10))
+                    .font(.wbCaption.weight(.semibold))
                     .tracking(1.5)
-                    .foregroundStyle(HerbColor.ink)
+                    .foregroundStyle(WBColor.ink)
                 Text("Set your garden location in Settings → Home location to see planting windows.")
-                    .font(HerbFont.bodyItalic(size: 12))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.muted)
             }
         }
     }
@@ -304,15 +322,6 @@ private struct VerdictInfo {
         }
     }
 
-    /// Delegates to `HerbColor` — shared source of truth with `SeedRow`.
-    var foregroundColor: Color {
-        HerbColor.verdictForegroundFallback(for: raw)
-    }
-
-    /// Delegates to `HerbColor`.
-    var backgroundColor: Color {
-        HerbColor.verdictBackground(for: raw)
-    }
 }
 
 // MARK: - SuitabilityGradientBar
@@ -330,7 +339,7 @@ private struct SuitabilityGradientBar: View {
                 // No data — fill with a subtle grey band
                 context.fill(
                     Path(CGRect(origin: .zero, size: size)),
-                    with: .color(HerbColor.neutralFill)
+                    with: .color(WBColor.line)
                 )
                 return
             }
@@ -356,13 +365,14 @@ private struct SuitabilityGradientBar: View {
                 var utcCal = cal
                 utcCal.timeZone = TimeZone(identifier: "UTC")!
                 let anchorMidnight = utcCal.startOfDay(for: anchorDate)
-                let userMidnight = utcCal.startOfDay(for: userDate)
+                let userMidnight = RecommendationPanel.plannedDay(userDate)
                 let dayOffset = utcCal.dateComponents([.day], from: anchorMidnight, to: userMidnight).day ?? -1
 
                 if dayOffset >= 0 && dayOffset < count {
                     let xCenter = (CGFloat(dayOffset) + 0.5) * segmentWidth
                     let markerRect = CGRect(x: xCenter - 1, y: 0, width: 2, height: size.height)
-                    context.fill(Path(markerRect), with: .color(.white.opacity(0.9)))
+                    // `ink` stands out on every segment, including the empty `line` days.
+                    context.fill(Path(markerRect), with: .color(WBColor.ink))
                 }
             }
         }
@@ -382,16 +392,10 @@ private struct SuitabilityGradientBar: View {
 
     // MARK: - Helpers
 
-    /// Maps a score 0.0–1.0 to a gradient colour (grey → green).
+    /// Uses the plant-now verdict token, with opacity to show suitability strength. Days with no
+    /// suitability are `line`.
     private func segmentColor(score: Double) -> Color {
-        if score < 0.001 {
-            return HerbColor.neutralFill
-        }
-        // Blend from a muted amber (low) to bright green (high)
-        let r = 0.60 - 0.50 * score
-        let g = 0.50 + 0.46 * score
-        let b = 0.20 - 0.15 * score
-        return Color(red: r, green: g, blue: b)
+        score < 0.001 ? WBColor.line : WBColor.verdictPlantNow.opacity(0.25 + score * 0.75)
     }
 
     private func parseDate(_ yyyymmdd: String) -> Date? {
@@ -407,7 +411,7 @@ private struct SuitabilityGradientBar: View {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         let anchorMidnight = cal.startOfDay(for: anchorDate)
-        let userMidnight = cal.startOfDay(for: userDate)
+        let userMidnight = RecommendationPanel.plannedDay(userDate)
         let dayOffset = cal.dateComponents([.day], from: anchorMidnight, to: userMidnight).day ?? -1
         let count = max(scores.count, 1)
         guard dayOffset >= 0 && dayOffset < count else { return nil }

@@ -1,5 +1,38 @@
 # Current State
 
+## Native Workbench redesign — R2a complete (2026-10-20)
+
+R2a restyles the app in Workbench with no behaviour change. It's on branch
+`redesign/r2-design-system`, stacked on N2, and is local only.
+- **Foundation:** `WBType` (system text styles, so text scales),
+  `WBComponents` (section header, banner, status chip, empty state, daylight
+  panel, screen background, `.wbPanel`, `.wbForm`, progress style), and
+  `WBMetrics.minTouchTarget` (44pt on iOS, intrinsic on Mac). AccentColor and
+  the app tint are `WBColor.accent`; the tab bar uses system fonts.
+- **Restyled:**
+  - Garden, Journal and Add Seed
+  - seed detail, the planting panel, scan chrome, random pick, invite and
+    What's New
+  - the Settings sub-screens
+  The Latin headings, folios, ornaments and pressed-plant art are gone. The
+  copy is plain ("Garden", "Journal", "Garden bed").
+- **Planting chart:** it now has a VoiceOver summary. The "Your date" marker
+  and the summary use the local day the picker shows (the marker used the UTC
+  day before).
+- **Sample garden (debug only):** the `-SeedkeepFixture` launch argument runs
+  the app on an in-memory sample garden with no CloudKit, for screenshots.
+  `verify-release-archive.sh` fails if it's in a Release build.
+- **Still Herbarium until R2b:** Seeds (LibraryView), Today, You and the main
+  Settings list. `HerbSpace` stays as a layout constant until N3.
+- **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 1060 + 1, macOS
+  app 1075 + 1, on Xcode 27.1. **Reviews:** Opus 5.5 and GPT-6.1 Sol, two
+  rounds plus confirmations.
+- **Contract:** `.docs/ai/plans/2026-10-20-r2-design-system.md`.
+- **Not done:** screenshots at the largest text size, and the owner's Mac
+  visual check. Light mode is still forced until R2c.
+- **Next:** R2b (the compact Seeds list, Today, and You folded into
+  Settings), then R2c (dark mode and accessibility acceptance).
+
 ## Apple-only app — N2 complete (2026-10-20)
 
 N2 brings back, fully on the device, what N1 hid. On branch

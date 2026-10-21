@@ -234,22 +234,25 @@ struct RootView: View {
     @ViewBuilder
     private func signedOutInviteView(code: String) -> some View {
         // Retired invite links are a dead flow — don't prompt sign-in to redeem one.
-        VStack(spacing: 16) {
-            InviteRetirementNotice()
-            Button("OK") {
-                pendingInviteCode = nil
+        // Scrolls, and expands past `.medium`, so large text never clips the OK button.
+        ScrollView {
+            VStack(spacing: 16) {
+                InviteRetirementNotice()
+                Button("OK") {
+                    pendingInviteCode = nil
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
+            .padding(28)
         }
-        .padding(28)
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     private var handoffRetiredView: some View {
         VStack(spacing: 16) {
             VStack(spacing: 12) {
                 Image(systemName: "link.badge.plus")
-                    .font(.system(size: 36))
+                    .font(.largeTitle)
                     .foregroundStyle(WBColor.muted)
                     .accessibilityHidden(true)
                 Text("Garden handoff links are no longer supported.")

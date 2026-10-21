@@ -141,7 +141,7 @@ struct CornerSuggestionsView: View {
                 .padding(.horizontal, HerbSpace.gutter)
                 .padding(.bottom, 32)
             }
-            .background(VellumBackground())
+            .background(WBScreenBackground())
             .navigationTitle("Corner suggestions")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -174,7 +174,7 @@ struct CornerSuggestionsView: View {
                 .clipShape(.rect(cornerRadius: 8))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(HerbColor.vellumDk, lineWidth: 0.5)
+                        .strokeBorder(WBColor.line2, lineWidth: 0.5)
                 )
                 .padding(.top, 8)
         }
@@ -183,10 +183,7 @@ struct CornerSuggestionsView: View {
     @ViewBuilder
     private var cueChipsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("DETECTED CONDITIONS")
-                .font(HerbFont.smallCaps(size: 9))
-                .tracking(1.6)
-                .foregroundStyle(HerbColor.sepia)
+            WBSectionHeader("DETECTED CONDITIONS")
 
             HStack(spacing: 8) {
                 ExposureChip(selection: Binding(
@@ -212,10 +209,10 @@ struct CornerSuggestionsView: View {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.circle")
                         .font(.caption)
-                        .foregroundStyle(HerbColor.ochre)
+                        .foregroundStyle(WBColor.warn)
                     Text("No planting windows for these seeds yet — ranking on season + library.")
-                        .font(HerbFont.bodyItalic(size: 11))
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
                 }
             }
         }
@@ -240,21 +237,11 @@ struct CornerSuggestionsView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "leaf")
-                .font(.system(size: 32))
-                .foregroundStyle(HerbColor.sepia.opacity(0.6))
-            Text("No active seeds")
-                .font(HerbFont.display(size: 20))
-                .foregroundStyle(HerbColor.ink)
-            Text("Add seeds to your library to get ranked suggestions here.")
-                .font(HerbFont.bodyItalic(size: 12))
-                .foregroundStyle(HerbColor.inkSoft)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
+        WBEmptyState(
+            title: "No active seeds",
+            message: "Add seeds to your library to get ranked suggestions here.",
+            systemImage: "leaf"
+        )
     }
 
     private var loadingOverlay: some View {
@@ -262,10 +249,10 @@ struct CornerSuggestionsView: View {
             ProgressView()
                 .progressViewStyle(.circular)
                 .controlSize(.large)
-                .tint(HerbColor.sepia)
+                .tint(WBColor.accent)
             Text("Reading the corner…")
-                .font(HerbFont.bodyItalic(size: 13))
-                .foregroundStyle(HerbColor.inkSoft)
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.muted)
         }
         .padding(24)
         .background(.regularMaterial, in: .rect(cornerRadius: 12))
@@ -301,54 +288,49 @@ private struct SuggestionCard: View {
                 verdictDot
                 Text(suggestion.displayName)
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(HerbColor.ink)
+                    .foregroundStyle(WBColor.ink)
                     .lineLimit(1)
                 Spacer()
                 Button {
                     onPlant()
                 } label: {
                     Text("Plant")
-                        .font(HerbFont.smallCaps(size: 10))
-                        .tracking(1.4)
-                        .foregroundStyle(.white)
+                        .font(.wbCaption.weight(.semibold))
+                        .foregroundStyle(WBColor.accentInk)
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(HerbColor.sepia, in: .capsule)
+                        .frame(minHeight: WBMetrics.minTouchTarget)
+                        .background(WBColor.accent, in: .capsule)
+                        .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
             }
 
             if suggestion.hasNoWindowData {
                 Text("No window data — ranked on packet age")
-                    .font(HerbFont.bodyItalic(size: 11))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbCaption)
+                    .foregroundStyle(WBColor.muted)
             } else if let rangeStart = suggestion.rangeStart, let rangeEnd = suggestion.rangeEnd {
                 HStack(spacing: 6) {
                     verdictBadge
                     Text("·")
                         .font(.caption)
-                        .foregroundStyle(HerbColor.inkFaint)
+                        .foregroundStyle(WBColor.faint)
                     Text("\(formatDate(rangeStart)) – \(formatDate(rangeEnd))")
                         .font(.caption)
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .foregroundStyle(WBColor.muted)
                 }
             } else {
                 verdictBadge
             }
         }
-        .padding(12)
-        .background(HerbColor.vellumHi, in: .rect(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(HerbColor.vellumDk, lineWidth: 0.5)
-        )
+        .wbPanel(padding: 12)
     }
 
     @ViewBuilder
     private var verdictDot: some View {
         if let verdict = suggestion.verdict {
             Circle()
-                .fill(verdictColor(verdict))
+                .fill(WBColor.verdict(verdict))
                 .frame(width: 9, height: 9)
         }
     }
@@ -356,21 +338,7 @@ private struct SuggestionCard: View {
     @ViewBuilder
     private var verdictBadge: some View {
         if let verdict = suggestion.verdict {
-            Text(verdictLabel(verdict))
-                .font(HerbFont.smallCaps(size: 9))
-                .tracking(1.2)
-                .foregroundStyle(verdictColor(verdict))
-        }
-    }
-
-    private func verdictColor(_ verdict: String) -> Color {
-        switch verdict {
-        case "plant_now":  return HerbColor.verdictNow
-        case "plant_soon": return HerbColor.verdictSoon
-        case "too_early":  return HerbColor.verdictEarly
-        case "late":       return HerbColor.verdictClose
-        case "too_late":   return HerbColor.verdictMiss
-        default:           return HerbColor.inkFaint
+            WBStatusChip(verdictLabel(verdict), tone: .verdict(verdict))
         }
     }
 
@@ -422,16 +390,16 @@ private struct ExposureChip: View {
                 Image(systemName: "sun.max")
                     .font(.caption)
                 Text(selection.displayLabel)
-                    .font(HerbFont.smallCaps(size: 10))
-                    .tracking(1.2)
+                    .font(.wbCaption.weight(.semibold))
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9))
+                    .font(.caption2)
             }
-            .foregroundStyle(HerbColor.ink)
+            .foregroundStyle(WBColor.ink)
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(HerbColor.vellumDk.opacity(0.3), in: .capsule)
-            .overlay(Capsule().strokeBorder(HerbColor.vellumDk, lineWidth: 0.5))
+            .frame(minHeight: WBMetrics.minTouchTarget)
+            .background(WBColor.panel, in: .capsule)
+            .overlay(Capsule().strokeBorder(WBColor.line, lineWidth: 1))
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
     }
@@ -458,16 +426,16 @@ private struct OpennessChip: View {
                 Image(systemName: "leaf")
                     .font(.caption)
                 Text(selection.displayLabel)
-                    .font(HerbFont.smallCaps(size: 10))
-                    .tracking(1.2)
+                    .font(.wbCaption.weight(.semibold))
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 9))
+                    .font(.caption2)
             }
-            .foregroundStyle(HerbColor.ink)
+            .foregroundStyle(WBColor.ink)
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(HerbColor.vellumDk.opacity(0.3), in: .capsule)
-            .overlay(Capsule().strokeBorder(HerbColor.vellumDk, lineWidth: 0.5))
+            .frame(minHeight: WBMetrics.minTouchTarget)
+            .background(WBColor.panel, in: .capsule)
+            .overlay(Capsule().strokeBorder(WBColor.line, lineWidth: 1))
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
     }

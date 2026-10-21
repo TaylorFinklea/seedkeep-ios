@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The "What's New" sheet: opens on `initialRelease`; a History toolbar button
-/// pushes the full release list. Styled with Herbarium tokens (light-mode only).
+/// pushes the full release list. Styled with Workbench tokens.
 struct WhatsNewSheet: View {
     let initialRelease: ChangelogRelease
     @Environment(\.dismiss) private var dismiss
@@ -23,6 +23,7 @@ struct WhatsNewSheet: View {
                         } label: {
                             Image(systemName: "clock.arrow.circlepath")
                         }
+                        .accessibilityLabel("Version history")
                     }
                 }
         }
@@ -48,26 +49,27 @@ struct ReleaseDetailView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(VellumBackground())
+        .background(WBScreenBackground())
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("\(release.version) (\(release.build))")
-                .font(HerbFont.display(size: 30))
-                .foregroundStyle(HerbColor.ink)
+                .font(.wbLargeTitle)
+                .foregroundStyle(WBColor.ink)
+                .accessibilityAddTraits(.isHeader)
             if let date = release.date {
                 Text(date)
-                    .font(HerbFont.smallCaps(size: 10))
+                    .font(.wbCaption.weight(.semibold))
                     .tracking(1.5)
-                    .foregroundStyle(HerbColor.inkFaint)
+                    .foregroundStyle(WBColor.muted)
             }
             if let headline = release.headline {
                 Text(headline)
-                    .font(HerbFont.bodyItalic(size: 14))
-                    .foregroundStyle(HerbColor.inkSoft)
+                    .font(.wbBody)
+                    .foregroundStyle(WBColor.muted)
             }
-            ScholarRule(verticalMargin: 8)
+            Rectangle().fill(WBColor.line).frame(height: 1).padding(.vertical, 8)
         }
     }
 
@@ -77,10 +79,7 @@ struct ReleaseDetailView: View {
                 // The category colour marks the icon only; the title is text, so it stays `ink`.
                 Image(systemName: category.symbolName)
                     .foregroundStyle(category.tint)
-                Text(category.title.uppercased())
-                    .font(HerbFont.smallCaps(size: 11))
-                    .tracking(2.0)
-                    .foregroundStyle(WBColor.ink)
+                WBSectionHeader(category.title)
             }
 
             ForEach(Array(items.enumerated()), id: \.offset) { _, change in
@@ -90,8 +89,8 @@ struct ReleaseDetailView: View {
                         .frame(width: 5, height: 5)
                         .padding(.top, 7)
                     Text(change.text)
-                        .font(HerbFont.body(size: 15))
-                        .foregroundStyle(HerbColor.ink)
+                        .font(.wbBody)
+                        .foregroundStyle(WBColor.ink)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -105,7 +104,7 @@ private extension ChangelogCategory {
     var tint: Color {
         switch self {
         case .new:      WBColor.accent
-        case .improved: WBColor.verdictPlantSoon
+        case .improved: WBColor.verdict("plant_soon")
         case .fixed:    WBColor.warn
         }
     }
@@ -124,16 +123,17 @@ struct ChangelogHistoryView: View {
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(release.version) (\(release.build))")
-                        .font(HerbFont.bodyEmph(size: 15))
-                        .foregroundStyle(HerbColor.ink)
+                        .font(.wbCallout.weight(.semibold))
+                        .foregroundStyle(WBColor.ink)
                     if let date = release.date {
                         Text(date)
-                            .font(HerbFont.bodyItalic(size: 12))
-                            .foregroundStyle(HerbColor.inkSoft)
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
                     }
                 }
             }
         }
+        .wbForm()
         .navigationTitle("Version History")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

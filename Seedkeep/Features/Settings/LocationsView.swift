@@ -23,6 +23,7 @@ struct LocationsView: View {
 
     var body: some View {
         listContent
+            .wbForm()
             .navigationTitle("Locations")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -43,10 +44,10 @@ struct LocationsView: View {
     @ViewBuilder
     private var listContent: some View {
         if activeLocations.isEmpty {
-            ContentUnavailableView(
-                "no locations yet",
-                systemImage: "tray",
-                description: Text("Add the spots where seeds physically live so you can find them again.")
+            WBEmptyState(
+                title: "No locations yet",
+                message: "Add the spots where seeds physically live so you can find them again.",
+                systemImage: "tray"
             )
         } else {
             List {
@@ -66,11 +67,15 @@ struct LocationsView: View {
         } label: {
             HStack {
                 Text(loc.name)
+                    .foregroundStyle(WBColor.ink)
                 Spacer()
-                Image(systemName: "pencil").foregroundStyle(HerbColor.inkFaint)
+                Image(systemName: "pencil")
+                    .foregroundStyle(WBColor.faint)
+                    .accessibilityHidden(true)
             }
         }
         .buttonStyle(.plain)
+        .accessibilityHint("Rename")
     }
 
     @ToolbarContentBuilder

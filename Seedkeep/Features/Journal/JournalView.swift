@@ -5,12 +5,12 @@ enum JournalDatePresentation {
     static func parts(
         for ymd: String,
         timeZone: TimeZone
-    ) -> (monthAbbrev: String, day: Int, yearRoman: String) {
+    ) -> (monthAbbrev: String, day: Int, year: String) {
         let parser = DateFormatter()
         parser.dateFormat = "yyyy-MM-dd"
         parser.locale = Locale(identifier: "en_US_POSIX")
         parser.timeZone = timeZone
-        guard let date = parser.date(from: ymd) else { return ("MAY", 1, "MMXXVI") }
+        guard let date = parser.date(from: ymd) else { return ("MAY", 1, "2026") }
 
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
@@ -23,7 +23,7 @@ enum JournalDatePresentation {
         return (
             monthFormatter.string(from: date).uppercased(with: Locale(identifier: "en_US_POSIX")),
             components.day ?? 1,
-            HerbRomanNumeral.string(for: components.year ?? 2026, lowercase: false)
+            String(components.year ?? 2026)
         )
     }
 
@@ -90,7 +90,7 @@ struct JournalView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                VellumBackground()
+                WBScreenBackground()
                 List {
                     if filterParent == nil {
                         Section {
@@ -108,11 +108,11 @@ struct JournalView: View {
                         if appEnv.sync.isSyncing {
                             VStack(spacing: 8) {
                                 ProgressView()
-                                    .herbProgressStyle()
+                                    .tint(WBColor.accent)
                                     .controlSize(.small)
-                                Text("turning the page…")
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
+                                Text("Loading…")
+                                    .font(.wbFootnote)
+                                    .foregroundStyle(WBColor.muted)
                                     .multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity)
@@ -120,20 +120,11 @@ struct JournalView: View {
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                         } else {
-                            VStack(spacing: 12) {
-                                Image(systemName: "book.closed")
-                                    .font(.system(size: 32))
-                                    .foregroundStyle(HerbColor.sepia.opacity(0.6))
-                                Text("Begin the daybook")
-                                    .font(HerbFont.display(size: 22))
-                                    .foregroundStyle(HerbColor.ink)
-                                Text("Track what passed in the garden today. Tap + to write the first entry.")
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 24)
+                            WBEmptyState(
+                                title: "Start your journal",
+                                message: "Write down what happened in the garden today. Tap + to write the first entry.",
+                                systemImage: "book.closed"
+                            )
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                         }
@@ -196,32 +187,27 @@ struct JournalView: View {
     @ViewBuilder
     private var headingBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            FolioStrip(section: "Daybook", folio: max(entries.count, 1))
-                .padding(.horizontal, -16)
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Daybook")
-                        .font(HerbFont.display(size: 38))
-                        .foregroundStyle(HerbColor.ink)
-                    Text("\(entries.count) entries · the household garden")
-                        .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.inkSoft)
-                }
-                Spacer()
-            }
-            ScholarRule(verticalMargin: 8)
+            Text("Journal")
+                .font(.wbLargeTitle)
+                .foregroundStyle(WBColor.ink)
+                .accessibilityAddTraits(.isHeader)
+            Text("\(entries.count) entries · the household garden")
+                .font(.wbFootnote)
+                .foregroundStyle(WBColor.muted)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
     private func entryRow(_ entry: LocalJournalEntry) -> some View {
         HStack(alignment: .top, spacing: 12) {
             dateRoundel(ymd: entry.occurredOn)
-                .frame(width: 44)
+                .frame(minWidth: 44)
             VStack(alignment: .leading, spacing: 6) {
                 Text(entry.body.isEmpty ? "no entry yet" : entry.body)
-                    .font(HerbFont.body(size: 13))
-                    .foregroundStyle(HerbColor.ink)
+                    .font(.wbCallout)
+                    .foregroundStyle(WBColor.ink)
                     .lineLimit(3)
             }
             Spacer()
@@ -248,17 +234,14 @@ struct JournalView: View {
         let parts = JournalDatePresentation.parts(for: ymd, timeZone: .current)
         VStack(spacing: 1) {
             Text(parts.monthAbbrev)
-                .font(HerbFont.smallCaps(size: 8))
-                .tracking(1.5)
-                .foregroundStyle(HerbColor.sepia)
-                .textCase(.uppercase)
+                .font(.wbCaption.weight(.semibold))
+                .foregroundStyle(WBColor.muted)
             Text("\(parts.day)")
-                .font(HerbFont.bodyEmph(size: 26))
-                .foregroundStyle(HerbColor.ink)
-            Text(parts.yearRoman)
-                .font(HerbFont.smallCaps(size: 7))
-                .tracking(1)
-                .foregroundStyle(HerbColor.inkFaint)
+                .font(.system(.title2, design: .monospaced, weight: .semibold))
+                .foregroundStyle(WBColor.ink)
+            Text(parts.year)
+                .font(.wbMonoCaption)
+                .foregroundStyle(WBColor.muted)
         }
     }
 

@@ -45,7 +45,7 @@ struct WhatToPlantView: View {
                             plantRow(row)
                         }
                     } header: {
-                        Rubric(text: "plant now")
+                        WBSectionHeader("plant now")
                     }
                 }
 
@@ -55,7 +55,7 @@ struct WhatToPlantView: View {
                             plantRow(row)
                         }
                     } header: {
-                        Rubric(text: "plant soon")
+                        WBSectionHeader("plant soon")
                     }
                 }
 
@@ -75,25 +75,30 @@ struct WhatToPlantView: View {
                     if appEnv.sync.isSyncing {
                         VStack(spacing: 8) {
                             ProgressView()
-                                .herbProgressStyle()
+                                .tint(WBColor.accent)
                                 .controlSize(.small)
-                            Text("turning the page…")
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
+                            Text("Loading…")
+                                .font(.wbFootnote)
+                                .foregroundStyle(WBColor.muted)
                                 .multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 48)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                     } else {
-                        ContentUnavailableView(
-                            "No recommendations yet",
-                            systemImage: "leaf",
-                            description: Text("Add growing info to a seed to see when to plant it.")
+                        WBEmptyState(
+                            title: "No recommendations yet",
+                            message: "Add growing info to a seed to see when to plant it.",
+                            systemImage: "leaf"
                         )
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                     }
                 }
             }
         }
+        .wbForm()
         .navigationTitle("What to plant")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -108,10 +113,9 @@ struct WhatToPlantView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "camera.viewfinder")
                         Text("Snap a corner")
-                            .font(HerbFont.smallCaps(size: 10))
-                            .tracking(1.2)
+                            .font(.wbCallout.weight(.semibold))
                     }
-                    .foregroundStyle(HerbColor.sepia)
+                    .foregroundStyle(WBColor.accent)
                 }
             }
         }
@@ -184,20 +188,21 @@ struct WhatToPlantView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(row.seed.displayName)
                 .font(.body.weight(.semibold))
+                .foregroundStyle(WBColor.ink)
                 .lineLimit(1)
             HStack(spacing: 6) {
                 if let window = row.windowLabel {
                     Text(window)
                         .font(.caption)
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .foregroundStyle(WBColor.muted)
                 }
                 if let days = row.daysLabel {
                     Text("·")
                         .font(.caption)
-                        .foregroundStyle(HerbColor.inkFaint)
+                        .foregroundStyle(WBColor.faint)
                     Text(days)
                         .font(.caption)
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .foregroundStyle(WBColor.muted)
                 }
             }
         }

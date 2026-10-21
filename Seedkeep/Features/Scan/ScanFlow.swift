@@ -255,14 +255,10 @@ private enum ScanFlowFailure: LocalizedError {
 
 // MARK: - Camera overlays
 //
-// These sit on top of the live camera feed (dark + photographic), so
-// chrome stays dark/black to keep prompts readable over arbitrary
-// scenes. The herbarium typography (IM Fell SC small-caps for headers,
-// Spectral italic for prompts) carries the design language without
-// breaking legibility.
+// These sit over arbitrary camera scenes, so black backing and white text keep prompts readable.
 
-/// Reticle as four corner brackets — reads as a scholar's viewfinder
-/// rather than a generic rounded rectangle.
+/// Reticle as four corner brackets, which reads as a viewfinder rather than a generic rounded
+/// rectangle.
 private struct ScanReticle: View {
     var body: some View {
         ZStack {
@@ -304,7 +300,7 @@ private struct FrontPromptOverlay: View {
             Spacer()
             VStack(spacing: 14) {
                 Text("New packet — read the front to extract details.")
-                    .font(HerbFont.bodyItalic(size: 14))
+                    .font(.wbBody)
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 18)
@@ -312,12 +308,13 @@ private struct FrontPromptOverlay: View {
                     .background(.black.opacity(0.6), in: .capsule)
                 Button { onCaptureFront() } label: {
                     Text("READ FRONT")
-                        .font(HerbFont.smallCaps(size: 12))
+                        .font(.wbCallout.weight(.semibold))
                         .tracking(2)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 22)
                         .padding(.vertical, 13)
-                        .background(HerbColor.sepia, in: .capsule)
+                        .frame(minHeight: WBMetrics.touchTarget)
+                        .background(WBColor.accent, in: .capsule)
                 }
             }
             .padding(.bottom, 36)
@@ -334,34 +331,51 @@ private struct BackPromptOverlay: View {
             Spacer()
             VStack(spacing: 14) {
                 Text("Now the back — flip the packet over.")
-                    .font(HerbFont.bodyItalic(size: 14))
+                    .font(.wbBody)
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
                     .background(.black.opacity(0.6), in: .capsule)
-                HStack(spacing: 12) {
-                    Button(role: .cancel) { onRestart() } label: {
-                        Text("Restart")
-                            .font(HerbFont.smallCaps(size: 11))
-                            .tracking(1.5)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 11)
-                            .background(.black.opacity(0.55), in: .capsule)
+                // Side by side normally; stacked when the labels are too wide (accessibility sizes).
+                ViewThatFits {
+                    HStack(spacing: 12) {
+                        restartButton
+                        readBackButton
                     }
-                    Button { onCaptureBack() } label: {
-                        Text("READ BACK")
-                            .font(HerbFont.smallCaps(size: 12))
-                            .tracking(2)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 22)
-                            .padding(.vertical, 13)
-                            .background(HerbColor.sepia, in: .capsule)
+                    VStack(spacing: 12) {
+                        restartButton
+                        readBackButton
                     }
                 }
             }
             .padding(.bottom, 36)
+        }
+    }
+
+    private var restartButton: some View {
+        Button(role: .cancel) { onRestart() } label: {
+            Text("Restart")
+                .font(.wbCallout.weight(.semibold))
+                .tracking(1.5)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .frame(minHeight: WBMetrics.touchTarget)
+                .background(.black.opacity(0.55), in: .capsule)
+        }
+    }
+
+    private var readBackButton: some View {
+        Button { onCaptureBack() } label: {
+            Text("READ BACK")
+                .font(.wbCallout.weight(.semibold))
+                .tracking(2)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 13)
+                .frame(minHeight: WBMetrics.touchTarget)
+                .background(WBColor.accent, in: .capsule)
         }
     }
 }
@@ -377,11 +391,11 @@ private struct StatusOverlay: View {
                 .controlSize(.large)
                 .tint(.white)
             Text(title.uppercased())
-                .font(HerbFont.smallCaps(size: 13))
+                .font(.wbCallout.weight(.semibold))
                 .tracking(2)
                 .foregroundStyle(.white)
             Text(subtitle)
-                .font(HerbFont.bodyItalic(size: 12))
+                .font(.wbBody)
                 .foregroundStyle(.white.opacity(0.85))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
@@ -401,25 +415,27 @@ private struct ErrorOverlay: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(HerbColor.ochre)
+                .font(.wbLargeTitle)
+                // Over the camera scrim, so white: the light-mode warn is too dark on black.
+                .foregroundStyle(.white)
             Text("COULD NOT READ")
-                .font(HerbFont.smallCaps(size: 12))
+                .font(.wbCallout.weight(.semibold))
                 .tracking(2)
                 .foregroundStyle(.white)
             Text(message)
-                .font(HerbFont.bodyItalic(size: 13))
+                .font(.wbBody)
                 .foregroundStyle(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
             Button { onRetry() } label: {
                 Text("TRY AGAIN")
-                    .font(HerbFont.smallCaps(size: 11))
+                    .font(.wbCallout.weight(.semibold))
                     .tracking(2)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 22)
                     .padding(.vertical, 11)
-                    .background(HerbColor.sepia, in: .capsule)
+                    .frame(minHeight: WBMetrics.touchTarget)
+                    .background(WBColor.accent, in: .capsule)
             }
         }
         .padding(24)

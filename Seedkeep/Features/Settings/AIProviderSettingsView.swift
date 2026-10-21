@@ -12,36 +12,39 @@ struct AIProviderSettingsView: View {
         Form {
             Section {
                 ForEach(availableProviders) { provider in
+                    let selected = appEnv.preferences.aiProvider == provider
                     Button {
                         appEnv.preferences.aiProvider = provider
                     } label: {
                         HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: appEnv.preferences.aiProvider == provider
+                            Image(systemName: selected
                                   ? "largecircle.fill.circle"
                                   : "circle")
                                 .foregroundStyle(.tint)
                                 .padding(.top, 2)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(provider.displayName)
-                                    .font(HerbFont.body(size: 14))
-                                    .foregroundStyle(HerbColor.ink)
+                                    .font(.wbBody)
+                                    .foregroundStyle(WBColor.ink)
                                 Text(provider.helpText)
-                                    .font(HerbFont.bodyItalic(size: 12))
-                                    .foregroundStyle(HerbColor.inkSoft)
+                                    .font(.wbCaption)
+                                    .foregroundStyle(WBColor.muted)
                             }
                         }
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
                 }
             } header: {
-                Rubric(text: "provider")
+                WBSectionHeader("provider")
             }
 
             if !ServerRetirement.isRetired && AppPreferences.isHostedTierEnabled {
                 Section {
                     LabeledContent("Server-reported tier") {
                         Text(appEnv.preferences.cachedTier ?? "(unknown)")
-                            .foregroundStyle(HerbColor.inkSoft)
+                            .foregroundStyle(WBColor.muted)
                     }
                     Button {
                         Task { await refresh() }
@@ -50,17 +53,17 @@ struct AIProviderSettingsView: View {
                             Label("Refresh from server", systemImage: "arrow.clockwise")
                             if refreshing {
                                 Spacer()
-                                ProgressView().controlSize(.small).herbProgressStyle()
+                                ProgressView().controlSize(.small).tint(WBColor.accent)
                             }
                         }
                     }
                     .disabled(refreshing)
                 } header: {
-                    Rubric(text: "subscription")
+                    WBSectionHeader("subscription")
                 } footer: {
                     Text("Hosted requires an active subscription. The server records your purchase and reports it back here. Your local picker chooses your *preferred* extraction path; the server enforces what you can actually use.")
-                        .font(HerbFont.bodyItalic(size: 12))
-                        .foregroundStyle(HerbColor.inkSoft)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
                 }
 
                 if appEnv.preferences.aiProvider == .hosted &&
@@ -68,17 +71,18 @@ struct AIProviderSettingsView: View {
                     Section {
                         Label {
                             Text("You picked Hosted, but the server doesn't yet see an active subscription. Subscribe in the next step (or restore a previous purchase). Until then, extractions will fall back to on-device.")
-                                .font(HerbFont.bodyItalic(size: 12))
-                                .foregroundStyle(HerbColor.inkSoft)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.ink)
                         } icon: {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(HerbColor.ochre)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.warn)
                         }
                     }
                 }
             }
         }
-        .vellumForm()
+        .wbForm()
         .navigationTitle("AI provider")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
