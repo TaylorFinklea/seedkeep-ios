@@ -869,33 +869,197 @@ implement.
   - a dark-mode glance on the phone
   - VoiceOver on the bed canvas move actions
 
-# R2d contract (outline; full contract before it starts)
+# R2d contract
 
-- **Target and scheme:** a `SeedkeepUITests` target (`bundle.ui-testing`)
-  in a separate iOS scheme, `SeedkeepAccessibilityAudit`. The `Seedkeep`
-  scheme and `scripts/test-gate.sh` don't include it.
-- **Launch:**
-  - Arguments: `-SeedkeepFixture`, a fixed locale and time zone, the text
-    size as a launch argument, and the appearance through the argument
-    domain (`-seedkeep.appearance dark`), which is never persisted.
-  - **Fail closed:** in a debug build, if `-SeedkeepFixture` is present but
-    fixture mode can't activate, the app stops (`preconditionFailure`)
-    before any live environment is built.
-  - The test also checks a fixture marker before it navigates.
-  - What's New and the Notifications toggles move to the fixture defaults
-    suite in fixture mode. The audit never activates "Check iCloud
-    account", sharing or the API key fields.
-- **Navigation:** accessibility identifiers on the tabs and key rows; a
-  measured readiness wait.
-- **Matrix:** iPhone, plus regular-width iPad when approved; light and
-  dark; default and largest text.
-  - Runtime is measured on one screen before the full matrix is budgeted.
-  - `.xcresult` and screenshots are kept.
-- **Findings:** each is either fixed or allowlisted by screen, type and
-  element, with a reason and a condition for rechecking. Anything new fails
-  the run. It runs as `scripts/a11y-audit.sh`.
-- **Manual VoiceOver checklist:** read order on Today, Seeds and Settings;
-  bed move actions; picker navigation; inspector access; macOS keyboard.
+R2d adds an automated accessibility audit that runs outside the per-change
+gate, makes sample-garden mode fully self-contained and repeatable, and adds
+a manual checklist for what an audit can't prove. GPT-6.1 Sol critiqued the
+first draft and asked for a revision; it approved this version on the
+second round, with one change, now included (2026-10-20).
+
+## Permitted changes
+
+- **Sample-garden (DEBUG) isolation and determinism**, as below.
+- **Accessibility identifiers** on existing actionable elements.
+- **Bounded fixes for audit findings:**
+  - labels, traits, contrast, hit regions
+  - text clipping in R2-styled views
+- **Not permitted without approval:** changes to navigation, persistence or
+  layout beyond those fixes.
+
+## Facts (2026-10-20, verified by Sol)
+
+- **Fixture boundary:** `AppEnvironment.live()` chooses the fixture before
+  it builds anything live (`AppEnvironment.swift:74`). The fixture uses:
+  - in-memory SwiftData
+  - a fixed identity and a no-op token store
+  - CloudKit off
+- **Still reaching outside the fixture:**
+  - seed detail's weather refinement calls WeatherKit
+    (`RecommendationStore.swift:183`)
+  - API Keys reads the Keychain (under a random test service)
+  - Notifications reads the real authorization status
+- **Still not repeatable:**
+  - Seeds' `library.groupByType` uses standard defaults
+  - the fixture's `temporaryDirectory/seedkeep-fixture` survives
+    launches
+  - the sample data's dates follow the device's clock
+- **What's New:** a first launch records the current version silently,
+  with no sheet.
+- **The audit API:** `XCUIApplication.performAccessibilityAudit(for:_:)`
+  is in the iOS 27.1 SDK. It's main-actor, throws, and covers only the
+  elements currently on screen. The handler returns true to suppress an
+  issue, and `issue.element` may be nil.
+
+## R2d-1 — Sample-garden isolation, determinism and identifiers (worker)
+
+- **No outbound calls in sample-garden mode:**
+  - `RecommendationStore` gets an injectable forecast source. The fixture
+    supplies an empty one, so no WeatherKit request is made and windows
+    stay at their baseline.
+  - `NotificationsCenter.authorizationStatus()` returns `.authorized`
+    without asking the system (the fixture uses the existing test
+    override).
+  - The fixture's `APIKeyStore` is in memory: a new `APIKeyStore` backend
+    seam (Keychain by default), so the fixture makes no Keychain calls.
+- **Repeatable launches:**
+  - `library.groupByType` moves to `DevicePreferences.store` (wiped per
+    launch, so it starts ungrouped).
+  - The fixture directory is a fresh `seedkeep-fixture-<UUID>` per launch,
+    removed at the next fixture launch.
+  - The sample data's dates stay relative to launch. This is accepted:
+    the audit records the date and time zone in its results and makes no
+    date assertions.
+  - Random pick's random source is injectable. In sample-garden mode it
+    is a fixed sequence, so the same seed is picked in every
+    configuration.
+- **Launch configuration:**
+  - DEBUG-only, and read only when `-SeedkeepFixture` is present:
+    `-SeedkeepAppearance light|dark` is written to the fixture suite
+    inside `makeForFixture()`, straight after the wipe and before any view
+    exists.
+  - **Fail closed:** `-SeedkeepAuditLaunch`, in any build, means "this must
+    be a sample-garden launch". If fixture mode isn't active (a Release
+    build, or a missing `-SeedkeepFixture`), the app calls
+    `preconditionFailure` in `AppEnvironment.live()`, before it builds
+    anything live.
+- **Identifiers**, on the actionable element itself, never replacing labels:
+  - **tabs:** `tab.today`, `tab.seeds`, `tab.garden`, `tab.journal`,
+    `tab.settings` (verified to reach the tab buttons; if `.tabItem`
+    doesn't pass them through, the test uses the tab's label instead)
+  - **rows:** `seeds.row.<id>`, `garden.bed.<id>`, `journal.entry.<id>`,
+    with the fixture's fixed ids
+  - **Settings rows:** `settings.locations`, `settings.tags`,
+    `settings.homeLocation`, `settings.notifications`,
+    `settings.aiProvider`, `settings.apiKeys`, `settings.whatsNew`
+  - **toolbar buttons:** `seeds.add`, `seeds.random`, `garden.whatToPlant`
+  - **destination roots**, so a test knows where it is: `screen.<name>`
+- **Readiness** needs no extra element. The test waits (bounded) for the
+  fixture-only row `seeds.row.<fixture id>`. Only the sample garden has that
+  id, so finding it proves both the fixture and readiness.
+- **Tests:** override parsing, the fail-closed decision, and the fixture
+  store choices, as unit tests.
+
+## R2d-2 — Audit target, scheme and script (worker)
+
+- **Target and scheme:**
+  - **target:** `SeedkeepUITests` (`bundle.ui-testing`, iOS only,
+    depends on `Seedkeep`)
+  - **scheme:** a shared Debug scheme, `SeedkeepAccessibilityAudit`, that
+    contains only that bundle
+  - **verification:** the lead inspects the generated `Seedkeep` scheme
+    and confirms the UI tests aren't in it. The gate's counts must equal
+    the previous counts plus the R2d-1 unit tests.
+- **One test per configuration:**
+  - iPhone, in light and dark, at the default text size and at
+    Accessibility XXXL: 4 launches.
+  - Each launches with `-SeedkeepFixture`, `-SeedkeepAuditLaunch`,
+    `-SeedkeepAppearance`, `-UIPreferredContentSizeCategoryName`,
+    `-AppleLanguages (en)` and `-AppleLocale en_US`.
+  - It asserts the effective configuration before auditing:
+    - **appearance:** by sampling the background colour of a screenshot
+    - **text size:** the "Today" title's height must exceed a measured
+      threshold at XXXL
+    - A configuration that was ignored fails the test.
+- **The manifest of destinations and checkpoints**, walked in one launch per
+  configuration:
+  - the Today root (top, then each screen scrolled)
+  - Seeds (top, scrolled)
+  - Garden
+  - Journal
+  - Settings (top, then each scroll page)
+  - seed detail for a named fixture seed (top, the planting panel)
+  - bed detail for North bed (top, the canvas)
+  - a named journal entry
+  - Add Seed (top, scrolled)
+  - What to Plant
+  - random pick
+  - What's New
+  - each Settings sub-screen
+  
+  Each audit runs after checking `screen.<name>`. Waits are bounded and
+  wait on elements, never fixed sleeps.
+- **Named exclusions,** covered by the manual checklist:
+  - picker destination lists
+  - entry and recovery states
+  - photo-failure UI
+  - the camera and scan
+  - native sharing
+  - regular-width iPad, until its simulator is approved, with its own
+    navigation adapter
+- **The never-touch list,** which the audit doesn't activate:
+  - "Check iCloud account" and "Sync now"
+  - sharing, Leave and Delete
+  - API key fields
+  - photo pickers
+- **Allowlist (`AuditAllowlist.swift`):**
+  - **Matching:** each entry matches the destination and checkpoint, the
+    audit type, the exact element identifier, and the configuration. An
+    exact label plus element type is used only when the element has no
+    identifier.
+  - An issue with no element always fails.
+  - Every suppression is logged with its reason and the condition for
+    rechecking it, and unused entries are reported.
+  - The allowlist starts empty, and each entry is marked either "accepted
+    limitation (verified false positive)" or "deferred defect" with a
+    phase. Deferred defects need the owner's approval.
+- **`scripts/a11y-audit.sh <simulator UDID>`:**
+  - The UDID is required, with no fallback.
+  - It runs serially, with its own DerivedData and a result bundle per
+    run, in the scratch directory.
+  - It fails on: zero tests, skips, a missing configuration, an audit
+    execution error, a timeout, or an unallowlisted finding.
+  - It prints the date, time zone and a per-configuration summary, and
+    keeps logs.
+- **Budget:** one configuration is timed first. The full-run budget is set
+  from that and recorded in the script.
+
+## R2d-3 — Manual checklist and acceptance report (lead)
+
+- **`.docs/ai/plans/2026-10-20-a11y-manual-checklist.md`**, with pass and
+  fail boxes:
+  - **VoiceOver:**
+    - read order and meaningful descriptions on Today, Seeds and Settings
+    - bed canvas move actions, keeping focus after a move
+    - picker navigation at accessibility sizes
+  - **iPad portrait:** inspector access.
+  - **macOS keyboard:**
+    - Cmd+1 to 4 and Cmd+,
+    - Tab through the Seeds table and inspector
+    - the command palette
+  - **Appearance override:** including the sharing sheet.
+  - **The excluded states** listed under R2d-2.
+- **The checklist's delivery and the owner's run are separate claims.** R2d
+  is complete when the audit passes. Manual acceptance stays open until the
+  owner runs it.
+
+## R2d verification (lead)
+
+- `scripts/test-gate.sh` passes, with the previous counts plus the R2d-1
+  tests.
+- `scripts/a11y-audit.sh` completes all 4 iPhone configurations with no
+  unallowlisted findings.
+- Opus and Sol review the diff.
 
 ## R2c results (2026-10-20)
 
