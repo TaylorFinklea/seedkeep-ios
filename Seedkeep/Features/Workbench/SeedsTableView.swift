@@ -55,6 +55,12 @@ struct SeedsTableView: View {
 
     private static let stateChoices: [SeedState] = [.active, .wishlist, .saved, .archived]
 
+    /// Narrowest the table can be before its columns squeeze: the sum of its column minimums (iPad:
+    /// Name 160, Status 110, Pkts 64, Year 72, Stored in 110, Window 120; Mac: all ten columns).
+    static var minimumTableWidth: CGFloat {
+        PlatformCapabilities.isMac ? 950 : 636
+    }
+
     init(model: WorkbenchModel, rows: [SeedTableRow], seedsByID: [String: LocalSeed]) {
         self.model = model
         self.rows = rows
@@ -78,7 +84,7 @@ struct SeedsTableView: View {
                 typeOptions: SeedsTableModel.typeOptions(rows),
                 searchFocus: $searchFocused,
                 isSelecting: $isSelecting,
-                isInspectorOpen: $model.isInspectorOpen,
+                isInspectorOpen: inspectorOpen,
                 canUndo: undoState.1,
                 canRedo: undoState.2,
                 canExport: !rows.isEmpty,
@@ -106,7 +112,7 @@ struct SeedsTableView: View {
             }
         }
         .background(WBColor.bg)
-        .inspector(isPresented: $model.isInspectorOpen) {
+        .inspector(isPresented: inspectorOpen) {
             SeedsInspector(
                 selectedIDs: selection,
                 selectedRows: selectedRows,
@@ -192,12 +198,16 @@ struct SeedsTableView: View {
             handleReveal()
             pruneSelection()
             discardMissingDrafts()
+            decideSeedsInspectorStart()
         }
         .onChange(of: model.pendingSeedsRequests) {
             handleRequests()
         }
         .onChange(of: model.revealedSeedID) {
             handleReveal()
+        }
+        .onChange(of: model.detailColumnWidth) {
+            decideSeedsInspectorStart()
         }
         .onChange(of: rows) {
             pruneSelection()
@@ -222,6 +232,25 @@ struct SeedsTableView: View {
     }
 
     // MARK: - Data
+
+    /// The toolbar toggle and the inspector's own dismissal both go through the model's choice setter.
+    private var inspectorOpen: Binding<Bool> {
+        Binding(
+            get: { model.isInspectorOpen },
+            set: { model.setInspectorOpen($0) }
+        )
+    }
+
+    /// The inspector's starting state for this visit, decided once the detail width is known.
+    private func decideSeedsInspectorStart() {
+        // iPad only: a Mac window is resized by the user, who keeps the inspector as they left it.
+        guard !PlatformCapabilities.isMac else { return }
+        model.decideSeedsInspectorStart(
+            availableWidth: model.detailColumnWidth,
+            tableMinWidth: Self.minimumTableWidth,
+            inspectorMinWidth: SeedsInspector.minimumWidth
+        )
+    }
 
     private var visibleRows: [SeedTableRow] {
         SeedsTableModel.sorted(SeedsTableModel.filtered(rows, filter), using: sortOrder)

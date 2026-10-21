@@ -246,6 +246,35 @@ struct JournalDatePresentationTests {
             ) == "August 28, 2026"
         )
     }
+
+    @Test("abbreviated date keeps the wire date across time zones")
+    func abbreviatedDateKeepsWireDateAcrossTimeZones() {
+        let chicago = TimeZone(identifier: "America/Chicago")!
+        let utc = TimeZone(secondsFromGMT: 0)!
+
+        for timeZone in [chicago, utc] {
+            #expect(
+                JournalDatePresentation.abbreviatedDate(
+                    for: "2026-08-28",
+                    timeZone: timeZone,
+                    locale: Locale(identifier: "en_US_POSIX")
+                ) == "Aug 28, 2026"
+            )
+        }
+    }
+
+    @Test("abbreviated date follows the locale")
+    func abbreviatedDateFollowsLocale() {
+        let utc = TimeZone(secondsFromGMT: 0)!
+
+        #expect(
+            JournalDatePresentation.abbreviatedDate(
+                for: "2026-08-28",
+                timeZone: utc,
+                locale: Locale(identifier: "de_DE")
+            ) == "28.08.2026"
+        )
+    }
 }
 
 // MARK: - Planting-event date-only display

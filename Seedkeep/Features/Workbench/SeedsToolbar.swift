@@ -25,6 +25,8 @@ struct SeedsToolbar: View {
     let onExport: () -> Void
     let onNew: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         VStack(alignment: .leading, spacing: WBMetrics.gap) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -34,52 +36,69 @@ struct SeedsToolbar: View {
                     }
                 }
             }
-            HStack(spacing: WBMetrics.gap) {
-                searchField
-                typeMenu
-                Spacer(minLength: 0)
-                if !PlatformCapabilities.isMac {
-                    Button(isSelecting ? "Done" : "Select") {
-                        isSelecting.toggle()
+            // One row; at accessibility sizes the actions move to a row of their own. The search field
+            // keeps one place in the hierarchy either way, so it never loses focus while typing.
+            let stacked = dynamicTypeSize.isAccessibilitySize
+            VStack(alignment: .leading, spacing: WBMetrics.gap) {
+                HStack(spacing: WBMetrics.gap) {
+                    searchField
+                    typeMenu
+                    Spacer(minLength: 0)
+                    if !stacked { tableActions }
+                }
+                if stacked {
+                    HStack(spacing: WBMetrics.gap) {
+                        Spacer(minLength: 0)
+                        tableActions
                     }
-                    .frame(minHeight: SeedsLayout.controlMinHeight)
-                    .accessibilityHint(isSelecting ? "Ends selection mode" : "Lets you tap rows to select several seeds")
-                    Button(action: onUndo) {
-                        Label("Undo", systemImage: "arrow.uturn.backward")
-                            .labelStyle(.iconOnly)
-                    }
-                    .disabled(!canUndo)
-                    .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
-                    Button(action: onRedo) {
-                        Label("Redo", systemImage: "arrow.uturn.forward")
-                            .labelStyle(.iconOnly)
-                    }
-                    .disabled(!canRedo)
-                    .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
                 }
-                Toggle(isOn: $isInspectorOpen) {
-                    Label("Inspector", systemImage: "sidebar.trailing")
-                        .labelStyle(.iconOnly)
-                }
-                .toggleStyle(.button)
-                .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
-                Button(action: onExport) {
-                    Label("Export CSV", systemImage: "square.and.arrow.up")
-                        .labelStyle(.iconOnly)
-                }
-                .disabled(!canExport)
-                .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
-                Button(action: onNew) {
-                    Label("New seed", systemImage: "plus")
-                        .labelStyle(.iconOnly)
-                }
-                .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(WBColor.panel)
+    }
+
+    /// The table actions, in reading order: Select, Undo and Redo (iPad only), Inspector, Export, New.
+    @ViewBuilder
+    private var tableActions: some View {
+        if !PlatformCapabilities.isMac {
+            Button(isSelecting ? "Done" : "Select") {
+                isSelecting.toggle()
+            }
+            .frame(minHeight: SeedsLayout.controlMinHeight)
+            .accessibilityHint(isSelecting ? "Ends selection mode" : "Lets you tap rows to select several seeds")
+            Button(action: onUndo) {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+                    .labelStyle(.iconOnly)
+            }
+            .disabled(!canUndo)
+            .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
+            Button(action: onRedo) {
+                Label("Redo", systemImage: "arrow.uturn.forward")
+                    .labelStyle(.iconOnly)
+            }
+            .disabled(!canRedo)
+            .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
+        }
+        Toggle(isOn: $isInspectorOpen) {
+            Label("Inspector", systemImage: "sidebar.trailing")
+                .labelStyle(.iconOnly)
+        }
+        .toggleStyle(.button)
+        .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
+        Button(action: onExport) {
+            Label("Export CSV", systemImage: "square.and.arrow.up")
+                .labelStyle(.iconOnly)
+        }
+        .disabled(!canExport)
+        .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
+        Button(action: onNew) {
+            Label("New seed", systemImage: "plus")
+                .labelStyle(.iconOnly)
+        }
+        .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
     }
 
     private func tabButton(_ tab: SeedStateFilter) -> some View {

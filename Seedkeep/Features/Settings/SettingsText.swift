@@ -14,4 +14,9 @@ enum SettingsText {
         case (true, false): return nil
         }
     }
+
+    /// The What's New row's VoiceOver label. The unseen dot is visual only, so it is spoken as "new".
+    static func whatsNewLabel(unseen: Bool) -> String {
+        unseen ? "What's New, new" : "What's New"
+    }
 }

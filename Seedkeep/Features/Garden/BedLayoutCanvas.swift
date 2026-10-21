@@ -8,9 +8,11 @@ import SeedkeepKit
 /// required spacing pulled from the catalog (plant_spacing_inches / 2).
 /// Overlapping rings give a visual cue that the layout is over-packed.
 ///
-/// When `onMove` is provided, dots become draggable. Drag-end snaps the
-/// new position to the nearest half-foot, clamps within bed bounds, and
-/// fires the callback so the caller can persist via the sync engine.
+/// When `onMove` is provided, dots become draggable. A drag or a move action
+/// goes through `BedPlacementMath.moved` (half-foot grid, clamped to the bed),
+/// and the callback fires only when the position changes, so the caller can
+/// persist via the sync engine. Each placement is one accessibility element;
+/// with `onMove`, it also gets Move left/right/up/down actions.
 struct BedLayoutCanvas: View {
     /// One thing to plot inside the bed. Spacing in feet, computed from
     /// the catalog's plant_spacing_inches (zero or nil = just a dot).
@@ -26,66 +28,77 @@ struct BedLayoutCanvas: View {
     let widthFeet: Double
     let lengthFeet: Double
     let placements: [Placement]
-    /// Optional drag-end handler. When non-nil, dots respond to pan
-    /// gestures and report the new (x, y) in feet at drop-time.
+    /// Optional move handler. When non-nil, dots respond to drags and get
+    /// move actions, and report the new (x, y) in feet.
     var onMove: ((_ id: String, _ newX: Double, _ newY: Double) -> Void)? = nil
 
     /// Onscreen padding so the bed doesn't kiss the canvas edges.
     private let inset: CGFloat = 16
+    /// Dot diameter when draggable, and when not.
+    private let dotSize: CGFloat = 18
+    private let plainDotSize: CGFloat = 12
+    /// Hit area of a draggable dot, where it doesn't reach a neighbour's dot.
+    private let hitSize: CGFloat = 44
+    /// Distance from a dot's center down to its label's center.
+    private let labelGap: CGFloat = 16
+
+    /// Coordinate space that label frames are reported in.
+    private static let canvasSpace = "bedCanvas"
 
     /// Live drag offset per dot, in screen points. Reset on drop.
     @State private var liveOffsets: [String: CGSize] = [:]
+    /// Label frames from the last layout, in the canvas's coordinate space.
+    @State private var labelFrames: [String: CGRect] = [:]
 
     var body: some View {
         GeometryReader { geo in
-            let drawable = CGSize(
-                width: geo.size.width - inset * 2,
-                height: geo.size.height - inset * 2
+            let fit = bedFit(in: geo.size)
+            let centers = placements.map { center(of: $0, in: fit) }
+            let enlarged = enlargedIDs(centers: centers)
+            let labels = labelSlots(fit: fit)
+            let visible = BedLabelLayout.visibleIDs(
+                frames: labelFrames,
+                order: BedLabelLayout.order(labels.map {
+                    BedLabelLayout.Anchor(id: $0.id, x: $0.placement.x, y: $0.placement.y)
+                })
             )
-            // Fit the bed inside the drawable area preserving aspect.
-            let scale: Double = {
-                guard widthFeet > 0, lengthFeet > 0 else { return 0 }
-                let sx = drawable.width / widthFeet
-                let sy = drawable.height / lengthFeet
-                return min(sx, sy)
-            }()
-            let bedW = widthFeet * scale
-            let bedH = lengthFeet * scale
-            let originX = inset + (drawable.width - bedW) / 2
-            // Bed origin (0,0) is bottom-left in feet; SwiftUI canvas y
-            // grows downward. So screen-y = origin + (length - y) * scale.
-            let originY = inset + (drawable.height - bedH) / 2
 
             ZStack(alignment: .topLeading) {
-                // Bed rectangle
+                // Bed rectangle. Decorative: the placements carry the accessibility.
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(WBColor.muted, style: StrokeStyle(lineWidth: 2, dash: [4, 4]))
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(WBColor.line.opacity(0.5))
                     )
-                    .frame(width: bedW, height: bedH)
-                    .offset(x: originX - inset, y: originY - inset)
+                    .frame(width: fit.bedWidth, height: fit.bedHeight)
+                    .offset(x: fit.originX - inset, y: fit.originY - inset)
                     .padding(inset)
+                    .accessibilityHidden(true)
 
                 // Footprint scale label in the corner.
-                Text("\(Self.fmt(widthFeet))′ × \(Self.fmt(lengthFeet))′")
+                Text("\(BedPlacementMath.feetText(widthFeet))′ × \(BedPlacementMath.feetText(lengthFeet))′")
                     .font(.caption2.monospaced())
                     .foregroundStyle(WBColor.muted)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(.thinMaterial, in: .capsule)
-                    .offset(x: originX, y: originY)
+                    .offset(x: fit.originX, y: fit.originY)
+                    .accessibilityLabel("\(BedPlacementMath.feetText(widthFeet)) by \(BedPlacementMath.feetText(lengthFeet)) feet")
 
-                // Each placement
+                // Each placement's spacing ring and dot.
                 ForEach(placements) { p in
-                    placementView(p,
-                                   scale: scale,
-                                   originX: originX,
-                                   originY: originY,
-                                   bedW: bedW,
-                                   bedH: bedH)
+                    placementMarks(p, fit: fit, enlarged: enlarged.contains(p.id))
                 }
+
+                // Labels sit above the dots, so no dot is drawn over one.
+                labelLayer(labels, visible: visible)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .coordinateSpace(name: Self.canvasSpace)
+            .onPreferenceChange(BedLabelFramesKey.self) { frames in
+                // Write only on change, so the layout settles.
+                if labelFrames != frames { labelFrames = frames }
             }
         }
         .frame(height: canvasHeight)
@@ -93,93 +106,203 @@ struct BedLayoutCanvas: View {
         .clipShape(.rect(cornerRadius: 10))
     }
 
+    /// A placement's spacing ring and dot. The dot is the one accessibility element for the placement.
     @ViewBuilder
-    private func placementView(
-        _ p: Placement,
-        scale: Double,
-        originX: CGFloat,
-        originY: CGFloat,
-        bedW: CGFloat,
-        bedH: CGFloat
-    ) -> some View {
+    private func placementMarks(_ p: Placement, fit: Fit, enlarged: Bool) -> some View {
+        let base = center(of: p, in: fit)
         let offset = liveOffsets[p.id] ?? .zero
-        let cx = originX + p.x * scale + offset.width
-        // Flip y so feet-origin (bottom-left) reads naturally.
-        let cy = originY + (lengthFeet - p.y) * scale + offset.height
+        let center = CGPoint(x: base.x + offset.width, y: base.y + offset.height)
         let draggable = onMove != nil
+        let dot: CGFloat = draggable ? dotSize : plainDotSize
+        let hit: CGFloat = draggable && enlarged ? hitSize : dot
 
         // Spacing ring (only if we have meaningful spacing).
         if p.spacingFeet > 0 {
-            let diameter = max(8, p.spacingFeet * scale)
-            Circle()
-                .stroke(p.isSowing ? WBColor.accent.opacity(0.5) : WBColor.faint.opacity(0.6),
-                        style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
-                .background(
-                    Circle().fill(p.isSowing ? WBColor.accent.opacity(0.12) : WBColor.faint.opacity(0.10))
-                )
-                .frame(width: diameter, height: diameter)
-                .position(x: cx, y: cy)
-                .allowsHitTesting(false)
+            let diameter = max(8, CGFloat(p.spacingFeet) * fit.scale)
+            centered(
+                Circle()
+                    .stroke(p.isSowing ? WBColor.accent.opacity(0.5) : WBColor.faint.opacity(0.6),
+                            style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+                    .background(
+                        Circle().fill(p.isSowing ? WBColor.accent.opacity(0.12) : WBColor.faint.opacity(0.10))
+                    )
+                    .frame(width: diameter, height: diameter)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true),
+                on: center,
+                size: diameter
+            )
         }
 
-        // Dot itself — draggable when onMove is wired up.
-        Circle()
+        // Dot. Draggable dots sit in a hit area of `hit` points.
+        let dotView = Circle()
             .fill(p.isSowing ? WBColor.accent : WBColor.muted)
-            .frame(width: draggable ? 18 : 12, height: draggable ? 18 : 12)
+            .frame(width: dot, height: dot)
             .shadow(color: .black.opacity(0.18), radius: draggable ? 2 : 0)
-            .position(x: cx, y: cy)
-            .gesture(draggable ? dragGesture(for: p, scale: scale,
-                                              originX: originX, originY: originY,
-                                              bedW: bedW, bedH: bedH) : nil)
+            .frame(width: hit, height: hit)
+            .contentShape(Circle())
+            .gesture(draggable ? dragGesture(for: p, fit: fit) : nil)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(BedPlacementMath.accessibilityLabel(name: p.label, x: p.x, y: p.y))
+        centered(movable(dotView, p), on: center, size: hit)
+    }
 
-        // Label below the dot — only render if there's room
-        // so we don't overflow off the canvas.
-        if !p.label.isEmpty, cy + 18 <= originY + bedH + inset {
-            Text(p.label)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(WBColor.ink)
-                .lineLimit(1)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(.thinMaterial, in: .capsule)
-                .position(x: cx, y: cy + 16)
-                .allowsHitTesting(false)
+    /// Adds the four move actions when moving is enabled. Each moves one step.
+    @ViewBuilder
+    private func movable<V: View>(_ view: V, _ p: Placement) -> some View {
+        if onMove != nil {
+            view
+                .accessibilityAction(named: "Move left") { move(p, dx: -BedPlacementMath.step, dy: 0) }
+                .accessibilityAction(named: "Move right") { move(p, dx: BedPlacementMath.step, dy: 0) }
+                .accessibilityAction(named: "Move up") { move(p, dx: 0, dy: BedPlacementMath.step) }
+                .accessibilityAction(named: "Move down") { move(p, dx: 0, dy: -BedPlacementMath.step) }
+        } else {
+            view
         }
     }
 
-    private func dragGesture(
-        for p: Placement,
-        scale: Double,
-        originX: CGFloat,
-        originY: CGFloat,
-        bedW: CGFloat,
-        bedH: CGFloat
-    ) -> some Gesture {
-        DragGesture(minimumDistance: 2)
+    /// Moves `view` so its center sits on `point`, keeping its own size. A `.position`ed view spans
+    /// the whole canvas, which would give VoiceOver the canvas as the element's frame.
+    private func centered<V: View>(_ view: V, on point: CGPoint, size: CGFloat) -> some View {
+        view.offset(x: point.x - size / 2, y: point.y - size / 2)
+    }
+
+    /// Moves a placement by (`dx`, `dy`) feet in bed coordinates through `BedPlacementMath.moved`.
+    /// A no-op calls nothing.
+    private func move(_ p: Placement, dx: Double, dy: Double) {
+        guard let onMove, let target = BedPlacementMath.moved(
+            x: p.x, y: p.y, dx: dx, dy: dy, widthFeet: widthFeet, lengthFeet: lengthFeet
+        ) else { return }
+        onMove(p.id, target.x, target.y)
+    }
+
+    private func dragGesture(for p: Placement, fit: Fit) -> some Gesture {
+        // In the canvas's space: the dot's own space moves with the live offset, which would make
+        // the translation chase itself.
+        DragGesture(minimumDistance: 2, coordinateSpace: .named(Self.canvasSpace))
             .onChanged { value in
                 liveOffsets[p.id] = value.translation
             }
             .onEnded { value in
                 liveOffsets[p.id] = .zero
-                // Convert translation back to feet, apply, snap to half-foot,
-                // clamp inside the bed.
-                let dxFeet = value.translation.width / scale
-                let dyFeet = value.translation.height / scale
-                let candidateX = p.x + dxFeet
-                // Y is flipped — moving down on-screen reduces y_feet.
-                let candidateY = p.y - dyFeet
-                let snappedX = snap(candidateX, max: widthFeet)
-                let snappedY = snap(candidateY, max: lengthFeet)
-                onMove?(p.id, snappedX, snappedY)
+                guard fit.scale > 0 else { return }
+                // Screen y grows downward and bed y grows up, so a downward drag lowers y.
+                let dx = Double(value.translation.width / fit.scale)
+                let dy = -Double(value.translation.height / fit.scale)
+                move(p, dx: dx, dy: dy)
             }
     }
 
-    /// Clamp to [0, max] and snap to 0.5-foot increments. The snap keeps
-    /// the placements lining up on a half-foot grid, which feels natural
-    /// for raised beds + matches the slider step in AddPlantingEventView.
-    private func snap(_ value: Double, max: Double) -> Double {
-        let clamped = min(Swift.max(0, value), max)
-        return (clamped * 2).rounded() / 2
+    // MARK: - Labels
+
+    /// A label and its center. The center follows a drag.
+    private struct LabelSlot: Identifiable {
+        let placement: Placement
+        let point: CGPoint
+        var id: String { placement.id }
+    }
+
+    /// The placements that have a label which fits in the canvas.
+    private func labelSlots(fit: Fit) -> [LabelSlot] {
+        placements.compactMap { p in
+            guard !p.label.isEmpty else { return nil }
+            let base = center(of: p, in: fit)
+            let offset = liveOffsets[p.id] ?? .zero
+            let dotY = base.y + offset.height
+            guard dotY + dotSize <= fit.originY + fit.bedHeight + inset else { return nil }
+            return LabelSlot(placement: p, point: CGPoint(x: base.x + offset.width, y: dotY + labelGap))
+        }
+    }
+
+    /// The labels, in two passes. The first draws every label at zero opacity so that each frame is
+    /// measured, whether or not it is shown. The second draws only the `visible` labels. Measurement
+    /// doesn't depend on visibility, so the layout settles. Labels are hidden from accessibility:
+    /// the placement's element names them.
+    @ViewBuilder
+    private func labelLayer(_ labels: [LabelSlot], visible: Set<String>) -> some View {
+        ForEach(labels) { slot in
+            labelText(slot.placement)
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: BedLabelFramesKey.self,
+                            value: [slot.id: geo.frame(in: .named(Self.canvasSpace))]
+                        )
+                    }
+                }
+                .opacity(0)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+                .position(slot.point)
+        }
+        ForEach(labels.filter { visible.contains($0.id) }) { slot in
+            labelText(slot.placement)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+                .position(slot.point)
+        }
+    }
+
+    private func labelText(_ p: Placement) -> some View {
+        Text(p.label)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(WBColor.ink)
+            .lineLimit(1)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(.thinMaterial, in: .capsule)
+    }
+
+    // MARK: - Geometry
+
+    /// The bed's fit in a canvas: points per foot, and where the bed's top-left corner sits.
+    private struct Fit {
+        let scale: CGFloat
+        let originX: CGFloat
+        let originY: CGFloat
+        let bedWidth: CGFloat
+        let bedHeight: CGFloat
+    }
+
+    /// Fits the bed inside the canvas, keeping its proportions and centring it.
+    private func bedFit(in size: CGSize) -> Fit {
+        let drawableWidth = size.width - inset * 2
+        let drawableHeight = size.height - inset * 2
+        let scale: CGFloat = (widthFeet > 0 && lengthFeet > 0)
+            ? min(drawableWidth / CGFloat(widthFeet), drawableHeight / CGFloat(lengthFeet))
+            : 0
+        let bedWidth = CGFloat(widthFeet) * scale
+        let bedHeight = CGFloat(lengthFeet) * scale
+        return Fit(
+            scale: scale,
+            originX: inset + (drawableWidth - bedWidth) / 2,
+            originY: inset + (drawableHeight - bedHeight) / 2,
+            bedWidth: bedWidth,
+            bedHeight: bedHeight
+        )
+    }
+
+    /// A placement's screen center, without any live drag offset. Bed y grows up, so
+    /// screenY = originY + (lengthFeet - y) * scale.
+    private func center(of p: Placement, in fit: Fit) -> CGPoint {
+        CGPoint(
+            x: fit.originX + CGFloat(p.x) * fit.scale,
+            y: fit.originY + CGFloat(lengthFeet - p.y) * fit.scale
+        )
+    }
+
+    /// The ids of the draggable dots whose hit area can grow to `hitSize` without reaching another dot.
+    private func enlargedIDs(centers: [CGPoint]) -> Set<String> {
+        guard onMove != nil else { return [] }
+        let indices = placements.indices.filter { index in
+            BedPlacementMath.canEnlargeHitArea(
+                at: index,
+                centers: centers,
+                dotDiameter: dotSize,
+                hitDiameter: hitSize
+            )
+        }
+        return Set(indices.map { placements[$0].id })
     }
 
     /// Pick a canvas height that gives the bed reasonable presence.
@@ -189,9 +312,13 @@ struct BedLayoutCanvas: View {
         // square/wide. Tweakable; the canvas auto-fits anyway.
         return lengthFeet > widthFeet ? 280 : 200
     }
+}
 
-    private static func fmt(_ v: Double) -> String {
-        if v.truncatingRemainder(dividingBy: 1) == 0 { return "\(Int(v))" }
-        return String(format: "%.1f", v)
+/// Label frames by placement id, in the bed canvas's coordinate space.
+private struct BedLabelFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }

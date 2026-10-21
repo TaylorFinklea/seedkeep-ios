@@ -35,3 +35,17 @@ struct SettingsTextTests {
         #expect(SettingsText.versionText(version: "0.4.0", build: -1) == "Version 0.4.0")
     }
 }
+
+@Suite("SettingsText — What's New row")
+struct SettingsWhatsNewLabelTests {
+
+    @Test("unseen release adds new to the label")
+    func unseenLabel() {
+        #expect(SettingsText.whatsNewLabel(unseen: true) == "What's New, new")
+    }
+
+    @Test("seen release keeps the plain label")
+    func seenLabel() {
+        #expect(SettingsText.whatsNewLabel(unseen: false) == "What's New")
+    }
+}

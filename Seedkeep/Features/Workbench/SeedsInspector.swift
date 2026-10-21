@@ -4,7 +4,27 @@
 import SwiftUI
 import SeedkeepKit
 
+/// The inspector's starting state for a visit to the Seeds route (R2c C3-d). It starts closed when the
+/// detail column can't hold the table's minimum width beside the inspector's minimum width.
+enum SeedsInspectorPolicy {
+    /// False when the detail column can't fit the table and the inspector side by side, so the
+    /// inspector starts closed. Nil otherwise (wide enough, or a choice made during the visit holds),
+    /// and the caller keeps the current state.
+    static func startsOpen(
+        availableWidth: CGFloat,
+        tableMinWidth: CGFloat,
+        inspectorMinWidth: CGFloat,
+        userToggledThisVisit: Bool
+    ) -> Bool? {
+        guard !userToggledThisVisit else { return nil }
+        return availableWidth < tableMinWidth + inspectorMinWidth ? false : nil
+    }
+}
+
 struct SeedsInspector: View {
+    /// Narrowest the inspector column may be. The Seeds screen's starting-state policy uses it.
+    static let minimumWidth: CGFloat = 300
+
     let selectedIDs: Set<String>
     let selectedRows: [SeedTableRow]
     let seedsByID: [String: LocalSeed]
@@ -24,7 +44,7 @@ struct SeedsInspector: View {
                 )
             }
         }
-        .inspectorColumnWidth(min: 300, ideal: 360, max: 480)
+        .inspectorColumnWidth(min: Self.minimumWidth, ideal: 360, max: 480)
     }
 
     @ViewBuilder

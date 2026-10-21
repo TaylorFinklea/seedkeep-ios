@@ -592,6 +592,7 @@ struct SeedDetailView: View {
                 Text("Saved").tag(SeedState.saved)
                 Text("Archive").tag(SeedState.archived)
             }
+            .wbAccessibilityPickerStyle()
         } header: {
             WBSectionHeader("Lifecycle")
         }
@@ -642,6 +643,7 @@ struct SeedDetailView: View {
                     Text(loc.name).tag(Optional(loc.id))
                 }
             }
+            .wbAccessibilityPickerStyle()
 
             if !tags.isEmpty {
                 let selection = Binding<Set<String>>(
@@ -693,6 +695,7 @@ struct SeedDetailView: View {
                 Text("Gift").tag(SeedSource.gift)
                 Text("Swap").tag(SeedSource.swap)
             }
+            .wbAccessibilityPickerStyle()
 
             YearPicker(
                 year: Binding(

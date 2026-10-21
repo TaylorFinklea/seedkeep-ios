@@ -44,11 +44,28 @@ enum WorkbenchRoute: String, CaseIterable, Identifiable, Sendable {
 @MainActor
 @Observable
 final class WorkbenchModel {
-    var route: WorkbenchRoute = .seeds
+    var route: WorkbenchRoute = .seeds {
+        didSet {
+            guard route != oldValue else { return }
+            // Each visit to Seeds decides the inspector's starting state again, and a choice made
+            // during the last visit doesn't carry over.
+            isSeedsInspectorDecisionPending = route == .seeds
+            isInspectorChosenThisVisit = false
+        }
+    }
     /// Selected seed ids in the Seeds table (stable across sorting and remote updates).
     var selectedSeedIDs: Set<String> = []
     var isPaletteOpen = false
     var isInspectorOpen = true
+
+    /// True from entering Seeds until its inspector's starting state is decided. The window opens on
+    /// Seeds, so it starts true.
+    private(set) var isSeedsInspectorDecisionPending = true
+    /// True once the user, or `reveal(seedID:)`, has set the inspector during this visit to Seeds.
+    private(set) var isInspectorChosenThisVisit = false
+    /// Width of the detail column that holds the routes, reported by the shell. The Seeds screen
+    /// reads it to decide the inspector's starting state.
+    var detailColumnWidth: CGFloat = 0
 
     /// True while one of the Seeds screen's own drafts or its search field has focus in this
     /// window. Set only from this window's focus state (never from process-wide notifications).
@@ -93,8 +110,30 @@ final class WorkbenchModel {
     func reveal(seedID: String) {
         route = .seeds
         selectedSeedIDs = [seedID]
-        isInspectorOpen = true
+        setInspectorOpen(true)
         revealedSeedID = seedID
+    }
+
+    /// The user's inspector choice: the toolbar toggle, or the inspector's own dismissal. It holds
+    /// until the route is left, so the narrow-layout default doesn't override it.
+    func setInspectorOpen(_ open: Bool) {
+        isInspectorChosenThisVisit = true
+        isInspectorOpen = open
+    }
+
+    /// Applies the Seeds inspector's starting state, once per visit and only after the detail width is
+    /// known. A choice made during the visit keeps the current state. Resizing never reaches here.
+    func decideSeedsInspectorStart(availableWidth: CGFloat, tableMinWidth: CGFloat, inspectorMinWidth: CGFloat) {
+        guard isSeedsInspectorDecisionPending, availableWidth > 0 else { return }
+        isSeedsInspectorDecisionPending = false
+        if let open = SeedsInspectorPolicy.startsOpen(
+            availableWidth: availableWidth,
+            tableMinWidth: tableMinWidth,
+            inspectorMinWidth: inspectorMinWidth,
+            userToggledThisVisit: isInspectorChosenThisVisit
+        ) {
+            isInspectorOpen = open
+        }
     }
 
     /// Set by `reveal`; the Seeds screen clears hiding filters, scrolls to it, then sets nil.

@@ -66,6 +66,7 @@ struct AddSeedView: View {
                         Text("Saved").tag(SeedState.saved)
                         Text("Archive").tag(SeedState.archived)
                     }
+                    .wbAccessibilityPickerStyle()
                 } header: {
                     WBSectionHeader("lifecycle")
                 }
@@ -102,6 +103,7 @@ struct AddSeedView: View {
                             Text(loc.name).tag(Optional(loc.id))
                         }
                     }
+                    .wbAccessibilityPickerStyle()
                     if !activeTags.isEmpty {
                         NavigationLink {
                             TagPickerView(tags: activeTags, selection: $selectedTagIDs)
@@ -125,6 +127,7 @@ struct AddSeedView: View {
                         Text("Gift").tag(SeedSource.gift)
                         Text("Swap").tag(SeedSource.swap)
                     }
+                    .wbAccessibilityPickerStyle()
                     YearField(year: $yearPacked)
                 } header: {
                     WBSectionHeader("provenance")

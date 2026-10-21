@@ -32,6 +32,24 @@ enum JournalDatePresentation {
         timeZone: TimeZone,
         locale: Locale = .current
     ) -> String {
+        format(ymd, dateStyle: .long, timeZone: timeZone, locale: locale)
+    }
+
+    /// The locale's abbreviated date, e.g. "Oct 20, 2026" in English.
+    static func abbreviatedDate(
+        for ymd: String,
+        timeZone: TimeZone,
+        locale: Locale = .current
+    ) -> String {
+        format(ymd, dateStyle: .medium, timeZone: timeZone, locale: locale)
+    }
+
+    private static func format(
+        _ ymd: String,
+        dateStyle: DateFormatter.Style,
+        timeZone: TimeZone,
+        locale: Locale
+    ) -> String {
         let parser = DateFormatter()
         parser.dateFormat = "yyyy-MM-dd"
         parser.locale = Locale(identifier: "en_US_POSIX")
@@ -39,7 +57,7 @@ enum JournalDatePresentation {
         guard let date = parser.date(from: ymd) else { return ymd }
 
         let formatter = DateFormatter()
-        formatter.dateStyle = .long
+        formatter.dateStyle = dateStyle
         formatter.timeStyle = .none
         formatter.locale = locale
         formatter.timeZone = timeZone
@@ -57,6 +75,7 @@ enum JournalDatePresentation {
 /// "See all" link.
 struct JournalView: View {
     @Environment(AppEnvironment.self) private var appEnv
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     enum Route: Hashable {
         case existing(String)   // entry id
@@ -195,9 +214,17 @@ struct JournalView: View {
     @ViewBuilder
     private func entryRow(_ entry: LocalJournalEntry) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            dateRoundel(ymd: entry.occurredOn)
-                .frame(minWidth: 44)
+            if !dynamicTypeSize.isAccessibilitySize {
+                dateRoundel(ymd: entry.occurredOn)
+                    .frame(minWidth: 44)
+            }
             VStack(alignment: .leading, spacing: 6) {
+                // At accessibility sizes the date moves above the text, on one line that may wrap.
+                if dynamicTypeSize.isAccessibilitySize {
+                    Text(abbreviatedDateString(ymd: entry.occurredOn))
+                        .font(.wbCaption.weight(.semibold))
+                        .foregroundStyle(WBColor.muted)
+                }
                 Text(entry.body.isEmpty ? "no entry yet" : entry.body)
                     .font(.wbCallout)
                     .foregroundStyle(WBColor.ink)
@@ -220,6 +247,10 @@ struct JournalView: View {
 
     private func accessibleDateString(ymd: String) -> String {
         JournalDatePresentation.accessibleDate(for: ymd, timeZone: .current)
+    }
+
+    private func abbreviatedDateString(ymd: String) -> String {
+        JournalDatePresentation.abbreviatedDate(for: ymd, timeZone: .current)
     }
 
     @ViewBuilder

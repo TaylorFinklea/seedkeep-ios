@@ -54,7 +54,10 @@ struct WorkbenchShell: View {
             WorkbenchSidebar(model: model, seedCount: rows.count)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220)
         } detail: {
+            // Measured here, outside the Seeds table, so the width is the whole detail column and
+            // not the table's share once the inspector is open.
             routeContent(rows: rows, seedsByID: seedsByID)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { model.detailColumnWidth = $0 }
         }
         .tint(WBColor.accent)
         .background(WBColor.bg)

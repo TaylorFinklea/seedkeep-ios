@@ -321,6 +321,7 @@ struct SettingsContent: View {
                         }
                     }
                 }
+                .accessibilityLabel(SettingsText.whatsNewLabel(unseen: whatsNewUnseen))
 
                 Text("Data sources")
                     .font(.wbCaption.weight(.semibold))
