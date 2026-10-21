@@ -70,53 +70,76 @@ enum JournalDatePresentation {
 /// via `JournalStore.refresh()`. Rows + the toolbar "+" both push into
 /// `JournalEntryView`.
 ///
-/// Pass `filterParent` to scope the feed (and refresh calls) to a single
-/// seed / bed / planting event — used by `EntityScopedJournalSection`'s
-/// "See all" link.
+/// `filterParent` is the starting filter, from `EntityScopedJournalSection`'s
+/// "See all" link. The feed can then be searched, and the filter changed or
+/// cleared. A new entry started with a filter pre-fills that parent.
 struct JournalView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     enum Route: Hashable {
-        case existing(String)   // entry id
-        case new
+        case existing(String)    // entry id
+        case new(JournalTarget?) // the active filter, which the new entry starts with
     }
 
-    let filterParent: EntityScopedJournalSection.Parent?
+    /// What the user has typed and picked. The search the feed filters by lags the typed text by a
+    /// short pause (`debouncedSearch`); the filter applies at once.
+    @State private var criteria: JournalCriteria
+    @State private var debouncedSearch = ""
+    /// Bumped on each change to the criteria. Drives the debounced result count announcement.
+    @State private var criteriaRevision = 0
+    @State private var feedCache = JournalFeedCache()
+
     @Query private var allEntries: [LocalJournalEntry]
+    @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var allSeeds: [LocalSeed]
+    @Query(filter: #Predicate<LocalBed> { $0.deletedAt == nil }) private var allBeds: [LocalBed]
+    /// Every planting, deleted ones included. An entry on a deleted planting still belongs to its seed
+    /// or bed in the filter. The filter menu lists only live plantings.
+    @Query private var allPlantings: [LocalPlantingEvent]
 
-    init(filterParent: EntityScopedJournalSection.Parent? = nil) {
-        self.filterParent = filterParent
-        let predicate: Predicate<LocalJournalEntry>
-        switch filterParent {
-        case .none:
-            predicate = #Predicate<LocalJournalEntry> { $0.deletedAt == nil }
-        case .seed(let id):
-            predicate = #Predicate<LocalJournalEntry> { $0.seedID == id && $0.deletedAt == nil }
-        case .bed(let id):
-            predicate = #Predicate<LocalJournalEntry> { $0.bedID == id && $0.deletedAt == nil }
-        case .plantingEvent(let id):
-            predicate = #Predicate<LocalJournalEntry> { $0.plantingEventID == id && $0.deletedAt == nil }
-        }
-        _allEntries = Query(filter: predicate, sort: \.occurredOn, order: .reverse)
+    init(filterParent: JournalTarget? = nil) {
+        _criteria = State(initialValue: JournalCriteria(filter: filterParent))
+        _allEntries = Query(
+            filter: #Predicate<LocalJournalEntry> { $0.deletedAt == nil },
+            sort: \.occurredOn,
+            order: .reverse)
     }
 
-    private var entries: [LocalJournalEntry] {
-        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
-        return allEntries.filter { $0.householdID == householdID }
+    /// The criteria the feed filters by: the debounced search and the immediate filter.
+    private var appliedCriteria: JournalCriteria {
+        JournalCriteria(filter: criteria.filter, searchText: debouncedSearch)
+    }
+
+    private func makeFeed() -> JournalFeed {
+        feedCache.feed(
+            householdID: appEnv.activeGardenHouseholdID,
+            entries: allEntries,
+            seeds: allSeeds,
+            beds: allBeds,
+            plantings: allPlantings,
+            criteria: appliedCriteria)
     }
 
     var body: some View {
+        let feed = makeFeed()
         NavigationStack {
             ZStack {
                 WBScreenBackground()
                 List {
-                    if filterParent == nil {
-                        Section {
-                            headingBlock
+                    Section {
+                        headingBlock(feed)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                        if let filter = criteria.filter {
+                            filterChip(filter, feed: feed)
                                 .listRowBackground(Color.clear)
-                                .listRowInsets(EdgeInsets())
+                                .listRowInsets(EdgeInsets(
+                                    top: 0, leading: WBMetrics.screenGutter,
+                                    bottom: 4, trailing: WBMetrics.screenGutter))
                                 .listRowSeparator(.hidden)
+                        }
+                        if !appliedCriteria.isActive {
                             RetrospectiveCard()
                                 .listRowInsets(EdgeInsets(
                                     top: 4, leading: WBMetrics.screenGutter,
@@ -125,43 +148,16 @@ struct JournalView: View {
                                 .listRowSeparator(.hidden)
                         }
                     }
-                    if entries.isEmpty {
-                        if appEnv.isSyncingForDisplay {
-                            VStack(spacing: 8) {
-                                ProgressView()
-                                    .tint(WBColor.accent)
-                                    .controlSize(.small)
-                                Text("Loading…")
-                                    .font(.wbFootnote)
-                                    .foregroundStyle(WBColor.muted)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 48)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                        } else {
-                            WBEmptyState(
-                                title: "Start your journal",
-                                message: "Write down what happened in the garden today. Tap + to write the first entry.",
-                                systemImage: "book.closed"
-                            )
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                        }
-                    } else {
-                        ForEach(entries) { entry in
-                            NavigationLink(value: Route.existing(entry.id)) {
-                                entryRow(entry)
-                            }
-                            .accessibilityIdentifier("journal.entry.\(entry.id)")
-                            .listRowBackground(Color.clear)
-                        }
-                    }
+                    feedRows(feed)
                 }
                 .scrollContentBackground(.hidden)
                 .listStyle(.plain)
             }
+            #if os(iOS)
+            .searchable(text: $criteria.searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search journal")
+            #else
+            .searchable(text: $criteria.searchText, prompt: "Search journal")
+            #endif
             .navigationTitle("")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -171,15 +167,16 @@ struct JournalView: View {
                 switch route {
                 case .existing(let id):
                     JournalEntryView(entryID: id)
-                case .new:
-                    // TODO: when arriving from EntityScopedJournalSection's
-                    // "See all", pre-fill the parent on the new entry.
-                    JournalEntryView(entryID: nil)
+                case .new(let filtered):
+                    JournalEntryView(entryID: nil, initialParent: filtered)
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    NavigationLink(value: Route.new) {
+                    filterMenu(feed)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink(value: Route.new(criteria.filter)) {
                         Label("New entry", systemImage: "plus")
                     }
                 }
@@ -187,14 +184,39 @@ struct JournalView: View {
             .refreshable {
                 await refresh()
             }
-            .task {
+            .task(id: criteria.filter) {
                 await refresh()
+            }
+            .task(id: criteria.searchText) {
+                await applySearchAfterPause()
+            }
+            .task(id: criteriaRevision) {
+                await announceResultCount()
+            }
+            .onChange(of: criteria) { _, _ in
+                criteriaRevision += 1
+            }
+            .onChange(of: appEnv.activeGardenHouseholdID) { _, _ in
+                criteria.clearFilter()
+            }
+            .onChange(of: filterIsLive(feed), initial: true) { _, _ in
+                criteria.dropFilterIfMissing(from: feed.index)
             }
         }
     }
 
+    /// False only while a filter names a seed, bed or planting that is no longer live.
+    private func filterIsLive(_ feed: JournalFeed) -> Bool {
+        criteria.filter.map { feed.index.contains($0) } ?? true
+    }
+
+    private func clearCriteria() {
+        criteria.clear()
+        debouncedSearch = ""
+    }
+
     private func refresh() async {
-        switch filterParent {
+        switch criteria.filter {
         case .none:
             await appEnv.journal.refresh()
         case .seed(let id):
@@ -206,10 +228,159 @@ struct JournalView: View {
         }
     }
 
+    /// Applies the typed search after a short pause, so the feed filters once per pause rather than on
+    /// every keystroke. Clearing the text applies at once.
+    private func applySearchAfterPause() async {
+        let typed = criteria.searchText
+        guard !typed.isEmpty else {
+            debouncedSearch = ""
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(200))
+        guard !Task.isCancelled else { return }
+        debouncedSearch = typed
+    }
+
+    /// Speaks the result count once typing pauses, not on each keystroke. The first render is skipped.
+    private func announceResultCount() async {
+        guard criteriaRevision > 0 else { return }
+        try? await Task.sleep(for: .milliseconds(800))
+        guard !Task.isCancelled, appliedCriteria.isActive else { return }
+        let feed = makeFeed()
+        AccessibilityNotification.Announcement(
+            JournalFeedPresentation.resultAnnouncement(total: feed.total, shown: feed.shown.count)
+        ).post()
+    }
+
     @ViewBuilder
-    private var headingBlock: some View {
-        WBScreenTitle("Journal", subtitle: "\(entries.count) entries · the household garden")
+    private func headingBlock(_ feed: JournalFeed) -> some View {
+        WBScreenTitle(
+            "Journal",
+            subtitle: JournalFeedPresentation.subtitle(
+                total: feed.total,
+                shown: feed.shown.count,
+                isActive: appliedCriteria.isActive))
             .padding(.vertical, 8)
+    }
+
+    /// The active filter, with a remove button. Removing it shows the whole feed again.
+    @ViewBuilder
+    private func filterChip(_ target: JournalTarget, feed: JournalFeed) -> some View {
+        let label = feed.index.label(for: target) ?? "(removed)"
+        HStack(spacing: 4) {
+            Text(JournalFeedPresentation.chipTitle(target, label: label))
+                .font(.wbCaption.weight(.semibold))
+                .foregroundStyle(WBColor.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                criteria.clearFilter()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(WBColor.muted)
+                    .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(JournalFeedPresentation.removeFilterLabel(target, label: label))
+            .accessibilityIdentifier("journal.filter.remove")
+        }
+        .padding(.leading, 12)
+        .background(WBColor.accentSoft, in: Capsule())
+        .overlay(Capsule().strokeBorder(WBColor.line, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("journal.filter.chip")
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The filter menu: every live seed, bed and planting in the household, plus "All entries".
+    private func filterMenu(_ feed: JournalFeed) -> some View {
+        Menu {
+            Picker("Filter", selection: $criteria.filter) {
+                Text("All entries").tag(JournalTarget?.none)
+                filterSection("Seeds", feed.index.seedOptions)
+                filterSection("Beds", feed.index.bedOptions)
+                filterSection("Plantings", feed.index.plantingOptions)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: criteria.filter == nil
+                  ? "line.3.horizontal.decrease.circle"
+                  : "line.3.horizontal.decrease.circle.fill")
+                .contentShape(Rectangle())
+                // Toolbar items size themselves on the Mac. The 44pt target is for touch on iOS.
+                #if os(iOS)
+                .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                #endif
+        }
+        .accessibilityLabel("Filter journal")
+        .accessibilityIdentifier("journal.filter.menu")
+    }
+
+    @ViewBuilder
+    private func filterSection(_ title: String, _ options: [JournalFilterOption]) -> some View {
+        if !options.isEmpty {
+            Section(title) {
+                ForEach(options, id: \.target) { option in
+                    Text(option.label).tag(Optional(option.target))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func feedRows(_ feed: JournalFeed) -> some View {
+        if let state = JournalFeedPresentation.emptyState(
+            shownIsEmpty: feed.shown.isEmpty,
+            isSyncing: appEnv.isSyncingForDisplay,
+            isActive: appliedCriteria.isActive) {
+            emptyRow(state)
+        } else {
+            ForEach(feed.shown) { entry in
+                NavigationLink(value: Route.existing(entry.id)) {
+                    entryRow(entry)
+                }
+                .accessibilityIdentifier("journal.entry.\(entry.id)")
+                .listRowBackground(Color.clear)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func emptyRow(_ state: JournalFeedPresentation.EmptyState) -> some View {
+        switch state {
+        case .loading:
+            VStack(spacing: 8) {
+                ProgressView()
+                    .tint(WBColor.accent)
+                    .controlSize(.small)
+                Text("Loading…")
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 48)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        case .noMatches:
+            WBEmptyState(
+                title: "No entries match",
+                message: "Try different words, or clear the search and filter.",
+                systemImage: "magnifyingglass",
+                action: (label: "Clear", handler: { clearCriteria() })
+            )
+            .accessibilityIdentifier("journal.noMatches")
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        case .startJournal:
+            WBEmptyState(
+                title: "Start your journal",
+                message: "Write down what happened in the garden today. Tap + to write the first entry.",
+                systemImage: "book.closed"
+            )
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
     }
 
     @ViewBuilder

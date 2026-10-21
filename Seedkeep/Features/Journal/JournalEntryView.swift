@@ -28,9 +28,19 @@ struct JournalEntryView: View {
     @State private var didLoadInitial = false
     @State private var photosPickerItems: [PhotosPickerItem] = []
     @State private var uploadingPhotos: Bool = false
+    /// The active garden when this draft opened. Saving refuses an attachment if it has changed.
+    @State private var draftHouseholdID: String?
+    /// The attachment an existing entry had when it loaded. Empty for a new entry.
+    @State private var loadedAttachment: JournalTarget?
 
-    init(entryID: String?) {
+    /// A new entry started from a filtered Journal begins with that parent attached. Editing an
+    /// existing entry loads its own attachment instead.
+    init(entryID: String?, initialParent: JournalTarget? = nil) {
         self.entryID = entryID
+        let prefill = JournalAttachment(entryID == nil ? initialParent : nil)
+        _seedID = State(initialValue: prefill.seedID)
+        _bedID = State(initialValue: prefill.bedID)
+        _plantingEventID = State(initialValue: prefill.plantingEventID)
         // Scope the photo query to this entry's ID. Use "__none__" sentinel when
         // creating a new entry — the query returns nothing, which is fine.
         let id = entryID ?? "__none__"
@@ -184,6 +194,7 @@ struct JournalEntryView: View {
             // Load existing entry's fields the first time the view appears.
             guard !didLoadInitial else { return }
             didLoadInitial = true
+            draftHouseholdID = appEnv.activeGardenHouseholdID
             if let id = entryID,
                let existing = try? modelContext.fetch(
                 FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == id })
@@ -199,12 +210,29 @@ struct JournalEntryView: View {
         seedID = entry.seedID
         bedID = entry.bedID
         plantingEventID = entry.plantingEventID
+        loadedAttachment = JournalAttachment(
+            seedID: entry.seedID,
+            bedID: entry.bedID,
+            plantingEventID: entry.plantingEventID).target
     }
 
     private func save() async {
         saving = true
         errorMessage = nil
         defer { saving = false }
+        // Every save runs the household check, attached or not. An attachment is also checked for being
+        // live. A stored attachment that is now deleted gets the "Set Attached to Garden" message.
+        let target = JournalAttachment(seedID: seedID, bedID: bedID, plantingEventID: plantingEventID).target
+        let check = JournalSaveCheck.decide(
+            draftHouseholdID: draftHouseholdID,
+            activeHouseholdID: appEnv.activeGardenHouseholdID,
+            target: target,
+            loaded: loadedAttachment,
+            row: JournalSaveCheck.liveRow(for: target, in: modelContext))
+        if let message = check.message {
+            errorMessage = message
+            return
+        }
         let dateStr = Self.yyyymmdd(occurredOn)
         do {
             if let id = entryID,

@@ -4,6 +4,14 @@ import SwiftData
 /// Lets the user attach the entry to None (garden-level) / a Seed / a Bed /
 /// a Planting event. Backing storage is three nullable IDs on the
 /// LocalJournalEntry — exactly one (or zero) is set at a time.
+///
+/// Seeds and beds list every live row in the household. Plantings list the
+/// latest 20, plus the selected one when it is older, so a pre-filled
+/// planting always shows as selected. Labels match the Journal filter menu.
+///
+/// A selection that is no longer live (its seed, bed or planting was deleted)
+/// stays visible as a disabled "(removed …)" row, so the selection is not
+/// blank. The user can then pick "Garden (none)" to detach it.
 struct AttachedEntityPicker: View {
     @Environment(AppEnvironment.self) private var appEnv
 
@@ -11,74 +19,73 @@ struct AttachedEntityPicker: View {
     @Binding var bedID: String?
     @Binding var plantingEventID: String?
 
-    @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil },
-           sort: \.customName) private var allSeeds: [LocalSeed]
-    @Query(filter: #Predicate<LocalBed> { $0.deletedAt == nil },
-           sort: \.sortOrder) private var allBeds: [LocalBed]
-    @Query(filter: #Predicate<LocalPlantingEvent> { $0.deletedAt == nil },
-           sort: \.plannedFor, order: .reverse) private var allEvents: [LocalPlantingEvent]
+    @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var allSeeds: [LocalSeed]
+    @Query(filter: #Predicate<LocalBed> { $0.deletedAt == nil }) private var allBeds: [LocalBed]
+    @Query(filter: #Predicate<LocalPlantingEvent> { $0.deletedAt == nil }) private var allEvents: [LocalPlantingEvent]
+    @State private var indexCache = JournalFeedCache()
 
-    private var seeds: [LocalSeed] {
-        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
-        return allSeeds.filter { $0.householdID == householdID }
+    private var current: JournalTarget? {
+        JournalAttachment(seedID: seedID, bedID: bedID, plantingEventID: plantingEventID).target
     }
 
-    private var beds: [LocalBed] {
-        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
-        return allBeds.filter { $0.householdID == householdID }
-    }
-
-    private var events: [LocalPlantingEvent] {
-        guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
-        return allEvents.filter { $0.householdID == householdID }
-    }
-
-    enum Choice: Hashable {
-        case none
-        case seed(String)
-        case bed(String)
-        case plantingEvent(String)
-    }
-
-    private var current: Choice {
-        if let id = seedID { return .seed(id) }
-        if let id = bedID { return .bed(id) }
-        if let id = plantingEventID { return .plantingEvent(id) }
-        return .none
+    private var selection: Binding<JournalTarget?> {
+        Binding(
+            get: { current },
+            set: { newValue in
+                let attachment = JournalAttachment(newValue)
+                seedID = attachment.seedID
+                bedID = attachment.bedID
+                plantingEventID = attachment.plantingEventID
+            })
     }
 
     var body: some View {
-        Picker("Attached to", selection: Binding(
-            get: { current },
-            set: { newValue in
-                seedID = nil
-                bedID = nil
-                plantingEventID = nil
-                switch newValue {
-                case .none: break
-                case .seed(let id): seedID = id
-                case .bed(let id): bedID = id
-                case .plantingEvent(let id): plantingEventID = id
-                }
-            }
-        )) {
-            Text("Garden (none)").tag(Choice.none)
+        let entities = indexCache.entityIndex(
+            householdID: appEnv.activeGardenHouseholdID,
+            seeds: allSeeds,
+            beds: allBeds,
+            plantings: allEvents)
+        Picker("Attached to", selection: selection) {
+            Text("Garden (none)").tag(JournalTarget?.none)
             Section("Seeds") {
-                ForEach(seeds) { s in
-                    Text(s.customName ?? "Unnamed seed").tag(Choice.seed(s.id))
+                ForEach(entities.seedOptions, id: \.target) { option in
+                    Text(option.label).tag(Optional(option.target))
                 }
             }
             Section("Beds") {
-                ForEach(beds) { b in
-                    Text(b.name).tag(Choice.bed(b.id))
+                ForEach(entities.bedOptions, id: \.target) { option in
+                    Text(option.label).tag(Optional(option.target))
                 }
             }
             Section("Recent plantings") {
-                ForEach(Array(events.prefix(20))) { e in
-                    Text("\(e.kindRaw) · \(e.plannedFor)")
-                        .tag(Choice.plantingEvent(e.id))
+                ForEach(recentPlantings(entities), id: \.target) { option in
+                    Text(option.label).tag(Optional(option.target))
+                }
+            }
+            if let removed = removedSelection(entities) {
+                Section {
+                    Text("(removed \(JournalFeedPresentation.kindName(removed)))")
+                        .tag(Optional(removed))
+                        .disabled(true)
                 }
             }
         }
+    }
+
+    /// The latest 20 plantings, plus the selected planting when it is older than those.
+    private func recentPlantings(_ entities: JournalEntityIndex) -> [JournalFilterOption] {
+        var options = Array(entities.plantingOptions.prefix(20))
+        if let plantingEventID,
+           !options.contains(where: { $0.target == .plantingEvent(plantingEventID) }),
+           let selected = entities.option(for: .plantingEvent(plantingEventID)) {
+            options.append(selected)
+        }
+        return options
+    }
+
+    /// The selected seed, bed or planting when it is no longer live, so the picker can show it disabled.
+    private func removedSelection(_ entities: JournalEntityIndex) -> JournalTarget? {
+        guard let current, entities.option(for: current) == nil else { return nil }
+        return current
     }
 }
