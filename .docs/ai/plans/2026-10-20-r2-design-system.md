@@ -896,3 +896,49 @@ implement.
   the run. It runs as `scripts/a11y-audit.sh`.
 - **Manual VoiceOver checklist:** read order on Today, Seeds and Settings;
   bed move actions; picker navigation; inspector access; macOS keyboard.
+
+## R2c results (2026-10-20)
+
+- **Commits:**
+  - 924b0b8: C0 and C1
+  - 2f59a8e: appearance fix
+  - 111afcb: C3
+  - the bed-canvas label fix, committed with this note
+- **Found by the dark-mode pass:** choosing Light or Dark had no effect. The
+  `App` struct's `@AppStorage` didn't re-render the scene. Fixed with a view
+  modifier and a single shared `DevicePreferences.store`. Verified with the
+  device in dark and the app set to Light.
+- **Sample-garden isolation went further than C0 planned.** Every
+  notification toggle is now read through `DevicePreferences.store`, and
+  in sample-garden mode `NotificationsCenter` and the weather scheduler
+  never prompt, schedule or clear. There's no test seam on the system
+  notification center, so this is checked by review.
+- **Review fixes:**
+  - **Opus on C3:**
+    - drag in the canvas's coordinate space
+    - one search field in the Seeds toolbar
+    - wide layouts keep the inspector state
+    - the inspector policy is iPad only (Mac unchanged)
+    - one-axis VoiceOver moves leave the other axis alone
+  - **Sol:**
+    - the Appearance picker shows System for an unknown stored value
+    - canvas labels truncate to the canvas width and are hidden past its
+      bottom edge
+- **Found by the largest-size screenshots:** bed canvas labels covered their
+  dots, collided with the size label, and ran off the edge.
+  - Labels now hang below their dots, stay inside the canvas, and avoid
+    the size label.
+  - **Decision:** the to-scale canvas caps its text at the largest standard
+    size (`xxxLarge`). Each name stays in its VoiceOver label and in the
+    events list. This is the only Dynamic Type cap in the app.
+- **Checked in screenshots** (iPhone, sample garden):
+  - **Dark at the default size:** Today, Seeds, seed detail, Settings.
+  - **Largest size:** Journal (the date above the entry), the bed canvas.
+- **Open (owner):**
+  - **Mac visual check:** appearance, and whether the inspector state is
+    kept.
+  - iPad screenshots (the iPad simulator needs approval).
+  - VoiceOver on the bed canvas move actions.
+  - A dark-mode glance on the phone.
+  - Sharing under an appearance override.
+- **Next:** R2d, the automated accessibility audit (outlined above).

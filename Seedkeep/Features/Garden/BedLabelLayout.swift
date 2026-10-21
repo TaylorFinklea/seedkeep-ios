@@ -38,6 +38,15 @@ enum BedLabelLayout {
 
     /// Whether two rectangles share interior area. Rectangles that only touch along an edge don't
     /// intersect, and an empty rectangle intersects nothing.
+    /// How far to shift a label sideways so it stays inside a canvas of `width`, at least `margin`
+    /// from each edge. A label wider than the room left aligns to the left margin.
+    static func insideShift(for frame: CGRect, width: CGFloat, margin: CGFloat) -> CGFloat {
+        if frame.width > width - 2 * margin { return margin - frame.minX }
+        if frame.minX < margin { return margin - frame.minX }
+        if frame.maxX > width - margin { return (width - margin) - frame.maxX }
+        return 0
+    }
+
     private static func intersects(_ a: CGRect, _ b: CGRect) -> Bool {
         a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY
     }

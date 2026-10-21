@@ -39,8 +39,10 @@ struct BedLayoutCanvas: View {
     private let plainDotSize: CGFloat = 12
     /// Hit area of a draggable dot, where it doesn't reach a neighbour's dot.
     private let hitSize: CGFloat = 44
-    /// Distance from a dot's center down to its label's center.
-    private let labelGap: CGFloat = 16
+    /// Distance from a dot's center down to its label's top edge.
+    private let labelGap: CGFloat = 11
+    /// Id under which the footprint label's frame is reported, so planting labels avoid it.
+    private static let footprintID = "__footprint"
 
     /// Coordinate space that label frames are reported in.
     private static let canvasSpace = "bedCanvas"
@@ -56,9 +58,16 @@ struct BedLayoutCanvas: View {
             let centers = placements.map { center(of: $0, in: fit) }
             let enlarged = enlargedIDs(centers: centers)
             let labels = labelSlots(fit: fit)
+            // Frames as drawn: each shifted to stay inside the canvas. The footprint label comes first,
+            // so a planting label that would cover it is the one hidden.
+            let shifted = labelFrames.mapValues {
+                $0.offsetBy(dx: BedLabelLayout.insideShift(for: $0, width: geo.size.width, margin: 4), dy: 0)
+            }
+            // A label that would run past the canvas's bottom edge isn't drawn.
+            .filter { $0.value.maxY <= geo.size.height - 2 }
             let visible = BedLabelLayout.visibleIDs(
-                frames: labelFrames,
-                order: BedLabelLayout.order(labels.map {
+                frames: shifted,
+                order: [Self.footprintID] + BedLabelLayout.order(labels.map {
                     BedLabelLayout.Anchor(id: $0.id, x: $0.placement.x, y: $0.placement.y)
                 })
             )
@@ -83,6 +92,14 @@ struct BedLayoutCanvas: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(.thinMaterial, in: .capsule)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: BedLabelFramesKey.self,
+                                value: [Self.footprintID: geo.frame(in: .named(Self.canvasSpace))]
+                            )
+                        }
+                    }
                     .offset(x: fit.originX, y: fit.originY)
                     .accessibilityLabel("\(BedPlacementMath.feetText(widthFeet)) by \(BedPlacementMath.feetText(lengthFeet)) feet")
 
@@ -92,8 +109,12 @@ struct BedLayoutCanvas: View {
                 }
 
                 // Labels sit above the dots, so no dot is drawn over one.
-                labelLayer(labels, visible: visible)
+                labelLayer(labels, visible: visible, width: geo.size.width)
             }
+            // The drawing is to scale, so its text stops growing at the largest standard size; at
+            // accessibility sizes, labels would cover the plantings. Each planting's name stays in its
+            // VoiceOver label and in the events list below.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .coordinateSpace(name: Self.canvasSpace)
             .onPreferenceChange(BedLabelFramesKey.self) { frames in
@@ -219,28 +240,43 @@ struct BedLayoutCanvas: View {
     /// doesn't depend on visibility, so the layout settles. Labels are hidden from accessibility:
     /// the placement's element names them.
     @ViewBuilder
-    private func labelLayer(_ labels: [LabelSlot], visible: Set<String>) -> some View {
+    private func labelLayer(_ labels: [LabelSlot], visible: Set<String>, width: CGFloat) -> some View {
         ForEach(labels) { slot in
-            labelText(slot.placement)
-                .background {
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: BedLabelFramesKey.self,
-                            value: [slot.id: geo.frame(in: .named(Self.canvasSpace))]
-                        )
-                    }
-                }
-                .opacity(0)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-                .position(slot.point)
+            belowDot(
+                labelText(slot.placement)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: BedLabelFramesKey.self,
+                                value: [slot.id: geo.frame(in: .named(Self.canvasSpace))]
+                            )
+                        }
+                    },
+                at: slot.point,
+                maxWidth: width - 8
+            )
+            .opacity(0)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
         }
         ForEach(labels.filter { visible.contains($0.id) }) { slot in
-            labelText(slot.placement)
+            let shift = labelFrames[slot.id].map {
+                BedLabelLayout.insideShift(for: $0, width: width, margin: 4)
+            } ?? 0
+            belowDot(labelText(slot.placement), at: slot.point, maxWidth: width - 8)
+                .offset(x: shift)
                 .accessibilityHidden(true)
                 .allowsHitTesting(false)
-                .position(slot.point)
         }
+    }
+
+    /// Places `label` with its top edge at `point`, centered horizontally, so it hangs below its dot.
+    /// It is at most `maxWidth` wide; a longer name truncates instead of running off the canvas.
+    private func belowDot(_ label: some View, at point: CGPoint, maxWidth: CGFloat) -> some View {
+        Color.clear
+            .frame(width: max(maxWidth, 1), height: 1)
+            .overlay(alignment: .top) { label.fixedSize(horizontal: false, vertical: true) }
+            .position(point)
     }
 
     private func labelText(_ p: Placement) -> some View {

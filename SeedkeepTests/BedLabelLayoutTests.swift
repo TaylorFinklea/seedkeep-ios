@@ -107,3 +107,21 @@ struct BedLabelLayoutTests {
         #expect(BedLabelLayout.visibleIDs(frames: frames, order: BedLabelLayout.order(anchors)) == ["high"])
     }
 }
+
+struct BedLabelInsideShiftTests {
+    @Test func aLabelInsideTheCanvasStays() {
+        #expect(BedLabelLayout.insideShift(for: CGRect(x: 20, y: 0, width: 50, height: 10), width: 200, margin: 4) == 0)
+    }
+
+    @Test func aLabelPastTheLeftEdgeMovesRight() {
+        #expect(BedLabelLayout.insideShift(for: CGRect(x: -30, y: 0, width: 80, height: 10), width: 200, margin: 4) == 34)
+    }
+
+    @Test func aLabelPastTheRightEdgeMovesLeft() {
+        #expect(BedLabelLayout.insideShift(for: CGRect(x: 150, y: 0, width: 80, height: 10), width: 200, margin: 4) == -34)
+    }
+
+    @Test func aLabelWiderThanTheCanvasAlignsLeft() {
+        #expect(BedLabelLayout.insideShift(for: CGRect(x: -10, y: 0, width: 300, height: 10), width: 200, margin: 4) == 14)
+    }
+}

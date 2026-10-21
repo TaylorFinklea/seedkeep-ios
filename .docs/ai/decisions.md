@@ -317,6 +317,21 @@
 
 **Rationale**: Fewer roots, one tested model for seeds, and loading states that reflect the sync that actually runs.
 
+## 2026-10-20 — Appearance, device preferences and contrast as tests (R2c)
+
+**Context**: R2c turned on dark mode with a Light / Dark / System override, and its sample-garden screenshots needed real settings and notifications left alone.
+
+**Decision**:
+- The appearance (`seedkeep.appearance`) is a per-device preference, never synced. A view modifier at each window root applies it; `@AppStorage` on the `App` struct didn't re-render the scene.
+- `DevicePreferences.store` is the one place this device's preferences live (the appearance, the What's New baseline, the notification toggles). Sample-garden mode uses the fixture suite and never touches the system notification center.
+- Colours come from one `WBPalette` table, and tests check WCAG contrast for the real combinations, not just the tokens.
+- The bed canvas is a to-scale drawing, so its text stops growing at `xxxLarge`. Each name stays in VoiceOver and in the events list. It's the only Dynamic Type cap in the app.
+- On iPad, a Seeds layout too narrow for the table and the inspector starts with the inspector closed. Mac keeps the user's inspector state.
+
+**Alternatives considered**: syncing the appearance through CloudKit (people expect it per device); scaling canvas labels without limit (they covered the plantings at accessibility sizes); the inspector rule on Mac too (most Mac windows would start without it).
+
+**Rationale**: Dark mode and large text should work without surprises, and a fixture session must never change a developer's real device.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in

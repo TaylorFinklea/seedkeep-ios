@@ -1,5 +1,45 @@
 # Current State
 
+## Native Workbench redesign — R2c complete (2026-10-20)
+
+R2c turns dark mode on and fixes contrast, large-text and VoiceOver defects.
+It's on `redesign/r2-design-system`, local only.
+- **Appearance:** Light / Dark / System in Settings (`seedkeep.appearance`,
+  per device). Applied by a view modifier at each window root. The launch
+  screen has light and dark backgrounds.
+- **Contrast:** `WBPalette` and `WorkbenchContrastTests` check WCAG ratios
+  for text and graphic pairs, the chart marker against every ramp segment,
+  and token resolution on iOS and macOS.
+  - **Combinations fixed:** the photo retry icons (`warnInk`), the chart
+    marker (halo), readable `faint` text (now `muted`).
+- **Sample-garden isolation:** the appearance, What's New and notification
+  toggles use the fixture suite (`DevicePreferences`). A sample-garden
+  session never prompts for, schedules or clears real notifications.
+- **Large text and VoiceOver:**
+  - **Journal:** the date sits above each entry at accessibility sizes.
+  - **What's New:** VoiceOver says "new" when there's something unseen.
+  - **Bed canvas:**
+    - VoiceOver can move plantings, sharing one movement path with drag.
+    - Positions snap and clamp to the bed (fixes the 2.3 ft → 2.5 bug).
+    - Each planting is one element; labels don't overlap or clip.
+  - **Pickers:** at accessibility sizes the State, Location and Source
+    pickers push a list (iOS).
+  - **Seeds on iPad and Mac:** the bulk bar wraps; the toolbar stacks
+    without losing search focus; narrow iPad layouts start with the
+    inspector closed.
+- **Gate:** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 1166 + 1, macOS
+  app 1181 + 1, on Xcode 27.1.
+- **Reviews:** Sol critiqued the contract over three rounds. Opus and Sol
+  reviewed each slice.
+- **Plan and results:** `.docs/ai/plans/2026-10-20-r2-design-system.md`.
+- **Open (owner):**
+  - the Mac visual and keyboard check
+  - iPad screenshots (simulator approval)
+  - VoiceOver on the bed canvas
+  - a dark-mode glance on the phone
+- **Next:** R2d, the automated accessibility audit with its own scheme. Then
+  R3.
+
 ## Native Workbench redesign — R2b complete (2026-10-20)
 
 R2b finishes the Workbench look for the remaining Herbarium screens. It's on
