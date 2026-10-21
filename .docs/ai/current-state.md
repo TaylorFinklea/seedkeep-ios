@@ -1,5 +1,16 @@
 # Current State
 
+## R3 in progress (2026-10-21): Garden grid and planting windows
+
+Contract: `.docs/ai/plans/2026-10-21-r3-garden-windows.md` (slices G0–G4).
+- **G0 done** (2d76ad0): the pure grid, frost, windows and timeline models;
+  a per-window `GardenSession`; the `.windows` route (⌘5); a frost-flagged
+  sample sowing. Reviewed by Sol and Opus; the fixes are in the same commit.
+  The sample garden keeps its ZIP's real frost dates (contract amended).
+- **Next:** G1 (grid and square details) and G3 (Windows screen) in
+  parallel, then G2 (Garden screens), then G4 (frost on Today and Add
+  Planting), then verification.
+
 ## R2d done (2026-10-21): accessibility audit
 
 The owner's choice: fix the real defects, then move on to R3.
