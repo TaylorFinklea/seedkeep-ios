@@ -22,8 +22,21 @@ struct GardenSessionReconciler: ViewModifier {
     private var snapshot: GardenSession.Snapshot {
         let isSignedIn: Bool
         if case .signedIn = auth.state { isSignedIn = true } else { isSignedIn = false }
-        let householdID = appEnv.activeGardenHouseholdID
-        let householdBeds = beds.filter { $0.householdID == householdID }
+        return Self.snapshot(
+            householdID: appEnv.activeGardenHouseholdID, isSignedIn: isSignedIn,
+            beds: beds, events: events, seeds: seeds
+        )
+    }
+
+    /// The snapshot for the store's rows: only live rows in `householdID` count.
+    static func snapshot(
+        householdID: String?,
+        isSignedIn: Bool,
+        beds: [LocalBed],
+        events: [LocalPlantingEvent],
+        seeds: [LocalSeed]
+    ) -> GardenSession.Snapshot {
+        let householdBeds = beds.filter { $0.householdID == householdID && $0.deletedAt == nil }
         return GardenSession.Snapshot(
             householdID: householdID,
             isSignedIn: isSignedIn,
@@ -31,8 +44,10 @@ struct GardenSessionReconciler: ViewModifier {
             gridBedIDs: Set(householdBeds.filter {
                 GardenGrid.size(widthFeet: $0.widthFeet, lengthFeet: $0.lengthFeet) != nil
             }.map(\.id)),
-            eventIDs: Set(events.filter { $0.householdID == householdID }.map(\.id)),
-            activeSeedIDs: Set(seeds.filter { $0.householdID == householdID && $0.state == .active }.map(\.id))
+            eventIDs: Set(events.filter { $0.householdID == householdID && $0.deletedAt == nil }.map(\.id)),
+            activeSeedIDs: Set(seeds.filter {
+                $0.householdID == householdID && $0.deletedAt == nil && $0.state == .active
+            }.map(\.id))
         )
     }
 }

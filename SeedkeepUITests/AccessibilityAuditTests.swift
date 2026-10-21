@@ -165,6 +165,10 @@ final class AccessibilityAuditTests: XCTestCase {
         case .anchor(let anchor):
             try scroll(to: anchor)
             try audit(destination, checkpoint: anchor.rawValue)
+        case .squareDetails:
+            try openSquareDetails()
+            try audit(destination, checkpoint: "squareDetails", screen: "garden.squareDetails")
+            try closeSquareDetails(from: destination)
         }
     }
 
@@ -180,14 +184,33 @@ final class AccessibilityAuditTests: XCTestCase {
                 guard driver.isInView(header), header.frame.minY > windowHeight * 0.45 else { break }
                 if try !driver.scrollPage(.down) { break }
             }
-        case .canvas:
-            // The layout section's footer sits under the canvas: with it in view, so is the canvas.
-            let footer = driver.app.staticTexts.matching(NSPredicate(
-                format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
-                "Drag a placed event", "Add a position")).firstMatch
-            try driver.require(footer, "layout footer")
-            try driver.scrollUntilInView(footer, "layout footer")
+        case .grid:
+            let cell = driver.element("garden.grid.r1.s1")
+            try driver.require(cell, "grid square garden.grid.r1.s1")
+            try driver.scrollUntilInView(cell, "grid square garden.grid.r1.s1")
         }
+    }
+
+    /// Opens square details from a planting's events-list row (selecting a row writes nothing).
+    private func openSquareDetails() throws {
+        let identifier = "garden.events.select.\(AuditFixture.squareDetailsEventID)"
+        let row = driver.element(identifier)
+        _ = row.waitForExistence(timeout: 3)
+        try driver.scrollUntilInView(row, identifier, wholly: false)
+        try driver.tap(row, identifier)
+        try driver.require(driver.element("garden.squareDetails"), "garden.squareDetails",
+                           timeout: AuditDriver.screenTimeout)
+    }
+
+    /// Closes square details with Done and checks the bed screen is back.
+    private func closeSquareDetails(from destination: AuditDestination) throws {
+        let done = driver.element("garden.squareDetails.done")
+        try driver.require(done, "garden.squareDetails.done")
+        try driver.tap(done, "garden.squareDetails.done")
+        guard driver.element("garden.squareDetails").waitForNonExistence(timeout: AuditDriver.screenTimeout) else {
+            throw AuditFailure(description: "garden.squareDetails still present after Done")
+        }
+        try driver.requireScreen(destination)
     }
 
     /// After a failed destination: dismiss whatever is open and return to its tab root.
@@ -204,9 +227,13 @@ final class AccessibilityAuditTests: XCTestCase {
 
     // MARK: - Auditing
 
-    private func audit(_ destination: AuditDestination, checkpoint: String) throws {
-        // Contract: each audit runs after checking `screen.<name>`.
-        try driver.requireScreen(destination)
+    private func audit(_ destination: AuditDestination, checkpoint: String, screen: String? = nil) throws {
+        // Contract: each audit runs after checking `screen.<name>` (or the sheet's own screen).
+        if let screen {
+            try driver.require(driver.element(screen), screen)
+        } else {
+            try driver.requireScreen(destination)
+        }
         auditCount += 1
         let before = findingCount
         do {

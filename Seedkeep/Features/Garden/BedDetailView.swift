@@ -2,142 +2,61 @@ import SwiftUI
 import SwiftData
 import SeedkeepKit
 
-/// One bed's detail + its planting events timeline. Events are grouped
-/// into "Upcoming" (no completion + planned in the future or today),
-/// "Overdue" (no completion + planned in the past), and "Done"
-/// (completed_at set), so the user's eye lands on what needs action.
+/// A bed's screen on iPhone (R3 G2): the brush strip ("Paint with a seed"), the Stop or
+/// move bar pinned above the content while painting or moving, the grid, the bed's events, its pet
+/// companions and its journal. Planting details open as a sheet; when it closes, focus returns to the
+/// square. A bed without a grid lists its events with "Set a size to plan on a grid" and Edit bed.
+/// Edit bed also deletes the bed (confirmed).
 struct BedDetailView: View {
     let bedID: String
+    /// Opens a seed from planting details.
+    let onOpenSeed: (String) -> Void
 
     @Environment(AppEnvironment.self) private var appEnv
+    @Environment(GardenSession.self) private var session
     @Environment(\.dismiss) private var dismiss
 
     @Query private var beds: [LocalBed]
-    @Query private var allEvents: [LocalPlantingEvent]
-    @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil },
-           sort: \.customName, order: .forward)
-    private var seeds: [LocalSeed]
+    @Query private var bedEvents: [LocalPlantingEvent]
+    @Query(filter: #Predicate<LocalSeed> { $0.deletedAt == nil }) private var seeds: [LocalSeed]
+    @Query(filter: #Predicate<LocalBed> { $0.deletedAt == nil }) private var allBeds: [LocalBed]
 
-    @State private var showAddEvent = false
     @State private var showEditBed = false
-    @State private var eventPendingDelete: LocalPlantingEvent?
+    @State private var bedDeleted = false
+    @State private var showNewBed = false
+    /// The bed New bed created from the add-a-bed prompt, so Plan can resume when the sheet closes.
+    @State private var createdBed: GardenSession.BedChoice?
+    @State private var showAddEvent = false
+    @State private var showLegend = false
+    @State private var message: String?
+    @State private var focusRequest: GridSquare?
+    /// The square details opened on, so focus can return there when the sheet closes.
+    @State private var detailsSquare: GridSquare?
+    /// The square of a planting deleted in the sheet; focus returns there once the sheet has closed.
+    @State private var deletedSquare: GridSquare?
+    /// A seed to open once the details sheet has closed.
+    @State private var seedToOpen: String?
 
-    /// Catalog data keyed by catalog ID. Populated lazily on view appear:
-    /// for each event in this bed that has a seed with a catalog ID, we
-    /// fetch the catalog entry and cache it. Used to look up plant-spacing
-    /// for the layout canvas's rings. nil = "not found / not yet fetched".
-    @State private var catalogCache: [String: CatalogSeedDTO?] = [:]
+    @ScaledMetric(relativeTo: .body) private var scaledCell: CGFloat = 56
+    @ScaledMetric(relativeTo: .body) private var cellSpacing: CGFloat = 4
+    /// The tallest the grid gets before it scrolls inside itself.
+    private static let gridMaxHeight: CGFloat = 440
 
-    init(bedID: String) {
+    init(bedID: String, onOpenSeed: @escaping (String) -> Void = { _ in }) {
         self.bedID = bedID
+        self.onOpenSeed = onOpenSeed
         let id = bedID
-        _beds = Query(filter: #Predicate<LocalBed> { $0.id == id })
-        _allEvents = Query(filter: #Predicate<LocalPlantingEvent> { $0.bedID == id && $0.deletedAt == nil })
+        _beds = Query(filter: #Predicate<LocalBed> { $0.id == id && $0.deletedAt == nil })
+        _bedEvents = Query(filter: #Predicate<LocalPlantingEvent> { $0.bedID == id && $0.deletedAt == nil })
     }
 
     var body: some View {
+        let householdID = appEnv.activeGardenHouseholdID
         Group {
-            if let bed = beds.first {
-                ZStack {
-                    WBScreenBackground()
-                    Form {
-                        Section {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Garden bed")
-                                    .font(.wbSectionLabel)
-                                    .tracking(0.6)
-                                    .foregroundStyle(WBColor.muted)
-                                    .textCase(.uppercase)
-                                Text(bed.name)
-                                    .font(.wbTitle)
-                                    .foregroundStyle(WBColor.ink)
-                                    .accessibilityAddTraits(.isHeader)
-                                Text(formatDims(bed) ?? "—")
-                                    .font(.wbFootnote)
-                                    .foregroundStyle(WBColor.muted)
-                            }
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
-                            .listRowSeparator(.hidden)
-                        }
-                        layoutSection(bed)
-                    Section {
-                        LabeledContent("Name", value: bed.name)
-                        if let desc = bed.bedDescription, !desc.isEmpty {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Description").font(.caption).foregroundStyle(WBColor.muted)
-                                Text(desc)
-                            }
-                        }
-                        if let dims = formatDims(bed) {
-                            LabeledContent("Dimensions", value: dims)
-                        }
-                    } header: {
-                        WBSectionHeader("Bed")
-                    }
-
-                    eventSection(title: "Overdue", events: overdueEvents, defaultEmptyHidden: true)
-                    eventSection(title: "Upcoming", events: upcomingEvents, defaultEmptyHidden: false)
-                    eventSection(title: "Done", events: doneEvents, defaultEmptyHidden: true)
-
-                    companionsSection
-
-                    EntityScopedJournalSection(parent: .bed(bed.id))
-
-                    Section {
-                        Button(role: .destructive) {
-                            Task { await deleteBed() }
-                        } label: {
-                            Label("Delete bed", systemImage: "trash")
-                        }
-                    } footer: {
-                        Text("Deleting a bed unlinks its planting events; the events themselves stick around so harvest history isn't lost.")
-                            .font(.wbFootnote)
-                            .foregroundStyle(WBColor.muted)
-                    }
-                    }
-                    .scrollContentBackground(.hidden)
-                    .confirmationDialog(
-                        "Delete this planting event?",
-                        isPresented: Binding(
-                            get: { eventPendingDelete != nil },
-                            set: { if !$0 { eventPendingDelete = nil } }
-                        ),
-                        titleVisibility: .visible,
-                        presenting: eventPendingDelete
-                    ) { event in
-                        Button("Delete", role: .destructive) {
-                            deleteEvent(event)
-                            eventPendingDelete = nil
-                        }
-                        Button("Cancel", role: .cancel) {
-                            eventPendingDelete = nil
-                        }
-                    } message: { _ in
-                        Text("This planting event will be removed from the bed. You can't undo this.")
-                    }
-                }
-                .navigationTitle("")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .platformTrailing) {
-                        Button {
-                            showAddEvent = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityLabel("Add planting event")
-                    }
-                }
-                .sheet(isPresented: $showAddEvent) {
-                    AddPlantingEventView(bedID: bed.id, prefillSeedID: nil)
-                }
-                .task(id: allEvents.map(\.id)) {
-                    await refreshCatalogsForEvents()
-                }
-                .accessibilityIdentifier("screen.bedDetail")
+            if let bed = beds.first, let householdID, bed.householdID == householdID {
+                let data = GardenBedData(bed: bed, events: bedEvents, seeds: seeds, climate: appEnv.preferences.homeClimate)
+                let actions = GardenBedSupport.actions(appEnv: appEnv, householdID: householdID, bedID: bed.id)
+                screen(bed: bed, data: data, actions: actions, householdID: householdID)
             } else {
                 ZStack {
                     WBScreenBackground()
@@ -149,293 +68,305 @@ struct BedDetailView: View {
                 }
             }
         }
+        .navigationTitle("")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        // On the Group, not the screen: once the bed is deleted the screen gives way to "Bed
+        // unavailable", and a sheet hung on it would go with it before its onDismiss could pop.
+        .sheet(isPresented: $showEditBed, onDismiss: { if bedDeleted { dismiss() } }) {
+            AddBedView(editingBedID: bedID, onDeleted: { bedDeleted = true })
+        }
+        .onAppear { session.showBed(bedID) }
     }
 
-    // MARK: - Sections
+    // MARK: - Screen
 
-    @ViewBuilder
-    private func layoutSection(_ bed: LocalBed) -> some View {
-        if let width = bed.widthFeet, let length = bed.lengthFeet,
-           width > 0, length > 0 {
+    private func screen(bed: LocalBed, data: GardenBedData, actions: GardenActions, householdID: String) -> some View {
+        List {
             Section {
-                BedLayoutCanvas(
-                    widthFeet: width,
-                    lengthFeet: length,
-                    placements: placements(for: bed),
-                    onMove: { id, newX, newY in
-                        movePlacement(eventID: id, x: newX, y: newY)
-                    }
-                )
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+                header(bed)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                    .listRowSeparator(.hidden)
+            }
+            if let size = data.size {
+                Section {
+                    GardenBrushList(
+                        axis: .horizontal,
+                        seeds: brushSeeds(householdID: householdID),
+                        brushSeedID: session.brushSeedID,
+                        isPainting: session.isPainting,
+                        // The mode bar's Stop (with Details) is the one Stop while it shows.
+                        showsStop: banner(data: data) != .modeBar,
+                        onSelect: { session.startPainting(seedID: $0) },
+                        onStop: { session.stopPainting() }
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
+                Section {
+                    BedGridView(
+                        size: size,
+                        squares: data.squares,
+                        mode: session.mode,
+                        selectedEventID: session.selectedEventID,
+                        brushSeedName: brushName,
+                        movingSeedName: GardenBedSupport.movingName(session: session, data: data),
+                        seedName: { data.seedName($0) },
+                        onActivate: { run(.activate($0), data: data, actions: actions) },
+                        onMoveSelected: { run(.moveSelected($0), data: data, actions: actions) },
+                        focusRequest: $focusRequest
+                    )
+                    .scrollBounceBehavior(.basedOnSize, axes: [.horizontal, .vertical])
+                    .frame(height: gridHeight(size))
+                    .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
+                    .listRowBackground(WBColor.panel)
+                } header: {
+                    WBSectionHeader("Grid")
+                } footer: {
+                    Text(GardenLegend.scale)
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.muted)
+                }
+            } else {
+                Section {
+                    GardenGridlessNotice { showEditBed = true }
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
+            }
+            Section {
+                if data.events.isEmpty {
+                    Text("Nothing planned yet.")
+                        .font(.wbCallout)
+                        .foregroundStyle(WBColor.muted)
+                } else {
+                    // Without a grid every event is in the no-grid list, with no Place action.
+                    BedEventsList(
+                        bedID: bed.id,
+                        rows: data.size == nil ? .offGrid : .all,
+                        embedded: true,
+                        session: session,
+                        actions: actions,
+                        climate: appEnv.preferences.homeClimate,
+                        today: .today(),
+                        onMessage: show,
+                        onError: { appEnv.surfaceError($0) }
+                    )
+                }
             } header: {
-                WBSectionHeader("Layout")
-            } footer: {
-                Text(placedCount(for: bed) == 0
-                     ? "Add a position to a planting event to see it on the layout."
-                     : "Drag a placed event to reposition it. Snaps to a half-foot grid.")
+                WBSectionHeader("Events")
+            }
+            GardenCompanionsSection(events: bedEvents)
+            EntityScopedJournalSection(parent: .bed(bed.id))
+        }
+        .scrollContentBackground(.hidden)
+        .background(WBScreenBackground())
+        .safeAreaInset(edge: .top, spacing: 0) {
+            topBar(data: data)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .platformTrailing) {
+                Button { showLegend.toggle() } label: { Image(systemName: "info.circle") }
+                    .accessibilityLabel("Legend")
+                    .accessibilityIdentifier("garden.legend")
+                    .popover(isPresented: $showLegend) {
+                        GardenLegendView().presentationCompactAdaptation(.popover)
+                    }
+                Button { showEditBed = true } label: { Image(systemName: "pencil") }
+                    .accessibilityLabel("Edit bed")
+                    .accessibilityIdentifier("garden.editBed")
+                Button { showAddEvent = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("Add planting event")
+                    .accessibilityIdentifier("garden.addPlanting")
+            }
+        }
+        .sheet(isPresented: detailsBinding, onDismiss: detailsClosed) {
+            NavigationStack {
+                SquareDetails(
+                    bedID: bed.id,
+                    session: session,
+                    actions: actions,
+                    climate: appEnv.preferences.homeClimate,
+                    onOpenSeed: { seedID in
+                        seedToOpen = seedID
+                        session.closeDetails()
+                    },
+                    // The sheet closes after a delete; focus returns from its onDismiss.
+                    onDeleted: { deletedSquare = $0 },
+                    onMessage: show,
+                    onError: { appEnv.surfaceError($0) }
+                )
+                .navigationTitle("Planting")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { session.closeDetails() }
+                            .accessibilityIdentifier("garden.squareDetails.done")
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showNewBed, onDismiss: resumePlan) {
+            AddBedView(onCreated: { createdBed = $0 })
+        }
+        .sheet(isPresented: $showAddEvent) {
+            AddPlantingEventView(bedID: bed.id, prefillSeedID: nil)
+        }
+        .onChange(of: session.detailsPresented) { _, presented in
+            if presented { detailsSquare = GardenBedSupport.square(of: session.selectedEventID, in: data) }
+        }
+        .onKeyPress(.escape) {
+            cancel(data: data) ? .handled : .ignored
+        }
+        .accessibilityIdentifier("screen.bedDetail")
+    }
+
+    private func header(_ bed: LocalBed) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Garden bed")
+                .font(.wbSectionLabel)
+                .tracking(0.6)
+                .foregroundStyle(WBColor.muted)
+                .textCase(.uppercase)
+            Text(bed.name)
+                .font(.wbTitle)
+                .foregroundStyle(WBColor.ink)
+                .accessibilityAddTraits(.isHeader)
+            Text(GardenBedListRow.sizeText(widthFeet: bed.widthFeet, lengthFeet: bed.lengthFeet))
                 .font(.wbFootnote)
                 .foregroundStyle(WBColor.muted)
+            if let description = bed.bedDescription, !description.isEmpty {
+                Text(description)
+                    .font(.wbCallout)
+                    .foregroundStyle(WBColor.ink)
             }
         }
     }
 
-    private func movePlacement(eventID: String, x: Double, y: Double) {
-        do {
-            try appEnv.sync.enqueueUpdatePlantingEvent(
-                id: eventID,
-                SeedkeepClient.UpdatePlantingEventInput(x_feet: x, y_feet: y)
-            )
-        } catch {
-            appEnv.surfaceError(error)
-            return
-        }
-        Task { await appEnv.syncIfPossible() }
-    }
-
-    private func placements(for bed: LocalBed) -> [BedLayoutCanvas.Placement] {
-        allEvents.compactMap { event in
-            guard let x = event.xFeet, let y = event.yFeet else { return nil }
-            let kind = PlantingEventKind(rawValue: event.kindRaw)
-            return BedLayoutCanvas.Placement(
-                id: event.id,
-                x: x,
-                y: y,
-                spacingFeet: spacingFeet(for: event),
-                label: seedName(for: event) ?? (kind?.displayName ?? ""),
-                isSowing: kind == .sowing
-            )
-        }
-    }
-
-    /// Look up the seed → catalog → plant_spacing_inches chain and
-    /// convert to feet. Returns 0 when any link is missing — the canvas
-    /// renders just a dot in that case (no ring).
-    private func spacingFeet(for event: LocalPlantingEvent) -> Double {
-        guard let seedID = event.seedID,
-              let seed = seeds.first(where: { $0.id == seedID }),
-              let catalogID = seed.catalogID,
-              let catalog = catalogCache[catalogID] ?? nil,
-              let inches = catalog.plant_spacing_inches,
-              inches > 0
-        else { return 0 }
-        return Double(inches) / 12.0
-    }
-
-    /// Fetch + cache catalogs for every unique catalog-linked seed in
-    /// this bed. Skips IDs we already have (the cache stays populated
-    /// across multi-view appearances). Failed fetches store a `nil`
-    /// sentinel so we don't keep retrying.
-    @MainActor
-    private func refreshCatalogsForEvents() async {
-        guard !ServerRetirement.isRetired else { return }
-        var catalogIDs: Set<String> = []
-        for event in allEvents {
-            guard let seedID = event.seedID,
-                  let seed = seeds.first(where: { $0.id == seedID }),
-                  let catalogID = seed.catalogID else { continue }
-            if catalogCache[catalogID] != nil { continue }
-            catalogIDs.insert(catalogID)
-        }
-        for id in catalogIDs {
-            let result = try? await appEnv.client.catalogByID(id)
-            catalogCache[id] = result ?? nil
-        }
-    }
-
-    private func placedCount(for bed: LocalBed) -> Int {
-        allEvents.filter { $0.xFeet != nil && $0.yFeet != nil }.count
-    }
-
+    /// The Stop or move bar, or the add-a-bed prompt, and the latest refusal, pinned above the list.
     @ViewBuilder
-    private var companionsSection: some View {
-        if FeatureFlags.plantPetsEnabled {
-            let pets = allEvents
-                .filter { $0.petCreatureKind != nil && $0.petSeed != nil && $0.completedAt == nil }
-                .sorted(by: sortKey)
-            if !pets.isEmpty {
-                Section("Companions") {
-                    ForEach(pets) { pet in
-                        PetCard(pet: pet, variant: .inline)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func eventSection(title: String, events: [LocalPlantingEvent], defaultEmptyHidden: Bool) -> some View {
-        if !events.isEmpty {
-            Section {
-                ForEach(events.sorted(by: sortKey)) { event in
-                    EventRow(event: event, seedName: seedName(for: event))
-                        .swipeActions {
-                            if event.completedAt == nil {
-                                Button("Done") {
-                                    markCompleted(event)
-                                }.tint(WBColor.accent)
-                            } else {
-                                Button("Undo") {
-                                    markIncomplete(event)
-                                }.tint(WBColor.accent)
-                            }
-                            Button(role: .destructive) {
-                                eventPendingDelete = event
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                            .accessibilityLabel("Delete planting event")
+    private func topBar(data: GardenBedData) -> some View {
+        let banner = banner(data: data)
+        if banner != .none || message != nil {
+            VStack(spacing: WBMetrics.gap) {
+                switch banner {
+                case .none:
+                    EmptyView()
+                case .modeBar:
+                    GardenModeBar(
+                        mode: session.mode,
+                        brushSeedName: brushName,
+                        movingSeedName: GardenBedSupport.movingName(session: session, data: data),
+                        hasSelection: session.selectedEventID != nil,
+                        onDetails: { session.select(eventID: session.selectedEventID, presentDetails: true) },
+                        onStop: {
+                            if session.movingEventID != nil { session.endMove() } else { session.stopPainting() }
                         }
+                    )
+                case .addBedPrompt:
+                    GardenAddBedPrompt(
+                        brushSeedName: brushName,
+                        onNewBed: { showNewBed = true },
+                        onStop: { session.stopPainting() }
+                    )
                 }
-            } header: {
-                WBSectionHeader(title)
+                if let message {
+                    GardenMessageBanner(message: message) { self.message = nil }
+                }
             }
-        } else if !defaultEmptyHidden {
-            Section {
-                Text("Nothing planned yet.")
-                    .font(.callout)
-                    .foregroundStyle(WBColor.muted)
-            } header: {
-                WBSectionHeader(title)
-            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, WBMetrics.gap)
+            .background(WBColor.bg)
         }
     }
 
-    // MARK: - Event partitioning
-
-    private var todayYMD: String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        return f.string(from: Date())
+    private func banner(data: GardenBedData) -> GardenBanner {
+        let gridBedCount = allBeds.filter {
+            $0.householdID == appEnv.activeGardenHouseholdID && GardenWorkbenchView.hasGrid($0)
+        }.count
+        return GardenBanner.choose(
+            mode: session.mode, brushSeedID: session.brushSeedID, gridBedCount: gridBedCount
+        )
     }
 
-    private var overdueEvents: [LocalPlantingEvent] {
-        let today = todayYMD
-        return allEvents.filter { $0.completedAt == nil && $0.plannedFor < today }
+    // MARK: - Details sheet
+
+    private var detailsBinding: Binding<Bool> {
+        Binding(
+            get: { session.detailsPresented && session.selectedEventID != nil },
+            set: { if !$0 { session.closeDetails() } }
+        )
     }
 
-    private var upcomingEvents: [LocalPlantingEvent] {
-        let today = todayYMD
-        return allEvents.filter { $0.completedAt == nil && $0.plannedFor >= today }
-    }
-
-    private var doneEvents: [LocalPlantingEvent] {
-        allEvents.filter { $0.completedAt != nil }
-    }
-
-    private func sortKey(_ a: LocalPlantingEvent, _ b: LocalPlantingEvent) -> Bool {
-        a.plannedFor < b.plannedFor
+    /// The sheet has closed: return focus to the square (or the deleted planting's square), then open
+    /// a seed the details asked for.
+    private func detailsClosed() {
+        focusRequest = deletedSquare ?? detailsSquare
+        deletedSquare = nil
+        if let seedID = seedToOpen {
+            seedToOpen = nil
+            onOpenSeed(seedID)
+        }
     }
 
     // MARK: - Helpers
 
-    private func seedName(for event: LocalPlantingEvent) -> String? {
-        guard let seedID = event.seedID else { return nil }
-        return seeds.first(where: { $0.id == seedID })?.customName
+    /// After New bed from the add-a-bed prompt: plans the brush seed again; the Garden stack takes the
+    /// Plan and opens the new bed.
+    private func resumePlan() {
+        defer { createdBed = nil }
+        let householdID = appEnv.activeGardenHouseholdID
+        GardenPlanHandoff.resume(
+            session: session, created: createdBed,
+            beds: allBeds.filter { $0.householdID == householdID }.map { GardenSession.BedChoice($0) }
+        )
     }
 
-    private func formatDims(_ bed: LocalBed) -> String? {
-        switch (bed.widthFeet, bed.lengthFeet) {
-        case let (w?, l?): return "\(fmt(w))′ × \(fmt(l))′"
-        case let (w?, nil): return "\(fmt(w))′ wide"
-        case let (nil, l?): return "\(fmt(l))′ long"
-        default: return nil
-        }
-    }
-    private func fmt(_ v: Double) -> String {
-        v.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(v))" : String(format: "%.1f", v)
+    private func brushSeeds(householdID: String) -> [BrushSeed] {
+        GardenBedSupport.brushSeeds(
+            seeds: seeds, householdID: householdID,
+            recommendation: { appEnv.recommendations.recommendation(for: $0) }
+        )
     }
 
-    private func markCompleted(_ event: LocalPlantingEvent) {
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        do {
-            try appEnv.sync.enqueueUpdatePlantingEvent(
-                id: event.id,
-                SeedkeepClient.UpdatePlantingEventInput(completed_at: now)
-            )
-        } catch {
-            appEnv.surfaceError(error)
-            return
-        }
-        Task { await appEnv.syncIfPossible() }
+    private var brushName: String? {
+        guard let id = session.brushSeedID else { return nil }
+        return seeds.first { $0.id == id }?.displayName
     }
 
-    private func markIncomplete(_ event: LocalPlantingEvent) {
-        do {
-            // `.some(nil)` -> JSON null (explicit-null pattern, contract
-            // decision 8). The old `completed_at: 0` sentinel was mapped
-            // by nothing — the server stored "completed Jan 1 1970".
-            try appEnv.sync.enqueueUpdatePlantingEvent(
-                id: event.id,
-                SeedkeepClient.UpdatePlantingEventInput(completed_at: .some(nil))
-            )
-        } catch {
-            appEnv.surfaceError(error)
-            return
-        }
-        Task { await appEnv.syncIfPossible() }
+    private func gridHeight(_ size: GridSize) -> CGFloat {
+        let cell = max(WBMetrics.touchTarget, scaledCell)
+        let content = CGFloat(size.rows) * (cell + cellSpacing) + cellSpacing * 2
+        return min(content, Self.gridMaxHeight)
     }
 
-    private func deleteEvent(_ event: LocalPlantingEvent) {
-        do {
-            try appEnv.sync.enqueueDeletePlantingEvent(id: event.id)
-        } catch {
-            appEnv.surfaceError(error)
-            return
-        }
-        Task { await appEnv.syncIfPossible() }
+    private func show(_ text: String) {
+        message = text
     }
 
-    private func deleteBed() async {
-        do {
-            try appEnv.sync.enqueueDeleteBed(id: bedID)
-        } catch {
-            appEnv.surfaceError(error)
-            return
-        }
-        await appEnv.syncIfPossible()
-        dismiss()
+    private func run(_ input: GardenInteraction.Input, data: GardenBedData, actions: GardenActions) {
+        let planDate = GardenBedSupport.planDate(
+            brushSeedID: session.brushSeedID, seeds: seeds,
+            recommendation: { appEnv.recommendations.recommendation(for: $0) }
+        )
+        let outcome = GardenBedSupport.handle(
+            input, session: session, data: data, planDate: planDate, actions: actions,
+            onError: { appEnv.surfaceError($0) }
+        )
+        message = outcome.message
+        if let focus = outcome.focus { focusRequest = focus }
     }
-}
 
-private struct EventRow: View {
-    let event: LocalPlantingEvent
-    let seedName: String?
-
-    @ScaledMetric private var iconColumn: CGFloat = 22
-
-    var body: some View {
-        let kind = PlantingEventKind(rawValue: event.kindRaw)
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: kind?.systemImage ?? "calendar")
-                .foregroundStyle(event.completedAt == nil ? AnyShapeStyle(.tint) : AnyShapeStyle(WBColor.faint))
-                .frame(width: iconColumn)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(kind?.displayName ?? event.kindRaw.capitalized)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(WBColor.ink)
-                        .strikethrough(event.completedAt != nil)
-                    if let name = seedName {
-                        Text("·").foregroundStyle(WBColor.muted)
-                        Text(name)
-                            .font(.body)
-                            .foregroundStyle(WBColor.muted)
-                            .strikethrough(event.completedAt != nil)
-                    }
-                }
-                Text(humanDate(event.plannedFor))
-                    .font(.caption)
-                    .foregroundStyle(WBColor.muted)
-                if let notes = event.notes, !notes.isEmpty {
-                    Text(notes)
-                        .font(.caption)
-                        .foregroundStyle(WBColor.muted)
-                        .lineLimit(2)
-                }
-            }
-        }
+    /// Escape: closes details, then move mode, then the brush, then the selection.
+    private func cancel(data: GardenBedData) -> Bool {
+        guard let size = data.size else { return session.cancel() }
+        let before = session.interactionState
+        _ = session.handle(.cancel, context: .init(size: size, events: data.events, bedID: data.bedID, planDate: .today()))
+        return session.interactionState != before
     }
 }

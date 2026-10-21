@@ -49,10 +49,6 @@ enum AuditAllowlist {
     private static let systemTextField = Justification(
         reason: "System text field: scrolls its text horizontally instead of truncating.",
         recheck: "If the field becomes a multi-line or custom view.")
-    private static let canvasCap = Justification(
-        reason: "Bed canvas text is capped at .xxxLarge by design (R2c decision); "
-            + "names stay in VoiceOver and the events list.",
-        recheck: "If the cap is removed.")
 
     /// Dynamic Type on static text in a text style: the style and where it is set, then the audit's limit.
     private static func textStyle(_ style: String, _ source: String) -> Justification {
@@ -172,27 +168,12 @@ enum AuditAllowlist {
         accepted(.randomPick, "top", .dynamicType,
                  .labelAndType(label: "packed 2025", type: .staticText),
                  [.lightDefault, .darkDefault], textStyle(".wbCaption (medium weight)", "RandomPickView.swift:186")),
-        accepted(.bedDetail, "canvas", .dynamicType,
-                 .labelAndType(label: "Description", type: .staticText),
-                 [.lightDefault, .darkDefault], textStyle(".caption", "BedDetailView.swift:68")),
-        accepted(.bedDetail, "canvas", .dynamicType,
-                 .labelAndType(label: "Dimensions", type: .staticText),
-                 [.lightDefault, .darkDefault], textStyle("the default body style (LabeledContent)", "BedDetailView.swift:73")),
-        accepted(.bedDetail, "canvas", .dynamicType,
-                 .labelAndType(label: "Raised, full sun", type: .staticText),
-                 [.lightDefault, .darkDefault], textStyle("the default body style", "BedDetailView.swift:69")),
-        accepted(.bedDetail, "top", .dynamicType,
-                 .labelAndType(label: "Description", type: .staticText),
-                 [.lightDefault, .darkDefault], textStyle(".caption", "BedDetailView.swift:68")),
-        accepted(.bedDetail, "top", .dynamicType,
-                 .labelAndType(label: "Dimensions", type: .staticText),
-                 [.lightDefault, .darkDefault], textStyle("the default body style (LabeledContent)", "BedDetailView.swift:73")),
         accepted(.bedDetail, "top", .dynamicType,
                  .labelAndType(label: "Raised, full sun", type: .staticText),
-                 [.lightDefault, .darkDefault], textStyle("the default body style", "BedDetailView.swift:69")),
+                 [.lightDefault, .darkDefault], textStyle(".wbCallout", "BedDetailView.swift:242")),
         accepted(.windows, "top", .dynamicType,
                  .labelAndType(label: "Snap a corner", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], textStyle(".wbCallout (semibold)", "WindowsView.swift:94")),
+                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], textStyle(".wbCallout (semibold)", "WindowsView.swift:104")),
         accepted(.journalEntry, "top", .dynamicType,
                  .labelAndType(label: "Add photos", type: .staticText),
                  [.lightDefault, .darkDefault], textStyle("the default body style (Label)", "JournalEntryView.swift:105")),
@@ -304,32 +285,6 @@ enum AuditAllowlist {
         accepted(.apiKeys, "top", .dynamicType,
                  .labelAndType(label: "Active", type: .staticText),
                  [.lightDefault, .darkDefault], textStyle("the default body style (LabeledContent)", "APIKeysSettingsView.swift:41 and :46")),
-
-        // D (exception). Bed canvas planting labels, capped at .xxxLarge by design.
-        accepted(.bedDetail, "canvas", .dynamicType,
-                 .labelAndType(label: "Black Seeded Simpson", type: .staticText),
-                 [.lightDefault, .darkDefault], canvasCap),
-        accepted(.bedDetail, "canvas", .dynamicType,
-                 .labelAndType(label: "Brandywine", type: .staticText),
-                 [.lightDefault, .darkDefault], canvasCap),
-        accepted(.bedDetail, "canvas", .dynamicType,
-                 .labelAndType(label: "Danvers 126", type: .staticText),
-                 [.lightDefault, .darkDefault], canvasCap),
-        accepted(.bedDetail, "canvas", .dynamicType,
-                 .labelAndType(label: "Sugar Snap", type: .staticText),
-                 [.lightDefault, .darkDefault], canvasCap),
-        accepted(.bedDetail, "top", .dynamicType,
-                 .labelAndType(label: "Black Seeded Simpson", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], canvasCap),
-        accepted(.bedDetail, "top", .dynamicType,
-                 .labelAndType(label: "Brandywine", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], canvasCap),
-        accepted(.bedDetail, "top", .dynamicType,
-                 .labelAndType(label: "Danvers 126", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], canvasCap),
-        accepted(.bedDetail, "top", .dynamicType,
-                 .labelAndType(label: "Sugar Snap", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], canvasCap),
     ]
 
     /// The index of the first entry matching an issue, or nil. An issue without an element never matches.

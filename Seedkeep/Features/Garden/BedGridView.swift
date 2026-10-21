@@ -53,7 +53,9 @@ struct BedGridView: View {
                 guard let square else { return }
                 withAnimation { proxy.scrollTo(square, anchor: nil) }
             }
-            .onChange(of: focusRequest) { _, square in
+            // `initial`: a request set before this grid was built (its row recycled, or the grid
+            // rebuilt behind a sheet) is honoured when it appears.
+            .onChange(of: focusRequest, initial: true) { _, square in
                 guard let square else { return }
                 focusRequest = nil
                 focus(square, proxy: proxy, accessibility: true)

@@ -298,7 +298,10 @@ above both shells and injected into the environment):
 *From the G0 review:* the Garden screen in **both** shells calls
 `takePendingPlan()` (otherwise a leftover Plan fires on a later
 size-class switch). A `.needsBed` brush with no grid bed shows the
-add-a-bed prompt, never a Stop bar over the bed list or a gridless bed.
+add-a-bed prompt instead of a Stop bar. Otherwise Stop or Cancel shows
+whenever a mode is active, on every Garden screen, including the bed list
+and a gridless bed (amended after the G2 review, so a brush is never left
+active with no way to stop it).
 Gridless beds list their events from `offGrid`'s `noGrid` bucket, with no
 "Place" action.
 
@@ -338,6 +341,10 @@ Gridless beds list their events from `offGrid`'s `noGrid` bucket, with no
     × 8 for a new bed; description.
   - **Validation:** a size must be finite and from 1 to 50. A blank size
     is allowed and means no grid.
+    - *Amended after the G2 review:* a stored size can't be cleared. The
+      bed update input has no explicit null, and adding one would change
+      the sync path. A new bed, or a bed with no stored size, can stay
+      blank; clearing a stored size blocks Save with an explanation.
   - **Edits send only the changed fields.** An existing decimal size, a
     missing size, or a size over 50 is kept unless the user edits that
     field.

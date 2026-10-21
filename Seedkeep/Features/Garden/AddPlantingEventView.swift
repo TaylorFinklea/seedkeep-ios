@@ -30,14 +30,17 @@ struct AddPlantingEventView: View {
            sort: \.customName, order: .forward)
     private var seeds: [LocalSeed]
 
+    @Query(filter: #Predicate<LocalPlantingEvent> { $0.deletedAt == nil })
+    private var bedEvents: [LocalPlantingEvent]
+
     @State private var kind: PlantingEventKind = .sowing
     @State private var plannedFor: Date = Date()
     @State private var selectedBedID: String?
     @State private var selectedSeedID: String?
     @State private var notes: String = ""
     @State private var hasPosition: Bool = false
-    @State private var xFeet: Double = 1
-    @State private var yFeet: Double = 1
+    /// The square picked on the bed's grid; the planting is placed at its centre.
+    @State private var pickedSquare: GridSquare?
     @State private var saving = false
     @State private var error: String?
 
@@ -71,6 +74,7 @@ struct AddPlantingEventView: View {
                 if selectedSeedID == nil { selectedSeedID = prefillSeedID }
                 if let date = prefillDate { plannedFor = date }
             }
+            .onChange(of: selectedBedID) { _, _ in pickedSquare = nil }
             .task(id: refinementKey) {
                 await refreshRefinement()
             }
@@ -213,53 +217,43 @@ struct AddPlantingEventView: View {
         }
     }
 
+    /// "Place in bed": a small grid of the selected bed. The planting is placed at the picked square's
+    /// centre; without a pick it stays unplaced.
     @ViewBuilder
     private var positionSection: some View {
-        if let bed = selectedBed, let width = bed.widthFeet, let length = bed.lengthFeet,
-           width > 0, length > 0 {
+        if let bed = selectedBed,
+           let size = GardenGrid.size(widthFeet: bed.widthFeet, lengthFeet: bed.lengthFeet) {
             Section {
                 Toggle("Place in bed", isOn: $hasPosition)
+                    .accessibilityIdentifier("addPlanting.placeInBed")
                 if hasPosition {
-                    HStack {
-                        Text("X")
-                        Slider(value: $xFeet, in: 0...width, step: 0.5)
-                        Text("\(formatFt(xFeet))′")
-                            .font(.wbMonoCaption)
-                            .foregroundStyle(WBColor.muted)
-                            .frame(minWidth: 36, alignment: .trailing)
-                    }
-                    HStack {
-                        Text("Y")
-                        Slider(value: $yFeet, in: 0...length, step: 0.5)
-                        Text("\(formatFt(yFeet))′")
-                            .font(.wbMonoCaption)
-                            .foregroundStyle(WBColor.muted)
-                            .frame(minWidth: 36, alignment: .trailing)
-                    }
-                    BedLayoutCanvas(
-                        widthFeet: width,
-                        lengthFeet: length,
-                        placements: [
-                            BedLayoutCanvas.Placement(
-                                id: "preview",
-                                x: xFeet, y: yFeet,
-                                spacingFeet: 0,
-                                label: "",
-                                isSowing: kind == .sowing
-                            )
-                        ]
+                    BedSquarePicker(
+                        size: size,
+                        squares: squares(in: bed, size: size),
+                        seedName: { event in event.seedID.flatMap { id in activeSeeds.first { $0.id == id }?.displayName } },
+                        selection: $pickedSquare
                     )
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
+                    Text(pickedSquare.map { "Placed in \(GardenGrid.label($0))." } ?? "Tap a square to place it.")
+                        .font(.wbFootnote)
+                        .foregroundStyle(WBColor.muted)
                 }
             } header: {
                 WBSectionHeader("position")
             } footer: {
-                Text("Distance in feet from the bottom-left corner of the bed.")
+                Text(GardenLegend.scale)
                     .font(.wbFootnote)
                     .foregroundStyle(WBColor.muted)
             }
         }
+    }
+
+    /// What the bed's squares hold now, for the picker's faces.
+    private func squares(in bed: LocalBed, size: GridSize) -> [GridSquare: SquareContents] {
+        let events = bedEvents
+            .filter { $0.bedID == bed.id && $0.householdID == bed.householdID }
+            .map { GridEvent($0, isFrostFlagged: false) }
+        return GardenGrid.squares(events: events, bedID: bed.id, size: size)
     }
 
     @ViewBuilder
@@ -291,10 +285,6 @@ struct AddPlantingEventView: View {
     private var activeSeeds: [LocalSeed] {
         guard let householdID = appEnv.activeGardenHouseholdID else { return [] }
         return seeds.filter { $0.householdID == householdID }
-    }
-
-    private func formatFt(_ v: Double) -> String {
-        v.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(v))" : String(format: "%.1f", v)
     }
 
     @ViewBuilder
@@ -334,16 +324,15 @@ struct AddPlantingEventView: View {
             return
         }
         let activeGardenHouseholdID = appEnv.activeGardenHouseholdID ?? household.id
-        let input = SeedkeepClient.CreatePlantingEventInput(
-            bed_id: selectedBedID,
-            seed_id: selectedSeedID,
-            catalog_seed_id: nil,
+        let input = PlaceInBed.createInput(
+            bedID: selectedBedID,
+            seedID: selectedSeedID,
             kind: kind,
-            planned_for: Self.yyyymmdd(plannedFor),
-            completed_at: nil,
+            plannedFor: Self.yyyymmdd(plannedFor),
             notes: notes.trimmedNonEmpty,
-            x_feet: hasPosition ? xFeet : nil,
-            y_feet: hasPosition ? yFeet : nil
+            square: hasPosition ? pickedSquare : nil,
+            widthFeet: selectedBed?.widthFeet,
+            lengthFeet: selectedBed?.lengthFeet
         )
         do {
             _ = try appEnv.sync.enqueueCreatePlantingEvent(input, householdID: activeGardenHouseholdID)

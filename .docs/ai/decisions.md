@@ -332,6 +332,19 @@
 
 **Rationale**: Dark mode and large text should work without surprises, and a fixture session must never change a developer's real device.
 
+## 2026-10-21 — Garden grid editing limits (R3 G2)
+
+**Context**: R3 replaced the bed canvas with a square-foot grid and new New/Edit bed sheets, without changing the sync path or the CloudKit schema.
+
+**Decision**:
+- A stored bed size can't be cleared. `UpdateBedInput` has no explicit null, and plain nil means "unchanged", so clearing a size blocks Save with an explanation. A new bed, or a bed with no stored size, can stay blank (no grid).
+- "Place in bed" in Add Planting may pick a square that already holds a planting. Painting and Move refuse such a square, but "empty square" is a local UI rule (sync allows several plantings per square), and adding a harvest or note to a planted square is normal. The picker shows and speaks what the square holds.
+- The sample garden keeps its ZIP's real frost dates; only its frost-flagged sowing's date follows the launch day.
+
+**Alternatives considered**: an explicit null for bed sizes (`.some(nil)`, as planting events already use for `completed_at`), which changes the encoded patch, coalescing and the push path; refusing occupied squares in Add Planting.
+
+**Rationale**: R3's invariant is no sync or schema change. Clearing a size is rare and can follow as its own change.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in

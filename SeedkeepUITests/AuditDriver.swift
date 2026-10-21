@@ -235,8 +235,9 @@ final class AuditDriver {
         return lines
     }
 
-    /// Element types a drag must not start on: controls a drag could change, and the bed canvas's dots
-    /// (dragging one moves the planting). Text fields are safe: a drag scrolls and only a tap focuses.
+    /// Element types a drag must not start on: controls a drag could change. The bed grid's squares are
+    /// avoided too: a drag there scrolls the grid, not the page. Text fields are safe: a drag scrolls and
+    /// only a tap focuses.
     private static let unsafeDragTypes: Set<XCUIElement.ElementType> = [
         .switch, .toggle, .slider, .stepper, .segmentedControl, .picker, .pickerWheel, .datePicker, .map,
     ]
@@ -245,7 +246,7 @@ final class AuditDriver {
     private func dragPoints(_ direction: Direction) throws -> (XCUICoordinate, XCUICoordinate) {
         var unsafe: [CGRect] = []
         func walk(_ snapshot: XCUIElementSnapshot) {
-            if Self.unsafeDragTypes.contains(snapshot.elementType) || snapshot.label.contains("from the left") {
+            if Self.unsafeDragTypes.contains(snapshot.elementType) || snapshot.identifier.hasPrefix("garden.grid.") {
                 unsafe.append(snapshot.frame.insetBy(dx: -16, dy: -16))
             }
             snapshot.children.forEach(walk)

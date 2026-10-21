@@ -41,6 +41,10 @@ struct WindowsView: View {
     @State private var markerLabelWidths: [Int: Double] = [:]
     @State private var showNeedsBedPrompt = false
     @State private var showAddBed = false
+    /// The seed whose Plan asked for a bed, and the bed New bed then created, so the Plan resumes when
+    /// the sheet closes.
+    @State private var planAwaitingBed: WindowsRow?
+    @State private var createdBed: GardenSession.BedChoice?
     @State private var planMessage: String?
 
     @State private var cornerViewModel: CornerSuggestionsViewModel?
@@ -120,8 +124,8 @@ struct WindowsView: View {
                     .environment(appEnv)
             }
         }
-        .sheet(isPresented: $showAddBed) {
-            AddBedView()
+        .sheet(isPresented: $showAddBed, onDismiss: resumePlanAfterNewBed) {
+            AddBedView(onCreated: { createdBed = $0 })
         }
         .alert("Add a bed with a size to plan", isPresented: $showNeedsBedPrompt) {
             Button("New bed") { showAddBed = true }
@@ -418,8 +422,10 @@ struct WindowsView: View {
 
     /// Plans the row's seed in the window's Garden session, then routes from the host shell. Only a sheet is
     /// dismissed: the workbench's Windows route is the window's root, and closing it would close the window.
-    private func plan(_ row: WindowsRow) {
-        let beds = householdBeds.map { GardenSession.BedChoice($0) }
+    private func plan(_ row: WindowsRow, newBed: GardenSession.BedChoice? = nil) {
+        var beds = householdBeds.map { GardenSession.BedChoice($0) }
+        // A bed just created may not be in the query yet.
+        if let newBed, !beds.contains(where: { $0.id == newBed.id }) { beds.append(newBed) }
         let result = garden.plan(seedID: row.id, isActive: row.isActive, beds: beds)
         switch WindowsPlanRoute.route(for: result, seedName: row.name, host: host) {
         case .gardenTab:
@@ -429,10 +435,23 @@ struct WindowsView: View {
             workbench?.route = .garden
             closeIfSheet()
         case .addBed:
+            planAwaitingBed = row
             showNeedsBedPrompt = true
         case .message(let text):
             planMessage = text
         }
+    }
+
+    /// After New bed from the add-a-bed prompt: plans the seed again when the brush is still set and
+    /// the new bed has a grid, rather than making the user tap Plan again.
+    private func resumePlanAfterNewBed() {
+        defer {
+            createdBed = nil
+            planAwaitingBed = nil
+        }
+        guard let row = planAwaitingBed,
+              GardenPlanHandoff.seedToResume(brushSeedID: garden.brushSeedID, created: createdBed) == row.id else { return }
+        plan(row, newBed: createdBed)
     }
 
     private func closeIfSheet() {

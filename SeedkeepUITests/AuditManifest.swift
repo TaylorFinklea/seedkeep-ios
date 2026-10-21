@@ -51,6 +51,8 @@ enum AuditFixture {
     static let detailSeedID = "00000000-0000-4000-8000-000100000001"
     /// North bed.
     static let northBedID = "00000000-0000-4000-8000-000200000001"
+    /// Sugar Snap's sowing in North bed: its events-list row opens square details.
+    static let squareDetailsEventID = "00000000-0000-4000-8000-000300000004"
     /// The "Dill is up" entry.
     static let journalEntryID = "00000000-0000-4000-8000-000600000001"
 }
@@ -98,13 +100,16 @@ enum AuditCheckpointPlan: Sendable, Equatable {
     case pagesToEnd
     /// Scrolled until a named part of the screen is in view.
     case anchor(AuditAnchor)
+    /// Bed screen only: opens square details (a sheet) from a planting's events-list row, audits it
+    /// (`garden.squareDetails`, on the sheet's content), then closes it with Done. Opening details writes nothing.
+    case squareDetails
 }
 
 enum AuditAnchor: String, Sendable {
     /// Seed detail's "Planting window" section.
     case plantingPanel
-    /// Bed detail's layout canvas, down to its footer.
-    case canvas
+    /// The bed screen's grid, its first square in view.
+    case grid
 }
 
 struct AuditStop: Sendable {
@@ -124,7 +129,7 @@ enum AuditManifest {
         AuditStop(destination: .randomPick, checkpoints: [.top]),
 
         AuditStop(destination: .garden, checkpoints: [.top]),
-        AuditStop(destination: .bedDetail, checkpoints: [.top, .anchor(.canvas)]),
+        AuditStop(destination: .bedDetail, checkpoints: [.top, .anchor(.grid), .squareDetails]),
         AuditStop(destination: .windows, checkpoints: [.top]),
 
         AuditStop(destination: .journal, checkpoints: [.top]),

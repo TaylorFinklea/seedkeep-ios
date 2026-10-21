@@ -5,6 +5,8 @@ import SeedkeepKit
 /// A bed's events: a `Table` on regular width (iPad and Mac), a `List` on compact. Columns are Done,
 /// Date, Task, Seed, Square, Status and Notes; rows are ordered by date and then id. Selecting a row
 /// selects its event and opens details. Unplaced and outside rows have "Place", which starts a move.
+/// `embedded` renders the compact rows without their own `List`, for a parent `List` (the iPhone bed
+/// screen), at any size class.
 struct BedEventsList: View {
     enum Rows {
         /// Every live event of the bed.
@@ -15,6 +17,7 @@ struct BedEventsList: View {
 
     let bedID: String
     let rowsShown: Rows
+    let embedded: Bool
     let session: GardenSession
     let actions: GardenActions
     let climate: HomeClimate?
@@ -32,6 +35,7 @@ struct BedEventsList: View {
     init(
         bedID: String,
         rows: Rows = .all,
+        embedded: Bool = false,
         session: GardenSession,
         actions: GardenActions,
         climate: HomeClimate?,
@@ -41,6 +45,7 @@ struct BedEventsList: View {
     ) {
         self.bedID = bedID
         self.rowsShown = rows
+        self.embedded = embedded
         self.session = session
         self.actions = actions
         self.climate = climate
@@ -73,6 +78,17 @@ struct BedEventsList: View {
 
     var body: some View {
         let rows = rows
+        if embedded {
+            ForEach(rows) { row in
+                listRow(row)
+                    .listRowBackground(row.id == session.selectedEventID ? WBColor.selection : WBColor.panel)
+            }
+        } else {
+            standalone(rows)
+        }
+    }
+
+    private func standalone(_ rows: [BedEventRow]) -> some View {
         Group {
             if isRegular {
                 table(rows)
@@ -161,6 +177,7 @@ struct BedEventsList: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(row.accessibilityLabel)
             .accessibilityAddTraits(row.id == session.selectedEventID ? [.isButton, .isSelected] : .isButton)
+            .accessibilityIdentifier("garden.events.select.\(row.id)")
             if row.canPlace {
                 placeButton(row)
             }
