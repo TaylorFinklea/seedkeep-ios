@@ -100,9 +100,15 @@ struct WindowsView: View {
                     photoLibrary: .shared()
                 ) {
                     HStack(spacing: 4) {
-                        Image(systemName: "camera.viewfinder")
-                        Text("Snap a corner")
-                            .font(.wbCallout.weight(.semibold))
+                        // Icon only at accessibility sizes, so the title keeps room; VoiceOver still says it.
+                        if dynamicTypeSize.isAccessibilitySize {
+                            Image(systemName: "camera.viewfinder")
+                                .accessibilityLabel("Snap a corner")
+                        } else {
+                            Image(systemName: "camera.viewfinder")
+                            Text("Snap a corner")
+                                .font(.wbCallout.weight(.semibold))
+                        }
                     }
                     .foregroundStyle(WBColor.accent)
                 }
@@ -517,62 +523,81 @@ private struct WindowsSeedRow: View {
     let showsDates: Bool
     let onPlan: () -> Void
 
-    var body: some View {
-        HStack(alignment: .center, spacing: WBMetrics.gapLarge) {
-            NavigationLink(value: WindowsSeedDestination(seedID: row.id)) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(row.name)
-                        .font(.wbHeadline)
-                        .foregroundStyle(WBColor.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if showsDates, let outdoor = row.outdoor {
-                        Text("Outdoors \(WindowsRowFormat.windowText(outdoor))")
-                            .font(.wbCaption)
-                            .foregroundStyle(WBColor.muted)
-                    }
-                    if showsDates, let indoor = row.indoor {
-                        Text("Indoors \(WindowsRowFormat.windowText(indoor))")
-                            .font(.wbCaption)
-                            .foregroundStyle(WBColor.muted)
-                    }
-                    if let timing = row.timing {
-                        Text(timing)
-                            .font(.wbCaption)
-                            .foregroundStyle(WBColor.muted)
-                    }
-                    if let reason = row.noWindowReason {
-                        Text(reason)
-                            .font(.wbCaption)
-                            .foregroundStyle(WBColor.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let next = row.nextPlanned {
-                        Text(WindowsRowFormat.nextPlannedText(next))
-                            .font(.wbCaption)
-                            .foregroundStyle(WBColor.muted)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            // On the link itself, so the element VoiceOver focuses carries the label and the Plan action.
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(WindowsRowFormat.accessibilityLabel(row))
-            .accessibilityAction(named: "Plan") { onPlan() }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-            Button(action: onPlan) {
-                Text("Plan")
-                    .font(.wbCallout.weight(.semibold))
-                    .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
-                    .contentShape(Rectangle())
+    var body: some View {
+        // At accessibility sizes Plan goes under the text, so the name and dates keep the full width.
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: WBMetrics.gap) {
+                    link
+                    plan
+                }
+            } else {
+                HStack(alignment: .center, spacing: WBMetrics.gapLarge) {
+                    link
+                    plan
+                }
             }
-            .buttonStyle(.bordered)
-            .tint(WBColor.accent)
-            .accessibilityLabel("Plan \(row.name)")
-            .accessibilityIdentifier("windows.plan.\(row.id)")
         }
         .padding(.vertical, 2)
+    }
+
+    private var link: some View {
+        NavigationLink(value: WindowsSeedDestination(seedID: row.id)) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.name)
+                    .font(.wbHeadline)
+                    .foregroundStyle(WBColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                if showsDates, let outdoor = row.outdoor {
+                    Text("Outdoors \(WindowsRowFormat.windowText(outdoor))")
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
+                }
+                if showsDates, let indoor = row.indoor {
+                    Text("Indoors \(WindowsRowFormat.windowText(indoor))")
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
+                }
+                if let timing = row.timing {
+                    Text(timing)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
+                }
+                if let reason = row.noWindowReason {
+                    Text(reason)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let next = row.nextPlanned {
+                    Text(WindowsRowFormat.nextPlannedText(next))
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.muted)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // On the link itself, so the element VoiceOver focuses carries the label and the Plan action.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(WindowsRowFormat.accessibilityLabel(row))
+        .accessibilityAction(named: "Plan") { onPlan() }
+    }
+
+    private var plan: some View {
+        Button(action: onPlan) {
+            Text("Plan")
+                .font(.wbCallout.weight(.semibold))
+                .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.bordered)
+        .tint(WBColor.accent)
+        .accessibilityLabel("Plan \(row.name)")
+        .accessibilityIdentifier("windows.plan.\(row.id)")
     }
 }
 

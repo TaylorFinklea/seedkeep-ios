@@ -239,6 +239,8 @@ struct GardenModeBar: View {
     let onDetails: () -> Void
     let onStop: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         switch mode {
         case .idle:
@@ -259,36 +261,58 @@ struct GardenModeBar: View {
     }
 
     private func bar(text: String, showsDetails: Bool, stopLabel: String) -> some View {
-        HStack(spacing: WBMetrics.gap) {
-            Text(text)
-                .font(.wbCallout.weight(.semibold))
-                .foregroundStyle(WBColor.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-            // The minimum frame and the hit shape sit inside each label, so the whole target grows.
-            if showsDetails {
-                Button(action: onDetails) {
-                    Text("Details")
-                        .frame(minHeight: WBMetrics.minTouchTarget)
-                        .contentShape(Rectangle())
+        let label = Text(text)
+            .font(.wbCallout.weight(.semibold))
+            .foregroundStyle(WBColor.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+        return Group {
+            // At accessibility sizes the text takes the full width and the buttons go below it, side by side
+            // when they fit and stacked when they don't, so no word is split across lines.
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: WBMetrics.gap) {
+                    label
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: WBMetrics.gap) { buttons(showsDetails: showsDetails, stopLabel: stopLabel) }
+                        VStack(alignment: .leading, spacing: WBMetrics.gap) {
+                            buttons(showsDetails: showsDetails, stopLabel: stopLabel)
+                        }
+                    }
                 }
-                .buttonStyle(.bordered)
-                .disabled(!hasSelection)
-                .accessibilityIdentifier("garden.modeBar.details")
+            } else {
+                HStack(spacing: WBMetrics.gap) {
+                    label
+                    buttons(showsDetails: showsDetails, stopLabel: stopLabel)
+                }
             }
-            Button(action: onStop) {
-                Text(stopLabel)
-                    .foregroundStyle(WBColor.accentInk)
-                    .frame(minHeight: WBMetrics.minTouchTarget)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(WBColor.accent)
-            .accessibilityIdentifier("garden.modeBar.stop")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(WBColor.accentSoft, in: RoundedRectangle(cornerRadius: WBMetrics.radiusControl))
         .overlay(RoundedRectangle(cornerRadius: WBMetrics.radiusControl).strokeBorder(WBColor.line, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func buttons(showsDetails: Bool, stopLabel: String) -> some View {
+        // The minimum frame and the hit shape sit inside each label, so the whole target grows.
+        if showsDetails {
+            Button(action: onDetails) {
+                Text("Details")
+                    .frame(minHeight: WBMetrics.minTouchTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasSelection)
+            .accessibilityIdentifier("garden.modeBar.details")
+        }
+        Button(action: onStop) {
+            Text(stopLabel)
+                .foregroundStyle(WBColor.accentInk)
+                .frame(minHeight: WBMetrics.minTouchTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(WBColor.accent)
+        .accessibilityIdentifier("garden.modeBar.stop")
     }
 }

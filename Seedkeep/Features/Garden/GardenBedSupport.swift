@@ -298,23 +298,10 @@ struct GardenAddBedPrompt: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityElement(children: .combine)
             }
-            HStack(spacing: WBMetrics.gap) {
-                Button(action: onNewBed) {
-                    Text("New bed")
-                        .foregroundStyle(WBColor.accentInk)
-                        .frame(minHeight: WBMetrics.minTouchTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(WBColor.accent)
-                .accessibilityIdentifier("garden.addBedPrompt.newBed")
-                Button(action: onStop) {
-                    Text("Stop painting")
-                        .frame(minHeight: WBMetrics.minTouchTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("garden.addBedPrompt.stop")
+            // Side by side when they fit; stacked at large text sizes, so no word is split across lines.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: WBMetrics.gap) { buttons }
+                VStack(alignment: .leading, spacing: WBMetrics.gap) { buttons }
             }
         }
         .padding(.horizontal, 14)
@@ -324,6 +311,26 @@ struct GardenAddBedPrompt: View {
         .overlay(RoundedRectangle(cornerRadius: WBMetrics.radiusControl).strokeBorder(WBColor.line, lineWidth: 1))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("garden.addBedPrompt")
+    }
+
+    @ViewBuilder
+    private var buttons: some View {
+        Button(action: onNewBed) {
+            Text("New bed")
+                .foregroundStyle(WBColor.accentInk)
+                .frame(minHeight: WBMetrics.minTouchTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(WBColor.accent)
+        .accessibilityIdentifier("garden.addBedPrompt.newBed")
+        Button(action: onStop) {
+            Text("Stop painting")
+                .frame(minHeight: WBMetrics.minTouchTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("garden.addBedPrompt.stop")
     }
 }
 

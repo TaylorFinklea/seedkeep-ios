@@ -161,6 +161,8 @@ struct BedDetailView: View {
             GardenCompanionsSection(events: bedEvents)
             EntityScopedJournalSection(parent: .bed(bed.id))
         }
+        // On the list itself: applied after `safeAreaInset`, it would replace the pinned bar's own identifiers.
+        .accessibilityIdentifier("screen.bedDetail")
         .scrollContentBackground(.hidden)
         .background(WBScreenBackground())
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -223,7 +225,6 @@ struct BedDetailView: View {
         .onKeyPress(.escape) {
             cancel(data: data) ? .handled : .ignored
         }
-        .accessibilityIdentifier("screen.bedDetail")
     }
 
     private func header(_ bed: LocalBed) -> some View {

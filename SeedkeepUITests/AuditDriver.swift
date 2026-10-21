@@ -245,25 +245,37 @@ final class AuditDriver {
     /// A start and end point for a page drag, in a column whose start point is clear of unsafe elements.
     private func dragPoints(_ direction: Direction) throws -> (XCUICoordinate, XCUICoordinate) {
         var unsafe: [CGRect] = []
-        func walk(_ snapshot: XCUIElementSnapshot) {
-            if Self.unsafeDragTypes.contains(snapshot.elementType) || snapshot.identifier.hasPrefix("garden.grid.") {
+        // The grid scrolls inside its own frame, and squares scrolled out of it still report frames below it,
+        // so each square counts only where it shows inside the grid ("garden.grid").
+        func walk(_ snapshot: XCUIElementSnapshot, gridFrame: CGRect?) {
+            var gridFrame = gridFrame
+            if snapshot.identifier == "garden.grid" { gridFrame = snapshot.frame }
+            if Self.unsafeDragTypes.contains(snapshot.elementType) {
                 unsafe.append(snapshot.frame.insetBy(dx: -16, dy: -16))
+            } else if snapshot.identifier.hasPrefix("garden.grid.") {
+                let shown = gridFrame.map { snapshot.frame.intersection($0) } ?? snapshot.frame
+                if !shown.isNull { unsafe.append(shown.insetBy(dx: -16, dy: -16)) }
             }
-            snapshot.children.forEach(walk)
+            snapshot.children.forEach { walk($0, gridFrame: gridFrame) }
         }
-        walk(try app.snapshot())
+        walk(try app.snapshot(), gridFrame: nil)
 
         let frame = window.frame
         let bottom = min(visibleBottom(), frame.maxY) - frame.minY
         let low = (bottom - 24) / frame.height
         let high = 0.28
-        for dx in [0.5, 0.88, 0.12, 0.96, 0.04] {
-            for lowY in [low * 0.92, low * 0.8, low, low * 0.68] {
-                let fromY = direction == .down ? lowY : high
-                let toY = direction == .down ? high : lowY
-                let start = window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: fromY))
-                if !unsafe.contains(where: { $0.contains(start.screenPoint) }) {
-                    return (start, window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: toY)))
+        // The usual starts near the bottom first; then, only if all of them are blocked (the bed grid fills the
+        // lower screen at the largest text sizes), shorter drags that start higher, above the grid.
+        let passes = [[low * 0.92, low * 0.8, low, low * 0.68], [0.5, 0.42]]
+        for lowYs in passes {
+            for dx in [0.5, 0.88, 0.12, 0.96, 0.04] {
+                for lowY in lowYs {
+                    let fromY = direction == .down ? lowY : high
+                    let toY = direction == .down ? high : lowY
+                    let start = window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: fromY))
+                    if !unsafe.contains(where: { $0.contains(start.screenPoint) }) {
+                        return (start, window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: toY)))
+                    }
                 }
             }
         }
