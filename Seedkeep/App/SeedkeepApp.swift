@@ -12,7 +12,6 @@ struct SeedkeepApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var pendingInviteCode: String?
     @State private var pendingHandoff: AccountDeletionHandoffLink?
-    @AppStorage(AppAppearance.storageKey, store: DevicePreferences.store) private var storedAppearance: String = AppAppearance.system.rawValue
     #if os(macOS)
     @MainActor private static var didRunStartup = false
     #endif
@@ -44,7 +43,7 @@ struct SeedkeepApp: App {
             .environment(environment.auth)
             .modelContainer(environment.container)
             // The Light / Dark / System choice from Settings. System (nil) follows the device.
-            .preferredColorScheme(AppAppearance.resolve(storedAppearance).colorScheme)
+            .modifier(AppAppearanceModifier())
             // Workbench accent for controls, links and progress, on every platform.
             .tint(WBColor.accent)
             .task {

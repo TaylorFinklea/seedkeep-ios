@@ -38,3 +38,14 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         resolve(DevicePreferences.store.string(forKey: storageKey))
     }
 }
+
+/// Applies the stored appearance to a window's content. It's a view, not the `App`, that reads the
+/// preference, so the window updates as soon as Settings changes it.
+struct AppAppearanceModifier: ViewModifier {
+    @AppStorage(AppAppearance.storageKey, store: DevicePreferences.store)
+    private var storedAppearance: String = AppAppearance.system.rawValue
+
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(AppAppearance.resolve(storedAppearance).colorScheme)
+    }
+}
