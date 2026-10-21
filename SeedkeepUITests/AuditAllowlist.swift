@@ -49,6 +49,9 @@ enum AuditAllowlist {
     private static let systemTextField = Justification(
         reason: "System text field: scrolls its text horizontally instead of truncating.",
         recheck: "If the field becomes a multi-line or custom view.")
+    private static let navigationTitle = Justification(
+        reason: "System inline navigation title; shown in full in the R3 screenshots at every size.",
+        recheck: "If the title becomes custom.")
 
     /// Dynamic Type on static text in a text style: the style and where it is set, then the audit's limit.
     private static func textStyle(_ style: String, _ source: String) -> Justification {
@@ -98,6 +101,9 @@ enum AuditAllowlist {
         accepted(.windows, "top", .dynamicType,
                  .labelAndType(label: "Done", type: .button),
                  [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], toolbarButton),
+        accepted(.bedDetail, "squareDetails", .dynamicType,
+                 .identifier("garden.squareDetails.done"),
+                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], toolbarButton),
         accepted(.journalEntry, "top", .dynamicType,
                  .labelAndType(label: "Cancel", type: .button),
                  [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], toolbarButton),
@@ -127,6 +133,11 @@ enum AuditAllowlist {
         accepted(.addSeed, "top", .textClipped,
                  .labelAndType(label: "", type: .textField),
                  [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], systemTextField),
+
+        // C. The "Windows" inline navigation title: clipped text.
+        accepted(.windows, "top", .textClipped,
+                 .labelAndType(label: "Windows", type: .staticText),
+                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], navigationTitle),
 
         // D. Dynamic Type on static text in a text style, checked against the view code.
         accepted(.seedDetail, "plantingPanel", .dynamicType,
@@ -168,12 +179,6 @@ enum AuditAllowlist {
         accepted(.randomPick, "top", .dynamicType,
                  .labelAndType(label: "packed 2025", type: .staticText),
                  [.lightDefault, .darkDefault], textStyle(".wbCaption (medium weight)", "RandomPickView.swift:186")),
-        accepted(.bedDetail, "top", .dynamicType,
-                 .labelAndType(label: "Raised, full sun", type: .staticText),
-                 [.lightDefault, .darkDefault], textStyle(".wbCallout", "BedDetailView.swift:242")),
-        accepted(.windows, "top", .dynamicType,
-                 .labelAndType(label: "Snap a corner", type: .staticText),
-                 [.lightDefault, .darkDefault, .lightAXXXL, .darkAXXXL], textStyle(".wbCallout (semibold)", "WindowsView.swift:104")),
         accepted(.journalEntry, "top", .dynamicType,
                  .labelAndType(label: "Add photos", type: .staticText),
                  [.lightDefault, .darkDefault], textStyle("the default body style (Label)", "JournalEntryView.swift:105")),
