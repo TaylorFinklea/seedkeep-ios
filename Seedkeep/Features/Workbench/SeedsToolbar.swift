@@ -23,6 +23,7 @@ struct SeedsToolbar: View {
     let onUndo: () -> Void
     let onRedo: () -> Void
     let onExport: () -> Void
+    let onImport: () -> Void
     let onNew: () -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -60,7 +61,8 @@ struct SeedsToolbar: View {
         .background(WBColor.panel)
     }
 
-    /// The table actions, in reading order: Select, Undo and Redo (iPad only), Inspector, Export, New.
+    /// The table actions, in reading order: Select, Undo and Redo (iPad only), Inspector, Export, the
+    /// More menu (Import CSV), New.
     @ViewBuilder
     private var tableActions: some View {
         if !PlatformCapabilities.isMac {
@@ -94,6 +96,18 @@ struct SeedsToolbar: View {
         }
         .disabled(!canExport)
         .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
+        Menu {
+            Button(action: onImport) {
+                Label("Import CSV…", systemImage: "square.and.arrow.down")
+            }
+            .accessibilityIdentifier("seeds.importCSV")
+        } label: {
+            Label("More actions", systemImage: "ellipsis.circle")
+                .labelStyle(.iconOnly)
+        }
+        .menuIndicator(.hidden)
+        .frame(minWidth: SeedsLayout.controlMinHeight, minHeight: SeedsLayout.controlMinHeight)
+        .accessibilityIdentifier("seeds.moreActions")
         Button(action: onNew) {
             Label("New seed", systemImage: "plus")
                 .labelStyle(.iconOnly)

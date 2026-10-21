@@ -14,6 +14,7 @@ struct CommandPaletteItem: Identifiable, Equatable {
             switch request {
             case .newSeed: identity = "newSeed"
             case .exportCSV: identity = "exportCSV"
+            case .importCSV: identity = "importCSV"
             case .focusSearch: identity = "focusSearch"
             case .deleteSelection: identity = "deleteSelection"
             case .randomPick: identity = "randomPick"
@@ -26,10 +27,12 @@ struct CommandPaletteItem: Identifiable, Equatable {
 }
 
 enum CommandPaletteSearch {
+    /// `canImport` is false while a CSV import is writing; Import CSV is then left out.
     static func results(
         query: String,
         rows: [SeedTableRow],
-        isMac: Bool = WorkbenchNavigation.isMacPlatform
+        isMac: Bool = WorkbenchNavigation.isMacPlatform,
+        canImport: Bool = true
     ) -> [CommandPaletteItem] {
         var items: [CommandPaletteItem] = [
             .init(title: "New seed", hint: "Create a seed", group: "Actions", kind: .action(.newSeed)),
@@ -41,6 +44,10 @@ enum CommandPaletteSearch {
         items += rows.map { .init(title: $0.name, hint: [$0.variety, $0.type, $0.company].filter { !$0.isEmpty }.joined(separator: " · "), group: "Seeds", kind: .seed($0.id)) }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return items.sorted(by: tieBreak).prefix(9).map { $0 } }
+        // Import CSV matches a typed query only, so the empty-query suggestions keep their routes.
+        if canImport {
+            items.append(.init(title: "Import CSV", hint: "Add or update seeds from a CSV file", group: "Actions", kind: .action(.importCSV)))
+        }
         return items.compactMap { item -> (Int, CommandPaletteItem)? in
             let fields = [item.title, item.hint, item.group].map { $0.lowercased() }
             let rank: Int? = fields.contains(where: { $0.hasPrefix(needle) }) ? 0 :
@@ -152,7 +159,9 @@ struct CommandPaletteView: View {
     }
 
     private func refreshResults() {
-        cachedResults = CommandPaletteSearch.results(query: query, rows: rows)
+        cachedResults = CommandPaletteSearch.results(
+            query: query, rows: rows, canImport: !SeedCSVImportCenter.shared.isWriting
+        )
         selectedIndex = 0
     }
 

@@ -10,6 +10,7 @@ struct LibraryView: View {
     @State private var showingAdd = false
     @State private var showingScan = false
     @State private var showingRandom = false
+    @State private var showingImporter = false
     @State private var scanPrefill: AddSeedView.Prefill?
     // Per device, in the fixture suite in sample-garden mode, so a sample-garden launch starts ungrouped.
     @AppStorage("library.groupByType", store: DevicePreferences.store) private var groupByType = false
@@ -110,6 +111,12 @@ struct LibraryView: View {
                 ToolbarItem(placement: .platformLeading) {
                     Menu {
                         Toggle("Group by type", isOn: $groupByType)
+                        Button {
+                            showingImporter = true
+                        } label: {
+                            Label("Import CSV…", systemImage: "square.and.arrow.down")
+                        }
+                        .accessibilityIdentifier("seeds.importCSV")
                     } label: {
                         Image(systemName: groupByType ? "rectangle.3.group" : "line.3.horizontal")
                             .frame(minWidth: WBMetrics.minTouchTarget, minHeight: WBMetrics.minTouchTarget)
@@ -144,6 +151,7 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $showingAdd) { AddSeedView() }
             .sheet(isPresented: $showingRandom) { RandomPickView() }
+            .seedCSVImport(isPresented: $showingImporter)
             #if os(iOS)
             .fullScreenCover(isPresented: $showingScan) {
                 ScanFlow { result in

@@ -24,7 +24,9 @@ struct WorkbenchPaletteTests {
 
         #expect(titleMatch.contains { $0.id == "action:newSeed" })
         #expect(hintMatch.contains { $0.id == "action:newSeed" })
-        #expect(groupMatches.map(\.id) == ["action:exportCSV", "action:focusSearch", "action:newSeed", "action:randomPick"])
+        #expect(groupMatches.map(\.id) == [
+            "action:exportCSV", "action:focusSearch", "action:importCSV", "action:newSeed", "action:randomPick",
+        ])
     }
 
     @Test("ties sort Actions, Go to, then Seeds and alphabetically within each group")
@@ -41,6 +43,14 @@ struct WorkbenchPaletteTests {
         // Seeds come after Actions and Go to, alphabetically.
         let seedIDs = CommandPaletteSearch.results(query: "a", rows: rows, isMac: false).map(\.id).filter { $0.hasPrefix("seed:") }
         #expect(seedIDs == ["seed:alpha"])
+    }
+
+    @Test("Import CSV matches a typed query, stays out of the empty-query defaults, and hides while writing")
+    func importCSVItem() {
+        #expect(!CommandPaletteSearch.results(query: "", rows: []).contains { $0.id == "action:importCSV" })
+        #expect(CommandPaletteSearch.results(query: "import", rows: []).first?.id == "action:importCSV")
+        #expect(CommandPaletteSearch.results(query: "csv", rows: []).map(\.id).contains("action:importCSV"))
+        #expect(!CommandPaletteSearch.results(query: "import", rows: [], isMac: false, canImport: false).contains { $0.id == "action:importCSV" })
     }
 
     @Test("results are capped at nine")

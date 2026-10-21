@@ -163,6 +163,8 @@ struct SeedsCSVTests {
         #expect(SeedCSV.text("Ñandú") == "Ñandú")
         #expect(SeedCSV.text("") == "")
         #expect(SeedCSV.text("a=b") == "a=b", "only a leading character counts")
+        #expect(SeedCSV.text("'quoted") == "''quoted", "a leading apostrophe is guarded too, so import can undo it")
+        #expect(SeedCSV.text("it's") == "it's")
         #expect(SeedCSV.escape(SeedCSV.text("\r=x")) == "\"'\r=x\"", "the guard runs before quoting")
     }
 
@@ -174,6 +176,16 @@ struct SeedsCSVTests {
         ])
         let record = Self.lines(csv).last
         #expect(record == "'=cmd,'+v,'-t,'@c,2024,3,active,'=loc,'-tag,'=note,Plant now")
+    }
+
+    @Test("semicolons and backslashes inside tag names are escaped, and the guard covers the whole cell")
+    func tagEscaping() {
+        #expect(SeedCSV.escapeTagName("plain") == "plain")
+        #expect(SeedCSV.escapeTagName("a;b") == "a\\;b")
+        #expect(SeedCSV.escapeTagName("back\\slash") == "back\\\\slash")
+        #expect(SeedCSV.tagsField(["Herb", "a;b", "c\\"]) == "Herb; a\\;b; c\\\\")
+        let csv = SeedCSV.make([Self.row("s1", name: "Dill", tags: ["=x;y", "Herb"])])
+        #expect(Self.lines(csv).last == "Dill,,,,,1,active,,'=x\\;y; Herb,,")
     }
 
     @Test("the exported bytes start with the UTF-8 byte order mark")

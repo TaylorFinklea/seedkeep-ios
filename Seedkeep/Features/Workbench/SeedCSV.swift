@@ -1,6 +1,7 @@
 // CSV export for the Seeds table (redesign R1, slice B). RFC 4180: CRLF records, fields with a
 // comma, double quote, CR or LF are quoted with embedded quotes doubled, header row first. The file
 // starts with a UTF-8 byte order mark so spreadsheets read non-ASCII text correctly.
+// R4: the export is reversible. `SeedCSVImport` reads it back (formula guard and tag escaping below).
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -25,7 +26,7 @@ enum SeedCSV {
                 String(row.packets),
                 row.state,
                 text(row.locationName),
-                text(row.tagsText),
+                text(tagsField(row.tagNames)),
                 text(row.notes),
                 includeRecommendationWindow ? text(row.verdictLabel) : "",
             ])
@@ -54,16 +55,32 @@ enum SeedCSV {
     }
 
     /// Guards a free-text value against spreadsheet formula injection. A value that starts with
-    /// `=`, `+`, `-`, `@`, a tab or a CR gets a leading apostrophe, so it is read as text. Applied to
-    /// text columns only; numbers (year, packets) and the stored status are never changed.
+    /// `=`, `+`, `-`, `@`, a tab or a CR gets a leading apostrophe, so it is read as text. A value that
+    /// already starts with an apostrophe gets one too, so import can remove exactly one guard and get
+    /// the value back (`SeedCSVImport.unguard`). Applied to text columns only; numbers (year, packets)
+    /// and the stored status are never changed.
     static func text(_ value: String) -> String {
-        guard let first = value.unicodeScalars.first else { return value }
-        switch first {
-        case "=", "+", "-", "@", "\t", "\r":
-            return "'" + value
-        default:
-            return value
+        guard let first = value.unicodeScalars.first, guardedLeads.contains(first) else { return value }
+        return "'" + value
+    }
+
+    /// The leading characters that get the apostrophe guard. The apostrophe itself is one of them.
+    static let guardedLeads: Set<Unicode.Scalar> = ["=", "+", "-", "@", "\t", "\r", "'"]
+
+    /// The Tags cell: names joined with `; `, each with `;` and `\` escaped by a backslash, so import
+    /// can split it back into the same names. The formula guard is applied to the whole cell after.
+    static func tagsField(_ names: [String]) -> String {
+        names.map(escapeTagName).joined(separator: "; ")
+    }
+
+    static func escapeTagName(_ name: String) -> String {
+        var output = ""
+        output.reserveCapacity(name.count)
+        for scalar in name.unicodeScalars {
+            if scalar == ";" || scalar == "\\" { output.unicodeScalars.append("\\") }
+            output.unicodeScalars.append(scalar)
         }
+        return output
     }
 
     /// One RFC 4180 record, CRLF-terminated. Checks unicode scalars, not characters: "\r\n" is a

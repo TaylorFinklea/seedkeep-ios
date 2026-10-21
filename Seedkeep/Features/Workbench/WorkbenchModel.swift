@@ -9,6 +9,8 @@ import Observation
 
 enum SeedsRequest: Equatable, Sendable {
     case newSeed, exportCSV, focusSearch, deleteSelection
+    /// R4: opens the CSV import's file picker.
+    case importCSV
     /// N2: opens the random pick in a sheet, so it is reachable on the Mac and regular-width iPad.
     case randomPick
 }

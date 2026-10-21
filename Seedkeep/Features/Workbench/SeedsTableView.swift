@@ -48,6 +48,7 @@ struct SeedsTableView: View {
     @State private var showingExporter = false
     @State private var exportDocument: SeedCSVDocument?
     @State private var exportName = ""
+    @State private var showingImporter = false
     @State private var pendingDeletion: SeedDeletionRequest?
     @State private var notice: String?
     @FocusState private var focusedEdit: SeedDraftKey?
@@ -91,6 +92,7 @@ struct SeedsTableView: View {
                 onUndo: { undoTarget.undo() },
                 onRedo: { undoTarget.redo() },
                 onExport: prepareExport,
+                onImport: { showingImporter = true },
                 onNew: { showingAdd = true }
             )
             Divider()
@@ -170,6 +172,7 @@ struct SeedsTableView: View {
                 issues.message = humanizeError(error)
             }
         }
+        .seedCSVImport(isPresented: $showingImporter)
         .confirmationDialog(
             deletionTitle,
             isPresented: deletionPresented,
@@ -696,6 +699,8 @@ struct SeedsTableView: View {
                 showingAdd = true
             case .exportCSV:
                 prepareExport()
+            case .importCSV:
+                showingImporter = true
             case .focusSearch:
                 searchFocused = true
             case .deleteSelection:
