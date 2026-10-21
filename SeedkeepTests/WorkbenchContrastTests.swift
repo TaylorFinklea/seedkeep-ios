@@ -115,6 +115,9 @@ struct WBContrastRequirement: Sendable, CustomTestStringConvertible {
     /// Graphics. `faint` on `panel` also covers the swatch ring.
     static let graphicPairs: [WBContrastRequirement] = [
         .graphic("warn on panel", WBPalette.warn, on: WBPalette.panel),
+        // Today's frost and overdue glyphs on the page, and the warning banner's icon.
+        .graphic("warn on bg", WBPalette.warn, on: WBPalette.bg),
+        .graphic("warn on warnSoft", WBPalette.warn, on: WBPalette.warnSoft),
         .graphic("verdictPlantNow on panel", WBPalette.verdictPlantNow, on: WBPalette.panel),
         .graphic("verdictPlantSoon on panel", WBPalette.verdictPlantSoon, on: WBPalette.panel),
         .graphic("verdictLate on panel", WBPalette.verdictLate, on: WBPalette.panel),

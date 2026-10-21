@@ -12,6 +12,10 @@ import SeedkeepKit
 struct TodayView: View {
     @Environment(AppEnvironment.self) private var appEnv
 
+    /// The workbench's model when the regular-width shell hosts Today. Nil in the compact tab shell, where
+    /// Open Garden switches the tab instead.
+    private let workbench: WorkbenchModel?
+
     /// Drives the "Set home location" sheet from the daylight empty state.
     @State private var showHomeLocationSheet: Bool = false
 
@@ -37,6 +41,10 @@ struct TodayView: View {
         return makeDateFormatter().string(from: yesterday)
     }
 
+    init(workbench: WorkbenchModel? = nil) {
+        self.workbench = workbench
+    }
+
     private func refreshDateStrings() {
         todayString = Self.currentTodayString()
         yesterdayString = Self.currentYesterdayString()
@@ -50,7 +58,8 @@ struct TodayView: View {
                     TodayQueryView(
                         todayString: todayString,
                         yesterdayString: yesterdayString,
-                        showHomeLocationSheet: $showHomeLocationSheet
+                        showHomeLocationSheet: $showHomeLocationSheet,
+                        workbench: workbench
                     )
                 }
             }
@@ -124,6 +133,9 @@ private struct TodayQueryView: View {
 
     @Binding var showHomeLocationSheet: Bool
 
+    /// The workbench's model when the regular-width shell hosts Today; nil in the compact tab shell.
+    private let workbench: WorkbenchModel?
+
     /// The `yyyy-MM-dd` day the queries were built for. Due-row day labels are measured from it.
     private let today: String
 
@@ -157,10 +169,16 @@ private struct TodayQueryView: View {
         return TodayHouseholdScope.journals(recentJournal, householdID: householdID)
     }
 
-    init(todayString: String, yesterdayString: String, showHomeLocationSheet: Binding<Bool>) {
+    init(
+        todayString: String,
+        yesterdayString: String,
+        showHomeLocationSheet: Binding<Bool>,
+        workbench: WorkbenchModel?
+    ) {
         let today = todayString
         let yesterday = yesterdayString
         self.today = today
+        self.workbench = workbench
         _dueEvents = Query(
             filter: #Predicate<LocalPlantingEvent> { event in
                 event.deletedAt == nil
@@ -187,6 +205,8 @@ private struct TodayQueryView: View {
         VStack(alignment: .leading, spacing: WBMetrics.gapLarge * 2) {
             WBScreenTitle("Today", subtitle: scholarlyDate)
                 .padding(.top, WBMetrics.gapLarge)
+
+            frostBanner
 
             daylightBlock
                 .padding(.horizontal, WBMetrics.screenGutter)
@@ -262,6 +282,49 @@ private struct TodayQueryView: View {
         return f.string(from: Date())
     }
 
+    // MARK: - Frost
+
+    private var host: TodayFrost.Host {
+        workbench == nil ? .compactTab : .workbenchRoute
+    }
+
+    /// The live plantings from today through the next 13 days that a frost check flags, for this household.
+    private var frostWarningCount: Int {
+        guard let householdID = appEnv.activeGardenHouseholdID else { return 0 }
+        return TodayFrost.warningCount(
+            events: liveCandidates,
+            seeds: activeSeeds,
+            householdID: householdID,
+            climate: appEnv.preferences.homeClimate,
+            // The same day the Due section uses, so the banner and the list never disagree.
+            today: CalendarDay.parse(today) ?? CalendarDay.today()
+        )
+    }
+
+    @ViewBuilder
+    private var frostBanner: some View {
+        let count = frostWarningCount
+        if count > 0 {
+            WBBanner(
+                severity: .warning,
+                title: TodayFrost.warningTitle(count: count),
+                action: (label: TodayFrost.openGardenLabel, handler: openGarden)
+            )
+            .accessibilityIdentifier("today.frostBanner")
+            .padding(.horizontal, WBMetrics.screenGutter)
+        }
+    }
+
+    /// Switches to Garden from the host shell: the compact tab's `requestedTab`, or the workbench's route.
+    private func openGarden() {
+        switch TodayFrost.GardenRoute.route(for: host) {
+        case .gardenTab:
+            appEnv.requestedTab = .garden
+        case .gardenRoute:
+            workbench?.route = .garden
+        }
+    }
+
     // MARK: - Daylight
 
     /// Home coordinates from the cached preferences; nil until a home location is set.
@@ -329,7 +392,12 @@ private struct TodayQueryView: View {
                 }
             } else {
                 ForEach(queue) { event in
-                    DueRow(event: event, seed: seed(for: event), today: today)
+                    DueRow(
+                        event: event,
+                        seed: seed(for: event),
+                        today: today,
+                        climate: appEnv.preferences.homeClimate
+                    )
                 }
             }
         }
@@ -367,6 +435,7 @@ private struct DueRow: View {
     let event: LocalPlantingEvent
     let seed: LocalSeed?
     let today: String
+    let climate: HomeClimate?
 
     @ScaledMetric(relativeTo: .footnote) private var iconSize: CGFloat = 13
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -385,6 +454,11 @@ private struct DueRow: View {
 
     private var dayLabel: String {
         TodayDue.dayLabel(offset: offset)
+    }
+
+    /// A frost-flagged row shows the frost glyph and says "frost risk" to VoiceOver.
+    private var frostRisk: Bool {
+        FrostCheck.check(event, seed: seed, climate: climate).isFlagged
     }
 
     var body: some View {
@@ -414,6 +488,12 @@ private struct DueRow: View {
                         .foregroundStyle(WBColor.warn)
                         .accessibilityHidden(true)
                 }
+                if frostRisk {
+                    Image(systemName: "snowflake")
+                        .font(.system(size: iconSize))
+                        .foregroundStyle(WBColor.warn)
+                        .accessibilityHidden(true)
+                }
                 Text(dayLabel)
                     .font(.wbFootnote)
                     .foregroundStyle(WBColor.muted)
@@ -427,6 +507,8 @@ private struct DueRow: View {
                 .frame(height: 1)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(TodayDue.rowAccessibilityLabel(name: name, kind: kind, dayLabel: dayLabel))
+        .accessibilityLabel(
+            TodayDue.rowAccessibilityLabel(name: name, kind: kind, dayLabel: dayLabel, frostRisk: frostRisk)
+        )
     }
 }

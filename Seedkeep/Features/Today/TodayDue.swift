@@ -59,9 +59,11 @@ enum TodayDue {
         return typeText.isEmpty ? kind : "\(kind) · \(typeText)"
     }
 
-    /// One VoiceOver label for a due row: name, kind, then the day label.
-    static func rowAccessibilityLabel(name: String, kind: String, dayLabel: String) -> String {
-        [name, kind, dayLabel].joined(separator: ", ")
+    /// One VoiceOver label for a due row: name, kind, then the day label, then "frost risk" when flagged.
+    static func rowAccessibilityLabel(name: String, kind: String, dayLabel: String, frostRisk: Bool = false) -> String {
+        var parts = [name, kind, dayLabel]
+        if frostRisk { parts.append(FrostCheck.accessibilityPhrase) }
+        return parts.joined(separator: ", ")
     }
 
     /// Parses a `yyyy-MM-dd` string as a UTC midnight. Returns nil unless the string round-trips,

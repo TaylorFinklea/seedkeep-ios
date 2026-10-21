@@ -22,14 +22,33 @@ extension GridEvent {
 extension FrostCheck {
     /// The frost outcome for a stored event, its seed and the home climate.
     static func check(_ event: LocalPlantingEvent, seed: LocalSeed?, climate: HomeClimate?) -> Outcome {
+        check(plannedFor: event.plannedFor, kind: event.kindRaw, isCompleted: event.completedAt != nil,
+              seed: seed, climate: climate)
+    }
+
+    /// The frost outcome for a planting by its fields, its seed and the home climate. Add Planting uses it
+    /// before the event is stored.
+    static func check(plannedFor: String, kind: String, isCompleted: Bool, seed: LocalSeed?, climate: HomeClimate?) -> Outcome {
         check(
-            plannedFor: event.plannedFor,
-            kind: event.kindRaw,
-            isCompleted: event.completedAt != nil,
+            plannedFor: plannedFor,
+            kind: kind,
+            isCompleted: isCompleted,
             frostTolerance: seed?.growingInfo?.frost_tolerance,
             lastFrost: climate?.avgLastFrost,
             firstFrost: climate?.avgFirstFrost
         )
+    }
+
+    /// Add Planting's warning for the chosen seed, kind and date: the sentence when flagged, otherwise nil.
+    static func sentence(
+        plannedFor: String,
+        kind: String,
+        seed: LocalSeed?,
+        climate: HomeClimate?,
+        locale: Locale = .current
+    ) -> String? {
+        sentence(for: check(plannedFor: plannedFor, kind: kind, isCompleted: false, seed: seed, climate: climate),
+                 locale: locale)
     }
 }
 

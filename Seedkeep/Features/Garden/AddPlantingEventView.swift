@@ -107,9 +107,36 @@ struct AddPlantingEventView: View {
                         .font(.caption)
                 }
             }
+            if let frost = frostSentence {
+                Label {
+                    Text(frost)
+                        .font(.wbCaption)
+                        .foregroundStyle(WBColor.ink)
+                } icon: {
+                    Image(systemName: "snowflake")
+                        .foregroundStyle(WBColor.warn)
+                        .font(.caption)
+                        .accessibilityHidden(true)
+                }
+                .accessibilityIdentifier("addPlanting.frostWarning")
+                Text(FrostCheck.estimateNote)
+                    .font(.wbFootnote)
+                    .foregroundStyle(WBColor.muted)
+            }
         } header: {
             WBSectionHeader("action")
         }
+    }
+
+    /// The frost warning for the chosen seed, kind and date, from the home climate's frost dates. Nil unless
+    /// the check flags it, so the row appears only when there is a risk to show.
+    private var frostSentence: String? {
+        FrostCheck.sentence(
+            plannedFor: Self.yyyymmdd(plannedFor),
+            kind: kind.rawValue,
+            seed: selectedSeed,
+            climate: appEnv.preferences.homeClimate
+        )
     }
 
     // MARK: - Out-of-window detection
@@ -182,10 +209,8 @@ struct AddPlantingEventView: View {
     /// selected. Includes a "Use recommended date" affordance that sets the
     /// DatePicker to the recommendation's `rangeStart`.
     ///
-    /// The frost-warning concern from the old `frostWarningSection` is now
-    /// communicated by the panel's verdict (e.g. `too_early` when the user
-    /// is before the window, which is computed from the home ZIP's frost
-    /// dates). No separate frost-date logic is needed client-side.
+    /// The panel's verdict covers the planting window (computed from the home ZIP's frost dates). A frost
+    /// flag on the chosen date is shown separately, in `actionSection`.
     @ViewBuilder
     private var recommendationSection: some View {
         if selectedSeed != nil {

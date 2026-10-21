@@ -153,7 +153,7 @@ struct WorkbenchShell: View {
         switch model.route {
         case .seeds:
             SeedsTableView(model: model, rows: rows, seedsByID: seedsByID)
-        case .today: TodayView()
+        case .today: TodayView(workbench: model)
         case .garden: GardenView(workbench: model)
         case .windows: NavigationStack { WindowsView(host: .workbenchRoute, workbench: model) }
         case .journal: JournalView()
