@@ -1,24 +1,30 @@
 # Current State
 
-## R3 in progress (2026-10-21): Garden grid and planting windows
+## R3 done (2026-10-21): Garden grid and planting windows
 
-Contract: `.docs/ai/plans/2026-10-21-r3-garden-windows.md` (slices G0–G4).
-- **G0 done** (2d76ad0): the pure grid, frost, windows and timeline models;
-  a per-window `GardenSession`; the `.windows` route (⌘5); a frost-flagged
-  sample sowing. Reviewed by Sol and Opus; the fixes are in the same commit.
-  The sample garden keeps its ZIP's real frost dates (contract amended).
-- **G1 done** (9eb72e0): `BedGridView`, the `GardenInteraction` reducer,
-  `GardenActions` (re-checked writes through `SyncEngine`), `SquareDetails`
-  with a per-event notes draft, and `BedEventsList`. Not wired into screens
-  yet.
-- **G3 done** (e60f40d): `WindowsView` replaces What to Plant (a timeline on
-  regular width, a list on compact); Plan routes by host shell.
-- Each slice was reviewed by Sol and Opus, with DeepSeek on G0 and G1;
-  every fix is in its slice's commit. Unverified at runtime: keyboard
-  focus and activation, VoiceOver, and the timeline's layout. These are in
-  the R3 verification and owner checks.
-- **Next:** G2 (Garden screens, retiring the canvas), then G4 (frost on
-  Today and Add Planting), then verification.
+Contract and results: `.docs/ai/plans/2026-10-21-r3-garden-windows.md`.
+Branch `redesign/r2-design-system`, local only (not pushed).
+- **Garden:** beds plan on a square-foot grid you paint with a seed.
+  - Square details edit one planting; Move uses tap or VoiceOver actions.
+  - New/Edit bed take decimal sizes. A stored size can't be cleared; see
+    `decisions.md`.
+  - iPad and Mac get a bed switcher and the inspector; iPhone keeps the bed
+    list and opens a bed screen.
+  - The bed canvas and slider placement are gone.
+- **Windows** (⌘5; Garden toolbar on iPhone) replaces What to Plant: a
+  season timeline on regular width, a grouped list on compact. Plan hands a
+  seed to Garden in either shell.
+- **Frost:** a Today banner for plantings in the next two weeks, a glyph on
+  due rows, and the frost sentence in Add Planting and square details.
+- **Verification:**
+  - gate 97 / 148 / 1386 + 1 / 1401 + 1
+  - scripted iPhone screenshots (`scripts/r3-screenshots.sh`): all 32 steps
+    reached
+  - audit: 283 findings, compared with R2d's 289
+- **Owner checks pending:** iPad and Mac at runtime (Garden, the Windows
+  timeline, keyboard), VoiceOver per the manual checklist's bed grid
+  section. The iPad simulator needs approval.
+- **Next:** R4 (Today, Journal, Settings and flows).
 
 ## R2d done (2026-10-21): accessibility audit
 

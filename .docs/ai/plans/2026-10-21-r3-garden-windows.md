@@ -463,3 +463,53 @@ with findings resolved, before each commit.
   - iPad inspector and timeline
   - Mac keyboard: arrow keys, Space or Return, Escape
   - Mac pointer
+
+## Results (2026-10-21)
+
+R3 is done on `redesign/r2-design-system` (local; not pushed).
+
+- **Commits:**
+  - G0 `2d76ad0`, G1 `9eb72e0`, G3 `e60f40d`, G2 `ae6ce8d`, G4 `991ec62`
+  - the screenshot test `c9167c4`
+  - the fixes the screenshots found `e975a90`
+  - the audit allowlist update (below)
+- **Reviews:**
+  - Every slice: Sol (`Reviewed-by`) and Opus, with DeepSeek on G0, G1 and
+    G2. Each slice's fixes are in its commit.
+  - Sol rejected G1's notes handling three times before it was safe.
+  - Amendments made from the reviews, recorded in this plan and in
+    `decisions.md`: the fixture keeps its real frost dates; a stored bed
+    size can't be cleared; Stop shows whenever a mode is active.
+- **Gate (final):** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app 1386 + 1,
+  macOS app 1401 + 1.
+- **Screenshots:** `scripts/r3-screenshots.sh <UDID>` captures 8 Garden
+  steps in light and dark at the default and the largest size, on the
+  iPhone simulator. All 32 steps reached. They found:
+  - At accessibility sizes, words split mid-word in the Painting/Move bar,
+    the add-a-bed prompt and Windows rows. Now they stack instead.
+  - The bed screen's identifier replaced the pinned bar's own identifiers.
+  - The audit driver couldn't find a drag start over the nested grid.
+- **Audit:** 283 unresolved findings, compared with R2d's 289.
+  - The bed screen's contrast findings fell from 46 to 17, with the canvas
+    gone.
+  - Windows has 17, replacing What to Plant's 4.
+  - The bed screen gained 6 Dynamic Type findings: square details' form
+    labels and its toolbar Done.
+  - There are 2 new element-less "potentially inaccessible text" findings in
+    square details, probably text behind the medium-height sheet.
+  - The allowlist gained square details' toolbar Done (system toolbar) and
+    the "Windows" inline title (shown in full in the screenshots). This
+    covers 8 findings, and 2 unused entries were removed. The next run
+    should show about 275; it hasn't been rerun.
+  - The rest stay recorded as suspected noise, as in R2d.
+- **Not verified:**
+  - iPad and Mac at runtime: regular-width Garden, the Windows timeline,
+    keyboard and pointer (owner checks; the iPad simulator needs approval)
+  - VoiceOver on a device: see the manual checklist's bed grid section
+  - the Plan handoff driven through the UI (integration tests cover the
+    logic)
+- **Follow-ups (not done):**
+  - "Later" groups too-late seeds with too-early ones. In autumn the whole
+    Windows list reads "Later" next to "84 days ago". A separate "Missed
+    this year" group, matching the brush label, needs the owner's call.
+  - Clearing a stored bed size (umbrella roadmap).

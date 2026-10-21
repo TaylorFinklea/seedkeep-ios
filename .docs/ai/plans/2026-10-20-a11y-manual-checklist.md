@@ -25,14 +25,23 @@ sample garden, launch with `-SeedkeepFixture`; your own garden works too.
 - [ ] **Planting panel (seed detail):** the chart reads one summary, for
   example "Best from May 4 to Jun 1; today: plant soon; your date: May 12".
 
-### Bed canvas (Garden → a bed with a layout)
-- [ ] Each planting is one item: "<name>, <x> feet from the left, <y> feet
-  from the bottom".
-- [ ] Swiping up or down (custom actions) offers Move left, Move right, Move
-  up and Move down.
-- [ ] A move speaks the new position, and focus stays on the planting.
-- [ ] At an edge, moving further does nothing and nothing is saved.
-- [ ] The move is still there after leaving and reopening the bed.
+### Bed grid (Garden → a bed with a size; R3 replaced the canvas)
+- [ ] Each square is one button: "Row R, square S", then the planting, its
+  task and date (or "done"), and "frost risk" when flagged. An empty
+  square says "empty".
+- [ ] While painting, an empty square's hint is "Plans <seed> here"; while
+  moving, "Moves <seed> here".
+- [ ] On a square with a selected planting, swiping up or down offers Move
+  left, Move right, Move up and Move down. A move speaks the result, and
+  focus goes to the new square.
+- [ ] Moving into an occupied square or off the grid is refused with a
+  spoken message, and nothing is saved.
+- [ ] Square details (a sheet): the fields read their values; after it
+  closes, focus returns to the square.
+- [ ] Today: the frost banner reads its count and "Open Garden"; a flagged
+  due row says "frost risk".
+- [ ] Windows: each seed is one item with its group, dates, timing and next
+  planting, and offers a "Plan" action.
 
 ### Large text (Settings → Accessibility → Display & Text Size → Larger Text, largest)
 - [ ] Seed detail and Add Seed: State, Location and Source open a list
@@ -50,10 +59,18 @@ sample garden, launch with `-SeedkeepFixture`; your own garden works too.
 - [ ] "Reveal" of a seed (for example from the command palette) opens the
   inspector.
 - [ ] VoiceOver: the sidebar, table and inspector can each be reached.
+- [ ] **Garden:** the bed switcher, brush list, grid, events table and
+  inspector (square details) lay out at default and the largest text size.
+- [ ] **Windows (sidebar):** the timeline is at least 720 points wide and
+  scrolls sideways; month labels line up with the bars; today and frost
+  labels don't overlap. At accessibility sizes it shows the list.
 
 ## Mac
-- [ ] Cmd+1 to Cmd+4 switch Today, Seeds, Garden and Journal. Cmd+, opens
-  Settings.
+- [ ] Cmd+1 to Cmd+5 switch Today, Seeds, Garden, Journal and Windows.
+  Cmd+, opens Settings.
+- [ ] Garden grid: arrow keys move between squares; Space or Return paints
+  or opens a square once (not twice); Escape closes details, then move
+  mode, then the brush, then the selection.
 - [ ] Tab moves through the Seeds table, the toolbar and the inspector in a
   sensible order.
 - [ ] The command palette opens and runs a "Go to" item.
