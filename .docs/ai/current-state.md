@@ -28,8 +28,14 @@ R2a restyles the app in Workbench with no behaviour change. It's on branch
   app 1075 + 1, on Xcode 27.1. **Reviews:** Opus 5.5 and GPT-6.1 Sol, two
   rounds plus confirmations.
 - **Contract:** `.docs/ai/plans/2026-10-20-r2-design-system.md`.
-- **Not done:** screenshots at the largest text size, and the owner's Mac
-  visual check. Light mode is still forced until R2c.
+- **Screenshot review:** done for Garden, bed detail, Journal, journal entry,
+  seed detail, the planting panel, Add Seed and random pick, at the default
+  and largest text sizes. Fixes for the planting panel, status chip and
+  random pick landed after the review; the deferred items are listed in the
+  R2 plan.
+- **Not done:** screenshots of the Settings sub-screens, What's New, invite,
+  scan chrome and regular-width iPad, and the owner's Mac visual check. Light
+  mode is still forced until R2c.
 - **Next:** R2b (the compact Seeds list, Today, and You folded into
   Settings), then R2c (dark mode and accessibility acceptance).
 

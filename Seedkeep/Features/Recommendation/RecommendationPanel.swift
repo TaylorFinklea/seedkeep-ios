@@ -71,15 +71,7 @@ struct RecommendationPanel: View {
             if let start = rec.rangeStart, let end = rec.rangeEnd {
                 let startStr = Self.formattedDate(start) ?? start
                 let endStr = Self.formattedDate(end) ?? end
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("OUTDOOR")
-                        .font(.wbCaption.weight(.semibold))
-                        .tracking(1.4)
-                        .foregroundStyle(WBColor.muted)
-                    Text("\(startStr) – \(endStr)")
-                        .font(.wbBody)
-                        .foregroundStyle(WBColor.ink)
-                }
+                windowRow("OUTDOOR", "\(startStr) – \(endStr)", datesColor: WBColor.ink)
             } else if rec.rangeStart == nil && rec.rangeEnd == nil {
                 Text(Self.noWindowNote(for: rec.reason))
                     .font(.wbBody)
@@ -90,15 +82,29 @@ struct RecommendationPanel: View {
             if let iStart = rec.indoorStart, let iEnd = rec.indoorEnd {
                 let iStartStr = Self.formattedDate(iStart) ?? iStart
                 let iEndStr = Self.formattedDate(iEnd) ?? iEnd
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("INDOORS")
-                        .font(.wbCaption.weight(.semibold))
-                        .tracking(1.4)
-                        .foregroundStyle(WBColor.muted)
-                    Text("\(iStartStr) – \(iEndStr)")
-                        .font(.wbBody)
-                        .foregroundStyle(WBColor.muted)
-                }
+                windowRow("INDOORS", "\(iStartStr) – \(iEndStr)", datesColor: WBColor.muted)
+            }
+        }
+    }
+
+    /// A labelled date range: the label beside the dates, or above them when large text leaves no
+    /// room on one line (side by side, the label would break mid-word).
+    private func windowRow(_ label: String, _ dates: String, datesColor: Color) -> some View {
+        let labelText = Text(label)
+            .font(.wbCaption.weight(.semibold))
+            .tracking(1.4)
+            .foregroundStyle(WBColor.muted)
+        let datesText = Text(dates)
+            .font(.wbBody)
+            .foregroundStyle(datesColor)
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                labelText
+                datesText
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                labelText
+                datesText
             }
         }
     }
@@ -123,24 +129,36 @@ struct RecommendationPanel: View {
                 rangeStart: rec.rangeStart, rangeEnd: rec.rangeEnd,
                 verdict: refined?.verdict ?? rec.verdict, userDate: userDate))
 
-            // Date axis labels
-            HStack {
-                Text(shortDate(anchorStr) ?? "Today")
-                    .font(.wbCaption.weight(.semibold))
-                    .tracking(1.2)
-                    .foregroundStyle(WBColor.muted)
-                Spacer()
-                Text("+30D")
-                    .font(.wbCaption.weight(.semibold))
-                    .tracking(1.2)
-                    .foregroundStyle(WBColor.muted)
-                Spacer()
-                Text("+60D")
-                    .font(.wbCaption.weight(.semibold))
-                    .tracking(1.2)
-                    .foregroundStyle(WBColor.muted)
+            // Date axis labels. At large text sizes the middle label goes first, then the two ends
+            // stack, so no label is truncated.
+            let start = axisLabel(shortDate(anchorStr) ?? "Today")
+            let end = axisLabel("+60D")
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    start
+                    Spacer()
+                    axisLabel("+30D")
+                    Spacer()
+                    end
+                }
+                HStack {
+                    start
+                    Spacer()
+                    end
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    start
+                    end
+                }
             }
         }
+    }
+
+    private func axisLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.wbCaption.weight(.semibold))
+            .tracking(1.2)
+            .foregroundStyle(WBColor.muted)
     }
 
     /// What VoiceOver reads for the 60-day chart, which is drawn in a Canvas: the window, today's

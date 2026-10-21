@@ -227,3 +227,37 @@ release builds and under XCTest.
   of every R2a screen. The parent reviews them for clipping and overlap.
 - **An Opus and a Sol review** of the merged diff before commit.
 - **Owner-run (open until done):** Mac visual check.
+
+## R2a screenshot review (2026-10-20)
+
+On the iPhone simulator in sample-garden mode, light mode, at the default text
+size and at the largest accessibility size.
+
+- **Checked:** Garden, bed detail, Journal list, journal entry, seed detail
+  with the planting panel, Add Seed, and random pick.
+- **Fixed after review:**
+  - **Planting panel:** the "Outdoor"/"Indoors" label moves above its dates
+    instead of breaking mid-word. The axis drops "+30D", then stacks, instead
+    of truncating.
+  - **Status chip:** the dot and padding scale with the text.
+  - **Random pick:** the tags stack instead of truncating. The card scrolls
+    instead of running under the title and pushing the button off screen.
+- **Deferred to R2c (large text):**
+  - The Journal list's date column squeezes the entry text.
+  - Bed canvas labels overlap when plantings sit close together (visible at
+    the default size too).
+  - System menu pickers (Location, Source, State) truncate their values
+    mid-word; consider `.pickerStyle(.navigationLink)` at accessibility sizes.
+- **Deferred to R2b (polish):**
+  - Form section headers mix two styles: system headers in bed detail, and
+    `WBSectionHeader` captions in the journal entry and seed detail. Bed
+    detail's "Journal" section shows both.
+  - The large title's leading inset differs between Garden and Journal.
+  - Add Seed repeats "Add seed" in the navigation bar and the content heading
+    (this predates R2a).
+  - In the journal entry, the empty photo strip leaves a blank row, and
+    "Attached to" repeats as the header and the row label.
+- **Not checked:** the Settings sub-screens, What's New, invite, scan chrome
+  (the Simulator has no camera) and regular-width iPad. The Simulator dropped
+  taps too often to walk them; they are standard forms like the screens
+  above. These stay open for R2c's accessibility acceptance.

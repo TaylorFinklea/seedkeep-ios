@@ -14,18 +14,19 @@ struct RandomPickView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
-                Spacer()
-                if let seed = pickedSeed {
-                    NavigationLink {
-                        SeedDetailView(seedID: seed.id)
-                    } label: {
-                        SeedCard(seed: seed)
+                // Centred when it fits; scrolls when large text makes the card taller than the sheet,
+                // so the card never runs under the title or pushes the button off screen.
+                ViewThatFits(in: .vertical) {
+                    VStack {
+                        Spacer()
+                        pickedContent
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    WBEmptyState(title: "No active seeds to pick from.", systemImage: "leaf")
+                    ScrollView {
+                        pickedContent
+                            .padding(.vertical, 24)
+                    }
                 }
-                Spacer()
                 Button {
                     pick()
                 } label: {
@@ -59,6 +60,20 @@ struct RandomPickView: View {
             .onChange(of: eligibleSeeds.map(\.id)) { _, _ in
                 pickIfNeeded()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var pickedContent: some View {
+        if let seed = pickedSeed {
+            NavigationLink {
+                SeedDetailView(seedID: seed.id)
+            } label: {
+                SeedCard(seed: seed)
+            }
+            .buttonStyle(.plain)
+        } else {
+            WBEmptyState(title: "No active seeds to pick from.", systemImage: "leaf")
         }
     }
 
@@ -113,18 +128,30 @@ private struct SeedCard: View {
             Text(seed.displayName)
                 .font(.wbTitle)
                 .multilineTextAlignment(.leading)
+                // Full height: between the sheet's spacers, large text would otherwise truncate.
+                .fixedSize(horizontal: false, vertical: true)
             if let company = seed.customCompany?.trimmedNonEmpty {
                 Text(company)
                     .font(.wbCallout)
                     .foregroundStyle(WBColor.muted)
             }
-            HStack(spacing: 8) {
-                Tag(text: "\(seed.packetCount) packet\(seed.packetCount == 1 ? "" : "s")")
-                Tag(text: seed.yearPacked.map { "packed \($0)" } ?? "Year unknown")
+            let packets = "\(seed.packetCount) packet\(seed.packetCount == 1 ? "" : "s")"
+            let packed = seed.yearPacked.map { "packed \($0)" } ?? "Year unknown"
+            // Side by side when they fit; stacked at large text sizes rather than truncated.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Tag(text: packets)
+                    Tag(text: packed)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Tag(text: packets)
+                    Tag(text: packed)
+                }
             }
             Text(seed.notes?.trimmedNonEmpty.map { "Notes: \($0)" } ?? "No notes")
                 .font(.wbBody)
                 .foregroundStyle(WBColor.ink)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(20)

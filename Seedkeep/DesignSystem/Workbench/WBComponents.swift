@@ -136,6 +136,11 @@ struct WBStatusChip: View {
 
     let text: String
     let tone: Tone
+    // Scaled with the text, so a chip that wraps at large sizes keeps its words clear of the
+    // capsule's curved ends.
+    @ScaledMetric(relativeTo: .caption) private var dotSize: CGFloat = 7
+    @ScaledMetric(relativeTo: .caption) private var horizontalPadding: CGFloat = 8
+    @ScaledMetric(relativeTo: .caption) private var verticalPadding: CGFloat = 4
 
     init(_ text: String, tone: Tone) {
         self.text = text
@@ -171,14 +176,14 @@ struct WBStatusChip: View {
         HStack(spacing: 6) {
             Circle()
                 .fill(dot)
-                .frame(width: 7, height: 7)
+                .frame(width: dotSize, height: dotSize)
                 .accessibilityHidden(true)
             Text(text)
                 .font(.wbCaption.weight(.semibold))
                 .foregroundStyle(WBColor.ink)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, verticalPadding)
         .background(background, in: Capsule())
         .overlay(Capsule().strokeBorder(WBColor.line, lineWidth: 1))
         .accessibilityElement(children: .ignore)
