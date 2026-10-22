@@ -14,11 +14,14 @@ Contract: `.docs/ai/plans/2026-10-22-n3-server-removal.md`. Branch
     confirmed no device ever started one, so launch only deletes the
     leftover checkpoint and transfer folders; checkpoints no longer pause
     CloudKit. Gate 97 / 148 / 1291 + 1 / 1306 + 1.
+  - T1 (0c0efdd): the server client and server sync are gone. Writes no
+    longer queue `LocalPendingWrite` rows; old rows stay. A pre-N3 store
+    fixture covers every model. Gate 25 / 148 / 1240 + 1 / 1255 + 1.
 - **Next:**
-  - T1: delete the server client and server sync.
-  - T2: move the app suite to the CloudKit path; retire the CloudKit-OFF
-    lanes.
-  - F: flags, the API plist keys, the Sign in with Apple entitlement.
+  - T2: run every test on the CloudKit path with fake engines, remove
+    the CloudKit sync flag, retire the CloudKit-OFF lanes.
+  - F: `ServerRetirement`, the API plist keys, the Sign in with Apple
+    entitlement, a structural zero-transport test.
 - **Owner:** the server-retirement runbook is in the umbrella repo,
   owner-run and not executed.
 

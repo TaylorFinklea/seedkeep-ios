@@ -389,3 +389,20 @@ Earlier entries that mention Beads are historical.
 **Alternatives considered**: Classify checkpoints and erase or pause per role and phase (rejected: unsafe without the zone guard, and moot given the owner's answer); keep the quarantine until N2-E (rejected: no device needs it).
 
 **Rationale**: Simplest safe behaviour for the real device population. The general "never recreate a zone this device has seen deleted" guard lands in N2-E.
+
+## [2026-10-22] N3 T1: what deleting the server sync left behind
+
+**Context**: T1 deleted `SeedkeepClient` and the server sync. Production already ran CloudKit-only, so the deletions were meant to change no live behaviour.
+
+**Decision**:
+- Where a method had a server branch and a CloudKit branch (JournalStore, SyncEngine photo upload/fetch), the CloudKit body is kept as is, rather than adding a new error for the flag-off case.
+- `SyncEngine.enqueue*` no longer create `LocalPendingWrite` rows. The model and existing rows stay; nothing reads or sends them.
+- `JournalStore.refresh` stays as a no-op, so the Journal's pull-to-refresh and `.task` calls are unchanged.
+- The pet depart RPC and its wilted/departed notifications are gone. They had been gated off since N1, and pets are hidden.
+- The `seedkeep.serverURL` and `seedkeep.cachedTier` UserDefaults values are no longer read and are not cleaned up.
+- `KeychainTokenStore` has no default account. `legacyBearerTokenAccount = "bearer-token"` names the item the legacy rebind deletes, and a test pins it.
+- The flag collapse (`cloudKitHouseholdSyncEnabled`, `serverGardenFeaturesRestricted`, `SEEDKEEP_TEST_CLOUDKIT_ON`) moves from F to T2, so the tests move to the CloudKit path once.
+
+**Alternatives considered**: Keep the flag-off branches until F (rejected: they describe a configuration no user can reach, and would be migrated twice).
+
+**Rationale**: The smallest deletion that keeps every shipping path identical. The pre-N3 store fixture (generated at c632a33) guards the on-disk store against later model removals.
