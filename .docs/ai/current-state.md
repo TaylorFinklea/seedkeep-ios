@@ -1,6 +1,6 @@
 # Current State
 
-## N3 in progress (2026-10-22): remove the server code
+## N3 done (2026-10-22): the server code is gone
 
 Contract: `.docs/ai/plans/2026-10-22-n3-server-removal.md`. Branch
 `redesign/r2-design-system`, local only (not pushed).
@@ -24,8 +24,10 @@ Contract: `.docs/ai/plans/2026-10-22-n3-server-removal.md`. Branch
     with Apple entitlement are gone; the release verifier now forbids
     that entitlement. `ZeroServerTransportTests` checks the built app.
     Gate 25 / 148 / 1243 / 1258.
-- **Next:** N3 verification (R3/R4 screenshots, the audit against 339),
-  then N2-E.
+- **Verification:** R3 32/32 and R4 28/28 screenshots; audit 309
+  findings (R4 339), no new real defect. Results are in the contract.
+- **Next:** N2-E (delete data; never recreate a deleted garden's zone),
+  then R5.
 - **Owner:** the server-retirement runbook is in the umbrella repo,
   owner-run and not executed.
 

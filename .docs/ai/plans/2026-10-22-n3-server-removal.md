@@ -287,3 +287,46 @@ Files: `seedkeep-ios/web/src/routes/privacy`, `web/src/routes/support`,
     intact and sharing works
   - the published privacy and support pages (after go-ahead)
   - the runbook steps
+
+## Results (2026-10-22)
+
+All slices are committed on `redesign/r2-design-system` (local, not
+pushed). Each had the gate, Sol's review, and an Opus review (a separate
+reviewer for T1, the lead for the rest); DeepSeek reviewed A, T1, T2 and F.
+
+- **Commits:**
+  - U `6398d39`: the dead UI.
+  - D `91da158`: website pages, AASA and submission notes (not deployed).
+  - A `c632a33`: account deletion and transfer. After the owner
+    confirmed no device ever started one, launch only deletes the leftover
+    checkpoint and transfer folders.
+  - T1 `0c0efdd`: the server client and server sync, with a pre-N3 store
+    fixture (generated at `c632a33`, every model).
+  - T2 `1105dd0`: every test on the CloudKit path through
+    `CloudCoordinatorFactory`; the sync flag and CloudKit-OFF lanes are
+    gone. The lead moved the flag collapse here from F.
+  - F `55fb1b3`: `ServerRetirement`, the API keys and the Sign in with
+    Apple entitlement; the release verifier forbids it;
+    `ZeroServerTransportTests`.
+- **Gate:** SeedkeepKit 25, SeedkeepCloudKit 148, iOS 1243, macOS 1258
+  (from 97 / 148 / 1562 + 1 / 1577 + 1 at R4; the drop is the deleted
+  server, assistant, transfer and wire tests). The Mac app builds and its
+  signed entitlements have no Sign in with Apple; archive validation
+  passes.
+- **Screenshots:** R3 32/32 and R4 28/28, every step reached.
+- **Audit:** 309 unresolved findings, down from R4's 339. The 24 not seen
+  at R4 are the same findings moved: sample-garden labels a day later
+  (Garden's next note, Today rows, Windows, the Seed Detail planting
+  panel) and Settings rows on different scroll pages after U removed
+  rows. No new real defect. Six page-3 Settings allowlist entries went
+  unused at default size for the same reason; left as upkeep.
+- **Store compatibility:** the pre-N3 fixture opens, reads back every row
+  and takes enqueue writes with its pending writes and tombstones
+  unchanged. Legacy-identity upgrades, migration markers and leftover
+  deletion and transfer files are covered by `AuthLifecycleTests`,
+  `HouseholdCloudCoordinatorTests` and `LegacyAccountDeletionCleanupTests`.
+- **Not verified:** a real-device upgrade from an older build (garden
+  intact, sharing works), the published website pages, and the runbook.
+  All are owner steps.
+- **Follow-ups:** allowlist upkeep for the moved Settings rows; the README
+  links an iOS `roadmap.md` while the umbrella roadmap is canonical.
