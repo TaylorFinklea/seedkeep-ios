@@ -1,5 +1,5 @@
-// This route handles universal link fallback for /garden-handoff/<id>?token=<token>
-// paths. The [id] parameter is the transfer ID, which is unknowable at build time,
-// so we disable prerendering and rely on the adapter-static fallback (200.html)
-// to serve this route at runtime.
+// Retired notice for old /garden-handoff/<id> links from test versions. The [id]
+// parameter is unknowable at build time, so this route is not prerendered; the
+// SPA fallback (200.html) serves it at runtime. The page reads no parameters and
+// makes no requests.
 export const prerender = false;

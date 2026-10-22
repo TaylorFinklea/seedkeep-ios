@@ -35,8 +35,13 @@ has its own review and gate.
     - Assistant/*
     - MCPSettingsView, AssistantKeySettingsView, PendingWritesView
     - AccountDeletionHandoffAcceptView, SeedRow, SuitabilityBar
-    - SproutFAB, TopBarSparkleButton, CloudSharingControllerView
+    - SproutFAB, TopBarSparkleButton
     - the `SettingsView` wrapper at `SettingsView.swift:428`
+  - **Correction (2026-10-22, N3 slice D):** `CloudSharingControllerView.swift`
+    is not dead and was wrongly listed above. `CloudSharingPresenter` presents the
+    "Share garden via iCloud" sheet from `SettingsView`'s Sync section
+    (`SettingsView.swift`, `CloudSharingPresenter.present`), so it stays live
+    through N3.
   - **Hidden features:**
     - pets: MenagerieView, PetDetailView, PetCard, Companions/*,
       PressedPlant, RarityBadge

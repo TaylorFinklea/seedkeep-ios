@@ -55,8 +55,8 @@
     <p>
       Choose Anthropic or OpenAI and save your own API key in the device
       Keychain. Packet photos go directly from your device to that provider with
-      your key. That provider's terms apply, and the app sends nothing to the
-      developer. The result is saved the same way as a Free scan.
+      your key. That provider's terms apply, and Seedkeep never receives the
+      photos or your key. The result is saved the same way as a Free scan.
     </p>
   </article>
 
@@ -66,7 +66,8 @@
       Lay out garden beds and planting events, and keep a journal with photos
       and checklists. Planting windows are worked out on your device from each
       seed's growing information, your USDA hardiness zone, and the frost dates
-      for your home ZIP code.
+      for your home ZIP code. Apple WeatherKit supplies the forecasts, and it
+      receives only the coordinates of your home location.
     </p>
   </article>
 
@@ -74,7 +75,7 @@
     <h3>Your garden, shared through iCloud.</h3>
     <p>
       There is no Seedkeep account to create. Your garden lives in your private
-      iCloud database. An owner can invite another gardener from You → Settings
+      iCloud database. An owner can invite another gardener from Settings
       with “Share garden via iCloud,” and participants can view and edit the
       same garden. Shared data stays in the owner's iCloud, and a participant
       can leave.
@@ -85,9 +86,9 @@
 <section class="closing">
   <p>
     On iPhone, five tabs keep the season together: Today for what needs
-    attention, Library for every packet, Garden for beds and planting events,
-    Journal for the record, and You for sharing and settings. On a wide iPad and
-    on Mac, a sidebar puts your seeds in a spreadsheet-style table.
+    attention, Seeds for every packet, Garden for beds and planting events,
+    Journal for the record, and Settings for sharing and preferences. On a wide
+    iPad and on Mac, a sidebar puts your seeds in a spreadsheet-style table.
   </p>
 </section>
 

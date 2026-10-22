@@ -27,7 +27,7 @@
 			<span class="dot" aria-hidden="true">·</span>
 			<a href="https://github.com/TaylorFinklea/seedkeep-ios">Source</a>
 			<span class="dot" aria-hidden="true">·</span>
-			<a href="mailto:taylor.finklea@gmail.com">taylor.finklea@gmail.com</a>
+			<a href="mailto:support@finklea.dev">support@finklea.dev</a>
 		</p>
 		<p class="footer-copy">© 2026 Taylor Finklea · MIT-licensed</p>
 	</footer>
