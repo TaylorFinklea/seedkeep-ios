@@ -8,31 +8,18 @@ struct ActiveGardenContextTests {
         #expect(
             ActiveGardenContext.householdID(
                 signedInHouseholdID: "participant-household",
-                participantZoneName: "seedkeep-owner-household",
-                cloudKitSyncEnabled: true
+                participantZoneName: "seedkeep-owner-household"
             ) == "owner-household"
         )
     }
 
-    @Test("owner keeps the signed-in server household")
+    @Test("owner keeps the signed-in household")
     func ownerUsesSignedInHousehold() {
         #expect(
             ActiveGardenContext.householdID(
                 signedInHouseholdID: "owner-household",
-                participantZoneName: nil,
-                cloudKitSyncEnabled: true
+                participantZoneName: nil
             ) == "owner-household"
-        )
-    }
-
-    @Test("CloudKit rollback keeps the signed-in server household")
-    func rollbackUsesSignedInHousehold() {
-        #expect(
-            ActiveGardenContext.householdID(
-                signedInHouseholdID: "participant-household",
-                participantZoneName: "seedkeep-owner-household",
-                cloudKitSyncEnabled: false
-            ) == "participant-household"
         )
     }
 
@@ -58,8 +45,8 @@ struct ActiveGardenContextTests {
         )
     }
 
-    @Test("participant and rollback scopes exclude parked Today data")
-    func participantAndRollbackScopesExcludeParkedData() {
+    @Test("participant and owner scopes exclude parked Today data")
+    func participantAndOwnerScopesExcludeParkedData() {
         let signedInHouseholdID = "signed-in-household"
         let ownerHouseholdID = "owner-household"
         let parkedHouseholdID = "parked-household"
@@ -67,33 +54,31 @@ struct ActiveGardenContextTests {
 
         let participantActiveID = ActiveGardenContext.householdID(
             signedInHouseholdID: signedInHouseholdID,
-            participantZoneName: participantZoneName,
-            cloudKitSyncEnabled: true
+            participantZoneName: participantZoneName
         )
-        let rollbackActiveID = ActiveGardenContext.householdID(
+        let ownerActiveID = ActiveGardenContext.householdID(
             signedInHouseholdID: signedInHouseholdID,
-            participantZoneName: participantZoneName,
-            cloudKitSyncEnabled: false
+            participantZoneName: nil
         )
         #expect(participantActiveID == ownerHouseholdID)
-        #expect(rollbackActiveID == signedInHouseholdID)
-        #expect(participantActiveID != rollbackActiveID)
+        #expect(ownerActiveID == signedInHouseholdID)
+        #expect(participantActiveID != ownerActiveID)
         #expect(parkedHouseholdID != participantActiveID)
-        #expect(parkedHouseholdID != rollbackActiveID)
+        #expect(parkedHouseholdID != ownerActiveID)
 
         let activeEvent = makeTodayEvent(id: "active-event", householdID: participantActiveID)
         let parkedEvent = makeTodayEvent(id: "parked-event", householdID: parkedHouseholdID)
-        let signedInEvent = makeTodayEvent(id: "signed-in-event", householdID: rollbackActiveID)
+        let signedInEvent = makeTodayEvent(id: "signed-in-event", householdID: ownerActiveID)
         let events = [activeEvent, parkedEvent, signedInEvent]
 
         let activeSeed = makeTodaySeed(id: "active-seed", householdID: participantActiveID)
         let parkedSeed = makeTodaySeed(id: "parked-seed", householdID: parkedHouseholdID)
-        let signedInSeed = makeTodaySeed(id: "signed-in-seed", householdID: rollbackActiveID)
+        let signedInSeed = makeTodaySeed(id: "signed-in-seed", householdID: ownerActiveID)
         let seeds = [activeSeed, parkedSeed, signedInSeed]
 
         let activeJournal = makeTodayJournal(id: "active-journal", householdID: participantActiveID)
         let parkedJournal = makeTodayJournal(id: "parked-journal", householdID: parkedHouseholdID)
-        let signedInJournal = makeTodayJournal(id: "signed-in-journal", householdID: rollbackActiveID)
+        let signedInJournal = makeTodayJournal(id: "signed-in-journal", householdID: ownerActiveID)
         let journals = [activeJournal, parkedJournal, signedInJournal]
 
         let activeDeparture = makeTodayDeparture(for: activeEvent.id)
@@ -106,10 +91,10 @@ struct ActiveGardenContextTests {
         #expect(TodayHouseholdScope.journals(journals, householdID: participantActiveID).map(\.id) == [activeJournal.id])
         #expect(TodayHouseholdScope.departures(departures, belongingTo: events, householdID: participantActiveID).map(\.plantingEventID) == [activeEvent.id])
 
-        #expect(TodayHouseholdScope.events(events, householdID: rollbackActiveID).map(\.id) == [signedInEvent.id])
-        #expect(TodayHouseholdScope.seeds(seeds, householdID: rollbackActiveID).map(\.id) == [signedInSeed.id])
-        #expect(TodayHouseholdScope.journals(journals, householdID: rollbackActiveID).map(\.id) == [signedInJournal.id])
-        #expect(TodayHouseholdScope.departures(departures, belongingTo: events, householdID: rollbackActiveID).map(\.plantingEventID) == [signedInEvent.id])
+        #expect(TodayHouseholdScope.events(events, householdID: ownerActiveID).map(\.id) == [signedInEvent.id])
+        #expect(TodayHouseholdScope.seeds(seeds, householdID: ownerActiveID).map(\.id) == [signedInSeed.id])
+        #expect(TodayHouseholdScope.journals(journals, householdID: ownerActiveID).map(\.id) == [signedInJournal.id])
+        #expect(TodayHouseholdScope.departures(departures, belongingTo: events, householdID: ownerActiveID).map(\.plantingEventID) == [signedInEvent.id])
     }
 
     private func makeTodayEvent(id: String, householdID: String) -> LocalPlantingEvent {

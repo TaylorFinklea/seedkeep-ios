@@ -10,18 +10,6 @@ import SeedkeepCloudKit
 struct CloudKitPendingWriteRegressionTests {
     @Test("CloudKit household sync queues no server write for a seed create")
     func cloudKitSeedCreateQueuesNoPendingWrite() throws {
-        let defaults = UserDefaults.standard
-        let key = FeatureFlags.cloudKitHouseholdSyncKey
-        let previous = defaults.object(forKey: key)
-        defer {
-            if let previous {
-                defaults.set(previous, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
-        }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let container = makeTestContainer(name: "cloudKitPendingWriteRegressionTests")
         let engine = SyncEngine(container: container)
 
@@ -146,10 +134,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit seed-photo upload stages bytes and persists locally before one save signal")
     func cloudKitSeedPhotoUploadStagesLocalMutation() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let householdID = "photo-upload-\(UUID().uuidString)"
         defer { try? PhotoByteStore.purgeHousehold(householdID) }
         let container = makeTestContainer(name: "cloudKitSeedPhotoUpload")
@@ -192,10 +176,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit journal-photo upload stages bytes and persists locally before one save signal")
     func cloudKitJournalPhotoUploadStagesLocalMutation() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let householdID = "journal-photo-upload-\(UUID().uuidString)"
         defer { try? PhotoByteStore.purgeHousehold(householdID) }
         let container = makeTestContainer(name: "cloudKitJournalPhotoUpload")
@@ -243,10 +223,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit journal-photo upload rejects a parked entry before staging bytes")
     func cloudKitJournalPhotoUploadRejectsParkedEntry() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let parkedHouseholdID = "parked-photo-\(UUID().uuidString)"
         let activeHouseholdID = "active-photo-\(UUID().uuidString)"
         defer {
@@ -283,10 +259,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit seed-photo delete queues one scoped intent and purges local bytes")
     func cloudKitSeedPhotoDeleteQueuesIntentAndPurgesBytes() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let householdID = "seed-photo-delete-\(UUID().uuidString)"
         defer { try? PhotoByteStore.purgeHousehold(householdID) }
         let scopeID = HouseholdCloudCoordinator.ownerScopeID(householdID: householdID)
@@ -330,10 +302,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit journal-photo delete queues one scoped intent and purges local bytes")
     func cloudKitJournalPhotoDeleteQueuesIntentAndPurgesBytes() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let householdID = "journal-photo-delete-\(UUID().uuidString)"
         defer { try? PhotoByteStore.purgeHousehold(householdID) }
         let scopeID = HouseholdCloudCoordinator.ownerScopeID(householdID: householdID)
@@ -379,10 +347,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit seed-photo cache miss performs one on-demand sync retry without a mutation signal")
     func cloudKitSeedPhotoCacheMissRetriesWithoutMutationSignal() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let householdID = "seed-photo-read-\(UUID().uuidString)"
         defer { try? PhotoByteStore.purgeHousehold(householdID) }
         let container = makeTestContainer(name: "cloudKitSeedPhotoCacheMiss")
@@ -416,10 +380,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit journal-photo cache miss performs one on-demand sync retry without a mutation signal")
     func cloudKitJournalPhotoCacheMissRetriesWithoutMutationSignal() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let householdID = "journal-photo-read-\(UUID().uuidString)"
         defer { try? PhotoByteStore.purgeHousehold(householdID) }
         let container = makeTestContainer(name: "cloudKitJournalPhotoCacheMiss")
@@ -457,22 +417,17 @@ struct CloudKitPendingWriteRegressionTests {
         #expect(saveSignals == 0)
     }
 
-    @Test("photo operations resolve the active owner, participant, and rollback garden IDs")
+    @Test("photo operations resolve the active owner and participant garden IDs")
     func photoOperationsResolveActiveGardenIDs() {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        let modes: [(household: String, zone: String?, cloudKit: Bool, activeID: String)] = [
-            ("owner-household", nil, true, "owner-household"),
-            ("participant-household", "seedkeep-owner-household", true, "owner-household"),
-            ("participant-household", "seedkeep-owner-household", false, "participant-household")
+        let modes: [(household: String, zone: String?, activeID: String)] = [
+            ("owner-household", nil, "owner-household"),
+            ("participant-household", "seedkeep-owner-household", "owner-household")
         ]
 
         for mode in modes {
-            FeatureFlags.setCloudKitHouseholdSync(mode.cloudKit)
             let activeHouseholdID = ActiveGardenContext.householdID(
                 signedInHouseholdID: mode.household,
-                participantZoneName: mode.zone,
-                cloudKitSyncEnabled: mode.cloudKit
+                participantZoneName: mode.zone
             )
             #expect(activeHouseholdID == mode.activeID)
         }
@@ -480,10 +435,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit journal and checklist mutations stay local under the active garden")
     func cloudKitJournalAndChecklistMutationsStayLocal() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let container = makeTestContainer(name: "cloudKitLocalJournalMutations")
         let store = JournalStore(container: container)
         var saveSignals = 0
@@ -549,10 +500,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("leap-day retrospectives span February and March while rejecting impossible dates")
     func cloudKitRetrospectiveHandlesLeapDay() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let container = makeTestContainer(name: "cloudKitLeapDayRetrospective")
         let store = JournalStore(container: container)
         let householdID = "leap-day-garden"
@@ -590,22 +537,17 @@ struct CloudKitPendingWriteRegressionTests {
         }
     }
 
-    @Test("journal creates use the active owner, participant, and rollback garden IDs")
+    @Test("journal creates use the active owner and participant garden IDs")
     func journalCreateFollowsActiveGardenModes() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        let modes: [(signedIn: String, zone: String?, cloudKit: Bool, active: String)] = [
-            ("owner-server-household", nil, true, "owner-server-household"),
-            ("participant-server-household", "seedkeep-owner-shared-household", true, "owner-shared-household"),
-            ("participant-server-household", "seedkeep-owner-shared-household", false, "participant-server-household")
+        let modes: [(signedIn: String, zone: String?, active: String)] = [
+            ("owner-household", nil, "owner-household"),
+            ("participant-household", "seedkeep-owner-shared-household", "owner-shared-household")
         ]
 
         for (index, mode) in modes.enumerated() {
-            FeatureFlags.setCloudKitHouseholdSync(mode.cloudKit)
             let active = ActiveGardenContext.householdID(
                 signedInHouseholdID: mode.signedIn,
-                participantZoneName: mode.zone,
-                cloudKitSyncEnabled: mode.cloudKit
+                participantZoneName: mode.zone
             )
             #expect(active == mode.active)
             let store = JournalStore(container: makeTestContainer(name: "journalActiveGardenMode-\(index)"))
@@ -622,10 +564,6 @@ struct CloudKitPendingWriteRegressionTests {
 
     @Test("CloudKit journal mutations reject parked-household rows")
     func cloudKitJournalMutationsRejectParkedRows() async throws {
-        let previous = UserDefaults.standard.object(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        defer { Self.restoreCloudKitFlag(previous) }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-
         let container = makeTestContainer(name: "cloudKitJournalParkedRows")
         let context = ModelContext(container)
         let parked = LocalJournalEntry(
@@ -679,14 +617,6 @@ struct CloudKitPendingWriteRegressionTests {
             #expect(error.code == "inactive_garden_entry")
         } catch {
             Issue.record("Unexpected active-garden error: \(error)")
-        }
-    }
-
-    private static func restoreCloudKitFlag(_ previous: Any?) {
-        if let previous {
-            UserDefaults.standard.set(previous, forKey: FeatureFlags.cloudKitHouseholdSyncKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: FeatureFlags.cloudKitHouseholdSyncKey)
         }
     }
 

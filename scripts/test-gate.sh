@@ -63,14 +63,7 @@ XCODEBUILD_ARGS=(
     CODE_SIGNING_REQUIRED=NO
 )
 
-bash "$COUNT_GATE" "legacy CloudKit-OFF app tests" xcodebuild "${XCODEBUILD_ARGS[@]}" \
-    -skip-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
-    test
-
-bash "$COUNT_GATE" "production-default CloudKit-ON contract" xcodebuild "${XCODEBUILD_ARGS[@]}" \
-    'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG SEEDKEEP_TEST_CLOUDKIT_ON' \
-    -only-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
-    test
+bash "$COUNT_GATE" "iOS app tests" xcodebuild "${XCODEBUILD_ARGS[@]}" test
 
 MAC_XCODEBUILD_ARGS=(
     -project "$REPO_ROOT/Seedkeep.xcodeproj"
@@ -81,13 +74,6 @@ MAC_XCODEBUILD_ARGS=(
     CODE_SIGNING_REQUIRED=NO
 )
 
-bash "$COUNT_GATE" "macOS CloudKit-OFF app tests" xcodebuild "${MAC_XCODEBUILD_ARGS[@]}" \
-    -skip-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
-    test
-
-bash "$COUNT_GATE" "macOS production-default CloudKit-ON contract" xcodebuild "${MAC_XCODEBUILD_ARGS[@]}" \
-    'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG SEEDKEEP_TEST_CLOUDKIT_ON' \
-    -only-testing:SeedkeepTests/ProductionDefaultCloudKitGateTests \
-    test
+bash "$COUNT_GATE" "macOS app tests" xcodebuild "${MAC_XCODEBUILD_ARGS[@]}" test
 
 echo "[test-gate] all required tests passed"

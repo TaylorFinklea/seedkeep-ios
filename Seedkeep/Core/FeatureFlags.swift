@@ -14,39 +14,9 @@ enum FeatureFlags {
     /// assistant `client_pet_state`).
     static let plantPetsEnabled = false
 
-    /// R1 serverless rearchitecture — route HOUSEHOLD GARDEN DATA sync through the
-    /// `SeedkeepCloudKit` `CKSyncEngine` shared zone (+ CKShare households) instead of the
-    /// legacy server `SyncEngine` feeds. **OFF by default — additive, ships nothing.**
-    ///
-    /// Runtime-toggleable via UserDefaults (NOT a compile-time constant), with an instant
-    /// kill-switch. As of the 2026-07-27 V1 plan there is no user-facing Settings control for
-    /// this — it defaults ON in shipping builds and is flipped only as an internal recovery
-    /// affordance (debug build or support gesture), since off drops the user to legacy server
-    /// sync with no working escape hatch once Phase 2 lands. The test-only compilation
-    /// condition used by the release gate lets the suite run both the legacy OFF lane and the
-    /// shipping default-ON lane without changing release behavior.
-    /// See the 2026-06-28 `r1-liveengine-wiring-spec.md`. N3 (T1) removed the server sync that
-    /// OFF used to select: OFF now leaves the app with no sync, which only an XCTest lane uses.
-    static let cloudKitHouseholdSyncKey = "seedkeep.flag.cloudKitHouseholdSync"
-    /// ALWAYS ON outside XCTest (N1, 2026-10-20): the Seedkeep server is retired, so CloudKit is
-    /// the only sync path. A stored explicit `false` from the old kill-switch is ignored there;
-    /// turning it off would leave the app with no sync at all. Under XCTest the two lanes stay
-    /// until N3:
-    ///   1. a value a test EXPLICITLY set is honored;
-    ///   2. under the explicitly test-scoped ON compilation condition, the shipping default (ON);
-    ///      otherwise the legacy OFF default, deterministic.
-    static var cloudKitHouseholdSyncEnabled: Bool {
-        guard isRunningUnitTests else { return true }
-        if let explicit = UserDefaults.standard.object(forKey: cloudKitHouseholdSyncKey) as? Bool { return explicit }
-        #if SEEDKEEP_TEST_CLOUDKIT_ON
-        return true
-        #else
-        return false
-        #endif
-    }
-    static func setCloudKitHouseholdSync(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: cloudKitHouseholdSyncKey)
-    }
+    // N3 (T2): the CloudKit household-sync flag and its UserDefaults kill-switch are gone. CloudKit
+    // is the only sync path, in every build and under XCTest. A device may still hold the old
+    // stored flag value from earlier builds; nothing reads it.
 
     /// R1 retirement copy for legacy server household invitations (2026-07-13 "CKShare is the sole
     /// R1 invitation model" ADR). Unlike the CloudKit capability messages above, this is a
@@ -54,11 +24,6 @@ enum FeatureFlags {
     /// CKShare (Settings ▸ "Share garden via iCloud") is the sole sharing model going forward.
     static let legacyInviteRetirementMessage =
         "Household invite links are no longer supported. Share your garden from Settings via iCloud — tap “Share garden via iCloud” to invite someone."
-
-    /// True when server-backed household features must not be exposed.
-    static var serverGardenFeaturesRestricted: Bool {
-        cloudKitHouseholdSyncEnabled
-    }
 
     /// True when the app is hosting a unit-test bundle (XCTest is linked + loaded only then).
     static let isRunningUnitTests = NSClassFromString("XCTestCase") != nil

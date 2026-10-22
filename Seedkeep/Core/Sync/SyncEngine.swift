@@ -461,12 +461,6 @@ public final class SyncEngine {
     }
 
     func deleteSeedPhoto(_ photoID: String, householdID: String) async throws {
-        guard FeatureFlags.cloudKitHouseholdSyncEnabled else {
-            throw SeedkeepError(
-                code: "photo_delete_unavailable",
-                message: "Seed photo deletion is available for iCloud gardens."
-            )
-        }
         guard !householdID.isEmpty else {
             throw SeedkeepError(
                 code: "missing_active_garden",

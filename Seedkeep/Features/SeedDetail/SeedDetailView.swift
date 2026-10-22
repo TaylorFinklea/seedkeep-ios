@@ -177,12 +177,10 @@ struct SeedDetailView: View {
                                             Label("Retry sync", systemImage: "arrow.clockwise")
                                         }
                                     }
-                                    if FeatureFlags.cloudKitHouseholdSyncEnabled {
-                                        Button(role: .destructive) {
-                                            Task { await deletePhoto(photo) }
-                                        } label: {
-                                            Label("Delete photo", systemImage: "trash")
-                                        }
+                                    Button(role: .destructive) {
+                                        Task { await deletePhoto(photo) }
+                                    } label: {
+                                        Label("Delete photo", systemImage: "trash")
                                     }
                                 }
                         }

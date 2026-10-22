@@ -6,7 +6,7 @@ import SeedkeepKit
 
 /// N1 gates at the `AppEnvironment` level, through `AppEnvironment.makeForTesting`: the real
 /// erasers, the CloudKit gate, the share-adoption epoch and the refusing server transport. No live
-/// CloudKit: every test keeps `canUseCloudKit` false wherever a coordinator would be built.
+/// CloudKit: every coordinator the environment builds runs on a fake engine (`FakeCloudCoordinators`).
 @MainActor
 @Suite("AppEnvironment N1 gates", .serialized)
 struct AppEnvironmentGateTests {
@@ -23,6 +23,7 @@ struct AppEnvironmentGateTests {
         let syncDirectory: URL
         let checkpointDirectory: URL
         let tokenStore: InMemoryTokenStore
+        let coordinators: FakeCloudCoordinators
         let cleanup: () -> Void
     }
 
@@ -57,13 +58,15 @@ struct AppEnvironmentGateTests {
         let container = makeTestContainer(name: "appEnvGate-\(UUID().uuidString)")
         try prepare(container, defaults, syncDirectory)
         let tokenStore = InMemoryTokenStore(token)
+        let coordinators = FakeCloudCoordinators()
         let env = AppEnvironment.makeForTesting(
             identity: provider, tokenStore: tokenStore, defaults: defaults,
             container: container, durableStateDirectory: syncDirectory,
-            legacyCheckpointDirectory: checkpointDirectory)
+            legacyCheckpointDirectory: checkpointDirectory,
+            cloudCoordinators: coordinators.factory)
         return Harness(env: env, provider: provider, defaults: defaults, container: container,
                        syncDirectory: syncDirectory, checkpointDirectory: checkpointDirectory,
-                       tokenStore: tokenStore, cleanup: {
+                       tokenStore: tokenStore, coordinators: coordinators, cleanup: {
             defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: env.scanStagingRoot)
@@ -286,14 +289,12 @@ struct AppEnvironmentGateTests {
         #expect(!h.env.isAdoptingShare)
     }
 
-    #if DEBUG   // `cloudKitSyncOverrideForTesting` exists only in Debug builds
     @Test("a sync skipped for an adoption runs once the adoption ends, even unadopted")
     func skippedSyncRerunsAfterAdoption() async throws {
         // Unverified: each sync re-resolves (one account-status call) and builds no coordinator.
         let provider = FakeCloudIdentityProvider(status: .unverified)
         let h = try Self.makeHarness("skipped", provider: provider, cache: (Self.userA, "hh_a"))
         defer { h.cleanup() }
-        h.env.cloudKitSyncOverrideForTesting = true   // the shipping CloudKit branch
         await h.env.auth.restoreSession()
 
         let quiet = h.env.beginAdoption()
@@ -309,7 +310,6 @@ struct AppEnvironmentGateTests {
         #expect(provider.accountStatusCalls == baseline + 2, "the held-back sync runs")
         #expect(!h.env.hasCloudCoordinator)
     }
-    #endif
 
     // MARK: - Pending-share deposits
 

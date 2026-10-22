@@ -118,8 +118,7 @@ public final class AppEnvironment {
                 guard case .signedIn(_, let household) = auth?.state else { return nil }
                 return ActiveGardenContext.householdID(
                     signedInHouseholdID: household.id,
-                    participantZoneName: ActiveGardenContext.participantZoneName(),
-                    cloudKitSyncEnabled: FeatureFlags.cloudKitHouseholdSyncEnabled
+                    participantZoneName: ActiveGardenContext.participantZoneName()
                 )
             },
             preferencesProvider: { @MainActor [weak prefs] in
@@ -144,10 +143,11 @@ public final class AppEnvironment {
 
     /// N1 test seam: an environment over `container` and a fake identity provider, with every
     /// durable side effect pointed at the caller's `defaults` and `durableStateDirectory`, and
-    /// without the background services `live()` starts (weather observers, notifier). It never
-    /// builds a CloudKit coordinator by itself; tests must keep `canUseCloudKit` false wherever
-    /// one would be built. `cloudKitPermitted: false` is the sample-garden seam (`makeForFixture`):
-    /// CloudKit is never used, whatever the identity says.
+    /// without the background services `live()` starts (weather observers, notifier).
+    /// `cloudCoordinators` builds every CloudKit coordinator it needs: tests pass one over a fake
+    /// engine (N3 T2), so the shipping CloudKit path runs without CloudKit or the network.
+    /// `cloudKitPermitted: false` is the sample-garden seam (`makeForFixture`): CloudKit is never
+    /// used, whatever the identity says, so no coordinator is ever built.
     static func makeForTesting(
         identity: any CloudIdentityProviding,
         tokenStore: any TokenStoring,
@@ -157,6 +157,7 @@ public final class AppEnvironment {
         legacyCheckpointDirectory: URL? = nil,
         scanStagingRoot: URL? = nil,
         cloudKitPermitted: Bool = true,
+        cloudCoordinators: CloudCoordinatorFactory,
         forecastSource: @escaping RecommendationStore.ForecastSource = WeatherKitRefiner.fetchForecast,
         apiKeys: APIKeyStore = APIKeyStore(service: "app.seedkeep.tests.\(UUID().uuidString)")
     ) -> AppEnvironment {
@@ -187,7 +188,8 @@ public final class AppEnvironment {
             scanStagingRoot: scanStagingRoot ?? FileManager.default.temporaryDirectory
                 .appendingPathComponent("scan-staging-\(UUID().uuidString)", isDirectory: true),
             startsBackgroundServices: false,
-            cloudKitPermitted: cloudKitPermitted
+            cloudKitPermitted: cloudKitPermitted,
+            cloudCoordinators: cloudCoordinators
         )
         env.clearAppNotifications = {}
         // N3 test seam: the live launch's legacy-file cleanup, over the caller's directories.
@@ -238,6 +240,8 @@ public final class AppEnvironment {
             durableStateDirectory: root.appendingPathComponent("sync", isDirectory: true),
             scanStagingRoot: root.appendingPathComponent("scan-staging", isDirectory: true),
             cloudKitPermitted: false,
+            // Never called: with `cloudKitPermitted` false no coordinator is built.
+            cloudCoordinators: .live,
             forecastSource: FixtureMode.forecastSource,
             apiKeys: APIKeyStore(backend: InMemoryAPIKeyBackend())
         )
@@ -267,9 +271,11 @@ public final class AppEnvironment {
         durableStateDirectory: URL = HouseholdCloudCoordinator.householdSyncDirURL(),
         scanStagingRoot: URL = ScanPhotoStaging.rootURL(),
         startsBackgroundServices: Bool = true,
-        cloudKitPermitted: Bool = true
+        cloudKitPermitted: Bool = true,
+        cloudCoordinators: CloudCoordinatorFactory = .live
     ) {
         self.cloudKitPermitted = cloudKitPermitted
+        self.cloudCoordinators = cloudCoordinators
         self.auth = auth
         self.container = container
         self.sync = sync
@@ -506,43 +512,37 @@ public final class AppEnvironment {
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
             let activeGardenHouseholdID = self.activeGardenHouseholdID ?? household.id
-            // R1 routes household garden data through CloudKit, the only sync (N3 removed the
-            // server's). Live builds always have it on; with it off (an XCTest lane until F)
-            // there is nothing to sync and only the local post-sync work runs.
+            // Household garden data syncs through CloudKit, the only sync (N3 removed the server's
+            // and the flag that selected it).
+            // N1: CloudKit only on a confirmed identity. An unconfirmed one resolves first; a pass
+            // that lands elsewhere (another garden, chooser) leaves this sync to the RootView task
+            // its new state starts.
+            if !auth.isIdentityVerified { await auth.restoreSession() }
+            guard case .signedIn(_, let current) = auth.state, current == household,
+                  self.activeGardenHouseholdID == activeGardenHouseholdID else { return }
+            // N1: CloudKit paused (unconfirmed identity) or a share being adopted (its own sync
+            // follows): skip only the CloudKit pass, with no banner. The local post-sync work below
+            // still runs.
+            if isAdoptingShare { syncSkippedForAdoption = true }
             let banner: String?
-            if isCloudKitSyncEnabled {
-                // N1: CloudKit only on a confirmed identity. An unconfirmed one resolves first; a
-                // pass that lands elsewhere (another garden, chooser) leaves this sync to the
-                // RootView task its new state starts.
-                if !auth.isIdentityVerified { await auth.restoreSession() }
-                guard case .signedIn(_, let current) = auth.state, current == household,
-                      self.activeGardenHouseholdID == activeGardenHouseholdID else { return }
-                // N1: CloudKit paused (unconfirmed identity) or a share being
-                // adopted (its own sync follows): skip only the CloudKit pass, with no banner. The
-                // local post-sync work below still runs.
-                if isAdoptingShare { syncSkippedForAdoption = true }
-                if canUseCloudKit, !isAdoptingShare {
-                    // R1 27d.18 — participant stranded-row recovery. Only meaningful for a participant
-                    // (activeGardenHouseholdID resolves to the owner-zone ID, differing from the signed-in
-                    // ID); runs BEFORE the sync pass so re-homed rows are pushed by the pass that follows.
-                    if activeGardenHouseholdID != household.id {
-                        let recovered = ParticipantRowRecovery.runIfNeeded(
-                            container: container,
-                            signedInHouseholdID: household.id,
-                            ownerZoneHouseholdID: activeGardenHouseholdID
-                        )
-                        if recovered { noteHouseholdMutation() }
-                    }
-                    let coordinator = ensureCloudCoordinator(household: household)
-                    let ran = await runCloudSyncPass { await coordinator.sync() }
-                    guard ran else { return }
-                    // Household data syncs through CloudKit. Server-backed personal feeds are retired,
-                    // so only CloudKit errors can reach the sync banner.
-                    // A pass that stopped (paused, account changed) leaves an older error behind.
-                    banner = coordinator.lastPassCompleted ? coordinator.lastHumanizedError : nil
-                } else {
-                    banner = nil
+            if canUseCloudKit, !isAdoptingShare {
+                // R1 27d.18 — participant stranded-row recovery. Only meaningful for a participant
+                // (activeGardenHouseholdID resolves to the owner-zone ID, differing from the signed-in
+                // ID); runs BEFORE the sync pass so re-homed rows are pushed by the pass that follows.
+                if activeGardenHouseholdID != household.id {
+                    let recovered = ParticipantRowRecovery.runIfNeeded(
+                        container: container,
+                        signedInHouseholdID: household.id,
+                        ownerZoneHouseholdID: activeGardenHouseholdID
+                    )
+                    if recovered { noteHouseholdMutation() }
                 }
+                let coordinator = ensureCloudCoordinator(household: household)
+                let ran = await runCloudSyncPass { await coordinator.sync() }
+                guard ran else { return }
+                // Only CloudKit errors can reach the sync banner. A pass that stopped (paused,
+                // account changed) leaves an older error behind.
+                banner = coordinator.lastPassCompleted ? coordinator.lastHumanizedError : nil
             } else {
                 banner = nil
             }
@@ -568,17 +568,19 @@ public final class AppEnvironment {
 
     private func noteHouseholdMutation() {
         // A share being adopted replaces this garden; its own sync pushes what remains.
-        guard FeatureFlags.cloudKitHouseholdSyncEnabled, canUseCloudKit, !isAdoptingShare,
+        guard canUseCloudKit, !isAdoptingShare,
               case .signedIn(_, let household) = auth.state else { return }
         let coordinator = ensureCloudCoordinator(household: household)
         Task { await coordinator.save() }
     }
 
-    // R1 — the CloudKit household coordinator, built lazily on first use when the flag is on and a
-    // household is known. The cache key is the complete CloudKit database/zone/owner scope so an
-    // account switch or same-named share from another owner always rebuilds. nil/unused when off.
+    // R1 — the CloudKit household coordinator, built lazily on first use once a household is known
+    // and CloudKit is allowed. The cache key is the complete CloudKit database/zone/owner scope so an
+    // account switch or same-named share from another owner always rebuilds.
     @ObservationIgnored private var cloudCoordinator: HouseholdCloudCoordinator?
     @ObservationIgnored private var cloudCoordinatorKey: String?
+    /// Builds the coordinators above: `.live` (CloudKit) in the app, a fake engine in tests.
+    @ObservationIgnored private let cloudCoordinators: CloudCoordinatorFactory
 
     /// N1 (parent-owned seam): CloudKit use (coordinator creation, sync, saves, photo recovery,
     /// sharing) requires an iCloud identity confirmed this session. Sample-garden mode
@@ -608,7 +610,7 @@ public final class AppEnvironment {
     }
 
     /// Read-only access to the live CloudKit coordinator for the Settings diagnostics panel
-    /// (nil until the first sync after the flag is toggled on, and while CloudKit is paused). Its
+    /// (nil until the first CloudKit sync, and while CloudKit is paused). Its
     /// @Observable state drives the UI.
     var cloudKit: HouseholdCloudCoordinator? { canUseCloudKit ? cloudCoordinator : nil }
 
@@ -624,17 +626,6 @@ public final class AppEnvironment {
         if case .signedIn = auth.state { return true }
         return false
     }
-
-    #if DEBUG
-    /// Test seam: picks `syncIfPossible`'s branch without the process-wide flag that parallel
-    /// suites toggle. Always nil outside tests.
-    @ObservationIgnored var cloudKitSyncOverrideForTesting: Bool?
-    private var isCloudKitSyncEnabled: Bool {
-        cloudKitSyncOverrideForTesting ?? FeatureFlags.cloudKitHouseholdSyncEnabled
-    }
-    #else
-    private var isCloudKitSyncEnabled: Bool { FeatureFlags.cloudKitHouseholdSyncEnabled }
-    #endif
 
     /// Clears the app's scheduled and delivered notifications in the different-user eraser.
     /// `makeForTesting` replaces it with a no-op, so tests never clear the real app's.
@@ -680,8 +671,7 @@ public final class AppEnvironment {
     @ObservationIgnored private var pendingShareEpoch = 0
 
     /// Household ID that scopes locally stored garden data. In a CloudKit shared
-    /// garden, the owner's zone is authoritative; server-only/rollback mode
-    /// deliberately remains on the signed-in household.
+    /// garden, the owner's zone is authoritative; otherwise the signed-in household.
     var activeGardenHouseholdID: String? {
         // Read so views observing this property also update when the participant marker (kept in
         // unobserved UserDefaults) changes: adopting a share or leaving a shared garden.
@@ -689,8 +679,7 @@ public final class AppEnvironment {
         guard case .signedIn(_, let household) = auth.state else { return nil }
         return ActiveGardenContext.householdID(
             signedInHouseholdID: household.id,
-            participantZoneName: loadParticipantMarker()?.zoneName,
-            cloudKitSyncEnabled: FeatureFlags.cloudKitHouseholdSyncEnabled
+            participantZoneName: loadParticipantMarker()?.zoneName
         )
     }
 
@@ -711,7 +700,7 @@ public final class AppEnvironment {
         if let marker = loadParticipantMarker() {
             let key = HouseholdCloudCoordinator.participantScopeID(ownerZoneID: marker.zoneID)
             if let existing = cloudCoordinator, cloudCoordinatorKey == key { return existing }
-            let coordinator = HouseholdCloudCoordinator.participant(ownerZoneID: marker.zoneID, container: container)
+            let coordinator = cloudCoordinators.participant(marker.zoneID, container)
             coordinator.isCloudKitAllowed = { [weak self] in self?.canUseCloudKit ?? false }
             coordinator.purgeScanStaging = { [weak self] in try self?.purgeScanStaging() }
             cloudCoordinator = coordinator
@@ -720,13 +709,7 @@ public final class AppEnvironment {
         }
         let key = HouseholdCloudCoordinator.ownerScopeID(householdID: household.id)
         if let existing = cloudCoordinator, cloudCoordinatorKey == key { return existing }
-        let coordinator = HouseholdCloudCoordinator.live(
-            householdID: household.id,
-            householdName: household.name,
-            householdCreatedAt: household.created_at,
-            householdUpdatedAt: household.updated_at,
-            container: container
-        )
+        let coordinator = cloudCoordinators.owner(household, container)
         coordinator.isCloudKitAllowed = { [weak self] in self?.canUseCloudKit ?? false }
         coordinator.purgeScanStaging = { [weak self] in try self?.purgeScanStaging() }
         cloudCoordinator = coordinator
@@ -1047,8 +1030,8 @@ public final class AppEnvironment {
 
     // MARK: - R1 27d.18 — participant journal recovery review inbox
 
-    /// Scope key for the current participant's stranded-row registry (nil unless the flag is on and
-    /// this device is currently viewing a shared household) — drives the Settings review-inbox row +
+    /// Scope key for the current participant's stranded-row registry (nil unless this device is
+    /// currently viewing a shared household) — drives the Settings review-inbox row +
     /// its sheet's item filter.
     var participantRecoveryScopeKey: String? {
         guard case .signedIn(_, let household) = auth.state,
@@ -1225,4 +1208,32 @@ final class InFlightOperations<Value: Sendable> {
     }
 
     func removeAll() { entries.removeAll() }
+}
+
+/// How `AppEnvironment` builds its CloudKit household coordinators. The app uses `.live` (the
+/// real `CKSyncEngine` on the private or shared database). Unit tests pass a factory over a fake
+/// engine (N3 T2), so they exercise the shipping CloudKit path without CloudKit or the network.
+@MainActor
+struct CloudCoordinatorFactory {
+    /// The owner coordinator for the signed-in household's own zone.
+    var owner: (HouseholdDTO, ModelContainer) -> HouseholdCloudCoordinator
+    /// A participant coordinator on the owner's shared zone.
+    var participant: (CKRecordZone.ID, ModelContainer) -> HouseholdCloudCoordinator
+
+    static var live: CloudCoordinatorFactory {
+        CloudCoordinatorFactory(
+            owner: { household, container in
+                HouseholdCloudCoordinator.live(
+                    householdID: household.id,
+                    householdName: household.name,
+                    householdCreatedAt: household.created_at,
+                    householdUpdatedAt: household.updated_at,
+                    container: container
+                )
+            },
+            participant: { ownerZoneID, container in
+                HouseholdCloudCoordinator.participant(ownerZoneID: ownerZoneID, container: container)
+            }
+        )
+    }
 }

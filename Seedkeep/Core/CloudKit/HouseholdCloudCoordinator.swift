@@ -21,8 +21,7 @@ import SeedkeepCloudKit
 /// The engine is held behind `HouseholdRecordSyncing` so this whole class unit-tests against a fake
 /// (no CKContainer / iCloud account). `provisioner == nil` (test path) skips live provisioning.
 ///
-/// GATED OFF in production by `FeatureFlags.cloudKitHouseholdSyncEnabled` (additive; the legacy
-/// server `SyncEngine` is unchanged until the device-proven cutover — see the 2026-06-28 spec).
+/// The only household sync path (N3 removed the server sync and the flag that once gated this).
 @MainActor
 @Observable
 final class HouseholdCloudCoordinator {

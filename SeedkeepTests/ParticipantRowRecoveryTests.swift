@@ -226,30 +226,6 @@ struct ParticipantRowRecoveryTests {
         #expect(seed.householdID == householdID, "owner mode must not touch any row")
     }
 
-    // MARK: - Invariant 7 — flag-OFF is byte-identical (same guard, framed for the OFF case)
-
-    @Test("the same-ID guard a flag-OFF resolver value would produce is a safe no-op")
-    func sameIDGuardIsNoOpForAFlagOffEquivalentValue() throws {
-        // This does NOT exercise AppEnvironment or the flag-OFF call site — AppEnvironment is
-        // un-instantiable in this suite, so there is no flag-OFF call-site coverage here despite this
-        // test's proximity to "Invariant 7". It only proves `runIfNeeded`'s own same-ID guard is a
-        // safe no-op for the SAME VALUE that `AppEnvironment.activeGardenHouseholdID` would produce
-        // when the CloudKit flag is off (`ActiveGardenContext.householdID`'s `cloudKitSyncEnabled`
-        // guard resolves it to the signed-in household ID in that case) — this test and
-        // `ownerModeNoParticipantMarkerIsNoOp` exercise the identical code path for that reason. The
-        // real flag gate is `AppEnvironment.swift:227-243`, unreachable from this harness.
-        let container = makeContainer()
-        let householdID = "hh-\(UUID().uuidString)"
-        let setup = ModelContext(container)
-        setup.insert(LocalLocation(id: "loc1", householdID: householdID, name: "Shed", sortOrder: 0, createdAt: 1, updatedAt: 2))
-        try setup.save()
-
-        let ran = ParticipantRowRecovery.runIfNeeded(
-            container: container, signedInHouseholdID: householdID, ownerZoneHouseholdID: householdID)
-        #expect(ran == false)
-        #expect(try ModelContext(container).fetch(FetchDescriptor<LocalJournalRecoveryItem>()).isEmpty)
-    }
-
     // MARK: - Invariant 5 — marker idempotency + failure atomicity
 
     @Test("a second run after success performs zero writes")

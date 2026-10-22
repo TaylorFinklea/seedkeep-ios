@@ -57,8 +57,7 @@ struct FixtureEnvironmentTests {
         #expect(!env.canUseCloudKit)
         #expect(env.cloudKit == nil)
 
-        // The CloudKit branch of `syncIfPossible` (what a live device runs) builds no coordinator.
-        env.cloudKitSyncOverrideForTesting = true
+        // `syncIfPossible` (the CloudKit path a live device runs) builds no coordinator.
         await env.syncIfPossible()
         #expect(!env.hasCloudCoordinator)
         #expect(!env.canUseCloudKit)

@@ -5,12 +5,13 @@ enum ActiveGardenContext {
     static let participantZoneNameDefaultsKey = "seedkeep.sharing.participant.zoneName"
     static let participantOwnerNameDefaultsKey = "seedkeep.sharing.participant.ownerName"
 
+    /// The garden local data is scoped to: the shared garden's (owner zone's) household when this
+    /// device is a participant, otherwise the signed-in household.
     static func householdID(
         signedInHouseholdID: String,
-        participantZoneName: String?,
-        cloudKitSyncEnabled: Bool
+        participantZoneName: String?
     ) -> String {
-        guard cloudKitSyncEnabled, let participantZoneName, !participantZoneName.isEmpty else {
+        guard let participantZoneName, !participantZoneName.isEmpty else {
             return signedInHouseholdID
         }
         return SeedkeepRecordNames.householdID(fromZoneName: participantZoneName)

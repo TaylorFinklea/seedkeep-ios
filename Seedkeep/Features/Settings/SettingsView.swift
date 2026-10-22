@@ -186,11 +186,10 @@ struct SettingsContent: View {
                             await appEnv.syncIfPossible()
                             isSyncingNow = false
                             // Only show the success ✓ when the pass actually succeeded — a green
-                            // check next to an error banner lies. N1: with CloudKit on, only a
-                            // completed CloudKit pass counts; none runs while paused (`cloudKit` is
-                            // nil then).
-                            let cloudKitClean = !FeatureFlags.cloudKitHouseholdSyncEnabled
-                                || (appEnv.cloudKit.map { $0.lastPassCompleted && $0.lastHumanizedError == nil } ?? false)
+                            // check next to an error banner lies. N1: only a completed CloudKit pass
+                            // counts; none runs while paused (`cloudKit` is nil then).
+                            let cloudKitClean = appEnv.cloudKit
+                                .map { $0.lastPassCompleted && $0.lastHumanizedError == nil } ?? false
                             syncedJustNow = cloudKitClean
                             try? await Task.sleep(nanoseconds: 2_500_000_000)
                             if syncToken == token { syncedJustNow = false }   // don't clear a newer tap's ✓
@@ -207,88 +206,86 @@ struct SettingsContent: View {
                         }
                     }
                     .disabled(isSyncingNow)
-                    if FeatureFlags.cloudKitHouseholdSyncEnabled {
-                        // Visible CloudKit status so the beta test isn't blind.
+                    // Visible CloudKit status so the beta test isn't blind.
+                    Button {
+                        checkingICloud = true
+                        Task {
+                            let s = await HouseholdCloudCoordinator.currentAccountStatusText()
+                            await MainActor.run { iCloudStatus = s; checkingICloud = false }
+                        }
+                    } label: {
+                        Label(checkingICloud ? "Checking iCloud…" : "Check iCloud account", systemImage: "person.icloud")
+                    }
+                    .disabled(checkingICloud)
+                    if let iCloudStatus {
+                        statusRow("iCloud account", iCloudStatus)
+                    }
+                    if let ck = appEnv.cloudKit {
+                        statusRow("Initial upload", ck.initialUploadComplete ? "complete" : "pending")
+                        if ck.isSyncing { statusRow("CloudKit", "syncing…") }
+                        if let at = ck.lastSyncedAt {
+                            statusRow("Last CloudKit sync", at.formatted(date: .omitted, time: .standard))
+                        }
+                        statusRow("Records synced this session", "\(ck.zoneRecordCount)")
+                        if let acct = ck.accountStatusText { statusRow("Account (at first sync)", acct) }
+                        if let err = ck.lastHumanizedError {
+                            errorRow("CloudKit: \(err)")
+                        }
+                        if let detail = ck.lastErrorDetail {
+                            Text(detail)
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
+                        }
+                    } else if let reason = appEnv.cloudKitPauseReason {
+                        Text("iCloud sync is paused — \(reason).")
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
+                    } else {
+                        Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
+                            .font(.wbFootnote)
+                            .foregroundStyle(WBColor.muted)
+                    }
+
+                    // Cross-account sharing (CloudKit). Owner shares the household zone via the
+                    // system share sheet; a participant who has joined sees a Leave affordance.
+                    if appEnv.isViewingSharedHousehold {
+                        statusRow("Household", "shared with you")
+                        if let scopeKey = appEnv.participantRecoveryScopeKey {
+                            let scopedPendingCount = pendingRecoveryItems.filter { $0.scopeKey == scopeKey }.count
+                            if scopedPendingCount > 0 {
+                                Button {
+                                    showingJournalRecoveryReview = true
+                                } label: {
+                                    Label("Journal items need review (\(scopedPendingCount))", systemImage: "tray.and.arrow.down")
+                                }
+                            }
+                        }
+                        Button(role: .destructive) {
+                            Task { await appEnv.leaveSharedHouseholdSurfacingErrors() }
+                        } label: {
+                            Label("Leave shared garden", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        // N1: leaving needs a confirmed iCloud identity (CloudKit not paused).
+                        .disabled(!appEnv.canUseCloudKit)
+                    } else {
                         Button {
-                            checkingICloud = true
+                            guard !preparingShare else { return }
+                            preparingShare = true
                             Task {
-                                let s = await HouseholdCloudCoordinator.currentAccountStatusText()
-                                await MainActor.run { iCloudStatus = s; checkingICloud = false }
+                                let pkg = await appEnv.prepareOwnerShare()
+                                preparingShare = false
+                                if let pkg {
+                                    CloudSharingPresenter.present(share: pkg.share, container: pkg.container, title: "Seedkeep garden")
+                                }
                             }
                         } label: {
-                            Label(checkingICloud ? "Checking iCloud…" : "Check iCloud account", systemImage: "person.icloud")
+                            HStack {
+                                Label("Share garden via iCloud", systemImage: "person.crop.circle.badge.plus")
+                                Spacer()
+                                if preparingShare { ProgressView() }
+                            }
                         }
-                        .disabled(checkingICloud)
-                        if let iCloudStatus {
-                            statusRow("iCloud account", iCloudStatus)
-                        }
-                        if let ck = appEnv.cloudKit {
-                            statusRow("Initial upload", ck.initialUploadComplete ? "complete" : "pending")
-                            if ck.isSyncing { statusRow("CloudKit", "syncing…") }
-                            if let at = ck.lastSyncedAt {
-                                statusRow("Last CloudKit sync", at.formatted(date: .omitted, time: .standard))
-                            }
-                            statusRow("Records synced this session", "\(ck.zoneRecordCount)")
-                            if let acct = ck.accountStatusText { statusRow("Account (at first sync)", acct) }
-                            if let err = ck.lastHumanizedError {
-                                errorRow("CloudKit: \(err)")
-                            }
-                            if let detail = ck.lastErrorDetail {
-                                Text(detail)
-                                    .font(.wbCaption)
-                                    .foregroundStyle(WBColor.muted)
-                            }
-                        } else if let reason = appEnv.cloudKitPauseReason {
-                            Text("iCloud sync is paused — \(reason).")
-                                .font(.wbFootnote)
-                                .foregroundStyle(WBColor.muted)
-                        } else {
-                            Text("CloudKit sync hasn’t run yet — tap “Sync now”.")
-                                .font(.wbFootnote)
-                                .foregroundStyle(WBColor.muted)
-                        }
-
-                        // Cross-account sharing (CloudKit). Owner shares the household zone via the
-                        // system share sheet; a participant who has joined sees a Leave affordance.
-                        if appEnv.isViewingSharedHousehold {
-                            statusRow("Household", "shared with you")
-                            if let scopeKey = appEnv.participantRecoveryScopeKey {
-                                let scopedPendingCount = pendingRecoveryItems.filter { $0.scopeKey == scopeKey }.count
-                                if scopedPendingCount > 0 {
-                                    Button {
-                                        showingJournalRecoveryReview = true
-                                    } label: {
-                                        Label("Journal items need review (\(scopedPendingCount))", systemImage: "tray.and.arrow.down")
-                                    }
-                                }
-                            }
-                            Button(role: .destructive) {
-                                Task { await appEnv.leaveSharedHouseholdSurfacingErrors() }
-                            } label: {
-                                Label("Leave shared garden", systemImage: "rectangle.portrait.and.arrow.right")
-                            }
-                            // N1: leaving needs a confirmed iCloud identity (CloudKit not paused).
-                            .disabled(!appEnv.canUseCloudKit)
-                        } else {
-                            Button {
-                                guard !preparingShare else { return }
-                                preparingShare = true
-                                Task {
-                                    let pkg = await appEnv.prepareOwnerShare()
-                                    preparingShare = false
-                                    if let pkg {
-                                        CloudSharingPresenter.present(share: pkg.share, container: pkg.container, title: "Seedkeep garden")
-                                    }
-                                }
-                            } label: {
-                                HStack {
-                                    Label("Share garden via iCloud", systemImage: "person.crop.circle.badge.plus")
-                                    Spacer()
-                                    if preparingShare { ProgressView() }
-                                }
-                            }
-                            .disabled(preparingShare)
-                        }
+                        .disabled(preparingShare)
                     }
                 } header: {
                     WBSectionHeader("Sync")

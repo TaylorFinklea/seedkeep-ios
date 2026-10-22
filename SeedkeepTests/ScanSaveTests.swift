@@ -82,22 +82,6 @@ struct ScanSaveTests {
         return (SyncEngine(container: container), container)
     }
 
-    /// Runs `body` with the CloudKit household path on, then restores the stored setting.
-    private static func withCloudKitSync<T>(_ body: () async throws -> T) async rethrows -> T {
-        let defaults = UserDefaults.standard
-        let key = FeatureFlags.cloudKitHouseholdSyncKey
-        let previous = defaults.object(forKey: key)
-        defer {
-            if let previous {
-                defaults.set(previous, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
-        }
-        FeatureFlags.setCloudKitHouseholdSync(true)
-        return try await body()
-    }
-
     private static func input(_ name: String) -> CreateSeedInput {
         CreateSeedInput(state: .active, custom_name: name)
     }
@@ -155,113 +139,105 @@ struct ScanSaveTests {
 
     @Test("the save writes the seed, its growing info and both photos locally, with no server request")
     func saveStaysLocal() async throws {
-        try await Self.withCloudKitSync {
-            let (engine, container) = Self.makeEngine()
-            let householdID = Self.makeHousehold()
-            defer { try? PhotoByteStore.purgeHousehold(householdID) }
-            let root = Self.makeRoot()
-            defer { try? FileManager.default.removeItem(at: root) }
-            let scanID = UUID()
-            let scope = Self.scope(householdID)
-            try Self.stagePair(scanID, scope: scope, root: root)
-            let refusalsBefore = ServerRetirement.refusals.count
+        let (engine, container) = Self.makeEngine()
+        let householdID = Self.makeHousehold()
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let root = Self.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scanID = UUID()
+        let scope = Self.scope(householdID)
+        try Self.stagePair(scanID, scope: scope, root: root)
+        let refusalsBefore = ServerRetirement.refusals.count
 
-            let session = SeedSaveSession()
-            try await session.save(
-                Self.input("Cherokee Purple"),
-                householdID: householdID,
-                scan: (scanID, scope),
-                snapshot: GrowingInfoSnapshot(scientific_name: "Solanum lycopersicum", days_to_maturity_min: 75),
-                customType: "Tomato",
-                writer: engine,
-                root: root
-            )
+        let session = SeedSaveSession()
+        try await session.save(
+            Self.input("Cherokee Purple"),
+            householdID: householdID,
+            scan: (scanID, scope),
+            snapshot: GrowingInfoSnapshot(scientific_name: "Solanum lycopersicum", days_to_maturity_min: 75),
+            customType: "Tomato",
+            writer: engine,
+            root: root
+        )
 
-            let seed = try #require(try ModelContext(container).fetch(FetchDescriptor<LocalSeed>()).first)
-            #expect(seed.id == session.seedID, "the seed is created under the ID chosen up front")
-            #expect(seed.growingInfo?.scientific_name == "Solanum lycopersicum")
-            #expect(seed.customType == "Tomato")
-            #expect(try Self.photos(in: container).count == 2)
-            #expect(ServerRetirement.refusals.count == refusalsBefore)
-            #expect(ScanPhotoStaging.manifest(for: scanID, root: root) == nil)
-        }
+        let seed = try #require(try ModelContext(container).fetch(FetchDescriptor<LocalSeed>()).first)
+        #expect(seed.id == session.seedID, "the seed is created under the ID chosen up front")
+        #expect(seed.growingInfo?.scientific_name == "Solanum lycopersicum")
+        #expect(seed.customType == "Tomato")
+        #expect(try Self.photos(in: container).count == 2)
+        #expect(ServerRetirement.refusals.count == refusalsBefore)
+        #expect(ScanPhotoStaging.manifest(for: scanID, root: root) == nil)
     }
 
     @Test("a retried photo keeps its stable ID and is not stored twice")
     func retriedPhotoIsNotDuplicated() async throws {
-        try await Self.withCloudKitSync {
-            let (engine, container) = Self.makeEngine()
-            let householdID = Self.makeHousehold()
-            defer { try? PhotoByteStore.purgeHousehold(householdID) }
-            let seedID = try engine.enqueueCreateSeed(Self.input("Basil"), householdID: householdID).id
-            let photoID = ScanPhotoStaging.photoID(for: UUID(), side: .front)
+        let (engine, container) = Self.makeEngine()
+        let householdID = Self.makeHousehold()
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let seedID = try engine.enqueueCreateSeed(Self.input("Basil"), householdID: householdID).id
+        let photoID = ScanPhotoStaging.photoID(for: UUID(), side: .front)
 
-            for _ in 0..<2 {
-                try await engine.uploadPhoto(
-                    seedID: seedID, role: .front, jpegData: Data("front".utf8),
-                    householdID: householdID, photoID: photoID, capturedAt: 1_000_000
-                )
-            }
-
-            let stored = try Self.photos(in: container)
-            #expect(stored.map(\.id) == [photoID])
-            #expect(stored.first?.capturedAt == 1_000_000)
+        for _ in 0..<2 {
+            try await engine.uploadPhoto(
+                seedID: seedID, role: .front, jpegData: Data("front".utf8),
+                householdID: householdID, photoID: photoID, capturedAt: 1_000_000
+            )
         }
+
+        let stored = try Self.photos(in: container)
+        #expect(stored.map(\.id) == [photoID])
+        #expect(stored.first?.capturedAt == 1_000_000)
     }
 
     @Test("the front is the cover even when the back is attached first")
     func frontIsCover() async throws {
-        try await Self.withCloudKitSync {
-            let (engine, container) = Self.makeEngine()
-            let householdID = Self.makeHousehold()
-            defer { try? PhotoByteStore.purgeHousehold(householdID) }
-            let seedID = try engine.enqueueCreateSeed(Self.input("Dill"), householdID: householdID).id
-            let scanID = UUID()
-            let front = ScanPhotoStaging.photoID(for: scanID, side: .front)
-            let back = ScanPhotoStaging.photoID(for: scanID, side: .back)
+        let (engine, container) = Self.makeEngine()
+        let householdID = Self.makeHousehold()
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let seedID = try engine.enqueueCreateSeed(Self.input("Dill"), householdID: householdID).id
+        let scanID = UUID()
+        let front = ScanPhotoStaging.photoID(for: scanID, side: .front)
+        let back = ScanPhotoStaging.photoID(for: scanID, side: .back)
 
-            try await engine.uploadPhoto(
-                seedID: seedID, role: .back, jpegData: Data("back".utf8),
-                householdID: householdID, photoID: back, capturedAt: 1_005_000
-            )
-            try await engine.uploadPhoto(
-                seedID: seedID, role: .front, jpegData: Data("front".utf8),
-                householdID: householdID, photoID: front, capturedAt: 1_000_000
-            )
+        try await engine.uploadPhoto(
+            seedID: seedID, role: .back, jpegData: Data("back".utf8),
+            householdID: householdID, photoID: back, capturedAt: 1_005_000
+        )
+        try await engine.uploadPhoto(
+            seedID: seedID, role: .front, jpegData: Data("front".utf8),
+            householdID: householdID, photoID: front, capturedAt: 1_000_000
+        )
 
-            let sid = seedID
-            let ordered = try ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>(
-                predicate: #Predicate<LocalSeedPhoto> { $0.seedID == sid },
-                sortBy: SeedDetailView.photoSort
-            ))
-            #expect(ordered.map(\.id) == [front, back])
-        }
+        let sid = seedID
+        let ordered = try ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>(
+            predicate: #Predicate<LocalSeedPhoto> { $0.seedID == sid },
+            sortBy: SeedDetailView.photoSort
+        ))
+        #expect(ordered.map(\.id) == [front, back])
     }
 
     @Test("photos with equal capture times sort by photo ID, so the order is stable")
     func equalCaptureTimesSortByID() async throws {
-        try await Self.withCloudKitSync {
-            let (engine, container) = Self.makeEngine()
-            let householdID = Self.makeHousehold()
-            defer { try? PhotoByteStore.purgeHousehold(householdID) }
-            let seedID = try engine.enqueueCreateSeed(Self.input("Sage"), householdID: householdID).id
-            let scanID = UUID()
-            let front = ScanPhotoStaging.photoID(for: scanID, side: .front)
-            let back = ScanPhotoStaging.photoID(for: scanID, side: .back)
-            for photoID in [front, back] {
-                try await engine.uploadPhoto(
-                    seedID: seedID, role: .front, jpegData: Data("x".utf8),
-                    householdID: householdID, photoID: photoID, capturedAt: 1_000_000
-                )
-            }
-
-            let sid = seedID
-            let ordered = try ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>(
-                predicate: #Predicate<LocalSeedPhoto> { $0.seedID == sid },
-                sortBy: SeedDetailView.photoSort
-            ))
-            #expect(ordered.map(\.id) == [front, back].sorted())
+        let (engine, container) = Self.makeEngine()
+        let householdID = Self.makeHousehold()
+        defer { try? PhotoByteStore.purgeHousehold(householdID) }
+        let seedID = try engine.enqueueCreateSeed(Self.input("Sage"), householdID: householdID).id
+        let scanID = UUID()
+        let front = ScanPhotoStaging.photoID(for: scanID, side: .front)
+        let back = ScanPhotoStaging.photoID(for: scanID, side: .back)
+        for photoID in [front, back] {
+            try await engine.uploadPhoto(
+                seedID: seedID, role: .front, jpegData: Data("x".utf8),
+                householdID: householdID, photoID: photoID, capturedAt: 1_000_000
+            )
         }
+
+        let sid = seedID
+        let ordered = try ModelContext(container).fetch(FetchDescriptor<LocalSeedPhoto>(
+            predicate: #Predicate<LocalSeedPhoto> { $0.seedID == sid },
+            sortBy: SeedDetailView.photoSort
+        ))
+        #expect(ordered.map(\.id) == [front, back].sorted())
     }
 
     // MARK: - Save session (S3, O9)
