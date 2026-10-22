@@ -2394,35 +2394,4 @@ struct HouseholdCloudCoordinatorTests {
         #expect(!coordinator.lastPassCompleted)
         #expect(coordinator.lastSyncedAt == nil)
     }
-
-    @Test("resetAllDurableState keeps TransferWorkspace bytes while deletions are quarantined")
-    func resetKeepsTransferWorkspace() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ResetKeepTransfer-\(UUID().uuidString)", isDirectory: true)
-        let suite = "HouseholdCloudCoordinatorTests.keepTransfer.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer {
-            try? FileManager.default.removeItem(at: directory)
-            defaults.removePersistentDomain(forName: suite)
-        }
-        var photos: [PhotoByteStore.Lifetime: URL] = [:]
-        for lifetime in PhotoByteStore.Lifetime.allCases {
-            let photoDir = directory.appendingPathComponent(lifetime.rawValue, isDirectory: true)
-                .appendingPathComponent("production/hh_a", isDirectory: true)
-            try FileManager.default.createDirectory(at: photoDir, withIntermediateDirectories: true)
-            let photo = photoDir.appendingPathComponent("seedPhoto_p1.abc.jpg")
-            try Data("jpeg".utf8).write(to: photo)
-            photos[lifetime] = photo
-        }
-        let token = directory.appendingPathComponent("engine-state-production-hh_a.json")
-        try Data("x".utf8).write(to: token)
-
-        try HouseholdCloudCoordinator.resetAllDurableState(
-            directory: directory, defaults: defaults, keepingTransferWorkspace: true)
-
-        #expect(FileManager.default.fileExists(atPath: photos[.transferWorkspace]!.path))
-        #expect(!FileManager.default.fileExists(atPath: photos[.pendingUploads]!.path))
-        #expect(!FileManager.default.fileExists(atPath: photos[.cache]!.path))
-        #expect(!FileManager.default.fileExists(atPath: token.path))
-    }
 }

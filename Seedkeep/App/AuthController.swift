@@ -221,7 +221,7 @@ final class AuthController {
         pendingChoice = nil
     }
 
-    /// Kept for the account-deletion seam; no UI calls it in N1. Wipes BEFORE clearing the
+    /// No UI calls it since N1. Wipes BEFORE clearing the
     /// caches: the cache records who owns the local store, so after a failed wipe it stays and
     /// the next account still triggers the wipe.
     func signOut() async {
@@ -233,23 +233,6 @@ final class AuthController {
         ActiveGardenContext.clearParticipant(in: defaults)
         isIdentityVerified = false
         state = .signedOut
-    }
-
-    /// Adopts a household this device has proven membership in, keeping the signed-in user.
-    /// Updates `state` and the cached identity together, so a later restore sees the same
-    /// household and never mistakes it for an identity switch. A no-op when not signed in.
-    func adoptHousehold(_ household: HouseholdDTO) {
-        guard case .signedIn(let user, _) = state else { return }
-        let identity = CachedIdentity(user: user, household: household)
-        // Write the cache in use. An unrebound legacy identity must stay legacy: its server user
-        // ID in the iCloud cache would read as a different iCloud user and wipe the store.
-        if loadIdentity(forKey: Self.identityCacheKey) == nil,
-           loadIdentity(forKey: Self.legacyIdentityCacheKey) != nil {
-            saveIdentity(identity, forKey: Self.legacyIdentityCacheKey)
-        } else {
-            saveIdentity(identity, forKey: Self.identityCacheKey)
-        }
-        state = .signedIn(user: user, household: household)
     }
 
     /// True when choosing `garden` from `choice` removes this device's garden, so the chooser

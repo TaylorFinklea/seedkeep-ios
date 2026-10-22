@@ -829,7 +829,7 @@ struct AuthLifecycleTests {
         #expect(eraser.count == 0)
     }
 
-    // MARK: - Sign-out and adoption seams
+    // MARK: - Sign-out seam
 
     @Test("signOut runs the eraser and clears token, caches and marker")
     func signOutWipes() async throws {
@@ -849,60 +849,6 @@ struct AuthLifecycleTests {
         #expect(auth.loadCachedIdentity() == nil)
         #expect(ActiveGardenContext.participant(in: defaults) == nil)
         #expect(auth.state == .signedOut)
-    }
-
-    @Test("adoptHousehold moves state and the cache together; a later restore does not wipe")
-    func adoptHouseholdThenRestore() async throws {
-        let defaults = Self.makeDefaults("adoptHousehold")
-        try Self.cacheICloud(defaults, userID: Self.userA, householdID: "hh_own")
-        let provider = FakeCloudIdentityProvider(recordName: Self.userA)
-        let eraser = EraserSpy()
-        let auth = Self.makeAuth(provider, defaults: defaults, eraser: eraser)
-        await auth.restoreSession()
-
-        let transferred = try JSONDecoder().decode(
-            HouseholdDTO.self,
-            from: Data(#"{"id":"hh_transferred","name":"Transferred garden","created_at":1,"updated_at":1}"#.utf8))
-        auth.adoptHousehold(transferred)
-
-        #expect(Self.signedIn(auth)?.user == Self.userA, "adopting a household must not change WHO is signed in")
-        #expect(Self.signedIn(auth)?.household == "hh_transferred")
-        #expect(auth.loadCachedIdentity()?.household.id == "hh_transferred")
-
-        await auth.restoreSession()
-        #expect(eraser.count == 0)
-        #expect(Self.signedIn(auth)?.household == "hh_transferred")
-    }
-
-    @Test("adoptHousehold on an unrebound legacy identity keeps it legacy, so it never reads as a switch")
-    func adoptHouseholdKeepsLegacy() async throws {
-        let defaults = Self.makeDefaults("adoptHouseholdLegacy")
-        try Self.cacheLegacy(defaults, userID: "u_server", householdID: "hh_own")
-        let provider = FakeCloudIdentityProvider(status: .unverified)
-        let auth = Self.makeAuth(provider, defaults: defaults)
-        await auth.restoreSession()
-
-        let transferred = try JSONDecoder().decode(
-            HouseholdDTO.self,
-            from: Data(#"{"id":"hh_t","name":"T","created_at":1,"updated_at":1}"#.utf8))
-        auth.adoptHousehold(transferred)
-
-        #expect(defaults.data(forKey: AuthController.identityCacheKey) == nil)
-        #expect(Self.cached(defaults, AuthController.legacyIdentityCacheKey)?.household.id == "hh_t")
-    }
-
-    @Test("adoptHousehold is a no-op when nobody is signed in")
-    func adoptHouseholdNoOpWhenSignedOut() throws {
-        let defaults = Self.makeDefaults("adoptHouseholdSignedOut")
-        let auth = Self.makeAuth(FakeCloudIdentityProvider(), defaults: defaults)
-
-        let household = try JSONDecoder().decode(
-            HouseholdDTO.self,
-            from: Data(#"{"id":"hh_x","name":"X","created_at":1,"updated_at":1}"#.utf8))
-        auth.adoptHousehold(household)
-
-        #expect(auth.state == .signedOut)
-        #expect(auth.loadCachedIdentity() == nil)
     }
 
     // MARK: - Review fixes (F2, F4, F10, F11, F12, F14)

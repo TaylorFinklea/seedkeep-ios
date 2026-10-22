@@ -1024,19 +1024,14 @@ final class HouseholdCloudCoordinator {
     /// every household's photo bytes) and every migration marker. Used by both local-data erasers,
     /// which may run before any coordinator exists. THROWS when anything is left, so the eraser
     /// fails and the identity transition waits for Retry.
-    /// `keepingTransferWorkspace` keeps the account-deletion transfer bytes, while deletion
-    /// checkpoints are quarantined (their state may still need them).
     static func resetAllDurableState(
         directory: URL = householdSyncDir(),
-        defaults: UserDefaults = .standard,
-        keepingTransferWorkspace: Bool = false
+        defaults: UserDefaults = .standard
     ) throws {
-        try PhotoByteStore.purgeAll(under: directory, keepingTransferWorkspace: keepingTransferWorkspace)
-        let kept = keepingTransferWorkspace ? PhotoByteStore.Lifetime.transferWorkspace.rawValue : nil
+        try PhotoByteStore.purgeAll(under: directory)
         let fileManager = FileManager.default
         if fileManager.fileExists(atPath: directory.path) {
-            for item in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            where item.lastPathComponent != kept {
+            for item in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
                 try fileManager.removeItem(at: item)
             }
         }

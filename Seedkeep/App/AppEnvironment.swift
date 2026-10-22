@@ -91,6 +91,10 @@ public final class AppEnvironment {
         #if DEBUG
         if FixtureMode.isEnabled { return makeForFixture() }
         #endif
+        // N3: delete the files the removed account deletion and transfer left behind, before any
+        // identity resolution or CloudKit coordinator. Never in the unit-test host (it shares the
+        // real app's data) or in sample-garden mode (returned above).
+        LegacyAccountDeletionCleanup.removeLegacyFiles(enabled: FeatureFlags.canRunLiveAppStartup)
         let bundleDefaultURL = Self.resolveBundleDefaultURL()
         let prefs = AppPreferences(bundleDefaultURL: bundleDefaultURL)
         let keychainService = Self.resolveKeychainService()
@@ -173,7 +177,7 @@ public final class AppEnvironment {
         defaults: UserDefaults,
         container: ModelContainer,
         durableStateDirectory: URL,
-        checkpointStore: AccountDeletionCheckpointStore,
+        legacyCheckpointDirectory: URL? = nil,
         scanStagingRoot: URL? = nil,
         cloudKitPermitted: Bool = true,
         forecastSource: @escaping RecommendationStore.ForecastSource = WeatherKitRefiner.fetchForecast,
@@ -206,13 +210,18 @@ public final class AppEnvironment {
             weatherWarnings: weatherWarnings,
             stateDefaults: defaults,
             durableStateDirectory: durableStateDirectory,
-            checkpointStore: checkpointStore,
             scanStagingRoot: scanStagingRoot ?? FileManager.default.temporaryDirectory
                 .appendingPathComponent("scan-staging-\(UUID().uuidString)", isDirectory: true),
             startsBackgroundServices: false,
             cloudKitPermitted: cloudKitPermitted
         )
         env.clearAppNotifications = {}
+        // N3 test seam: the live launch's legacy-file cleanup, over the caller's directories.
+        if let legacyCheckpointDirectory {
+            LegacyAccountDeletionCleanup.removeLegacyFiles(
+                enabled: true, checkpointDirectory: legacyCheckpointDirectory,
+                householdSyncDirectory: durableStateDirectory)
+        }
         return env
     }
 
@@ -253,8 +262,6 @@ public final class AppEnvironment {
             defaults: defaults,
             container: container,
             durableStateDirectory: root.appendingPathComponent("sync", isDirectory: true),
-            checkpointStore: AccountDeletionCheckpointStore(
-                directory: root.appendingPathComponent("AccountDeletion", isDirectory: true)),
             scanStagingRoot: root.appendingPathComponent("scan-staging", isDirectory: true),
             cloudKitPermitted: false,
             forecastSource: FixtureMode.forecastSource,
@@ -287,7 +294,6 @@ public final class AppEnvironment {
         weatherWarnings: WeatherWarningsService,
         stateDefaults: UserDefaults = .standard,
         durableStateDirectory: URL = HouseholdCloudCoordinator.householdSyncDirURL(),
-        checkpointStore: AccountDeletionCheckpointStore = AccountDeletionCheckpointStore(),
         scanStagingRoot: URL = ScanPhotoStaging.rootURL(),
         startsBackgroundServices: Bool = true,
         cloudKitPermitted: Bool = true
@@ -306,11 +312,7 @@ public final class AppEnvironment {
         self.weatherWarnings = weatherWarnings
         self.stateDefaults = stateDefaults
         self.durableStateDirectory = durableStateDirectory
-        self.checkpointStore = checkpointStore
         self.scanStagingRoot = scanStagingRoot
-        // N1 quarantine starts closed: count leftover deletion checkpoints now (a cheap file
-        // count), so no task ordering can see CloudKit allowed before they are counted.
-        self.pausedDeletionCheckpointCount = AccountDeletionQuarantine.pausedCheckpointCount(using: checkpointStore)
         sync.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
         journal.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
         // N1: the scope ID is derived, never a coordinator, and not gated on `canUseCloudKit`, so a
@@ -461,7 +463,6 @@ public final class AppEnvironment {
     @ObservationIgnored private let stateDefaults: UserDefaults
     /// `HouseholdCloudCoordinator.householdSyncDir()` live; a temporary directory in tests.
     @ObservationIgnored private let durableStateDirectory: URL
-    @ObservationIgnored private let checkpointStore: AccountDeletionCheckpointStore
 
     /// Shared by both local-data erasers. Tears down the coordinator if one exists (throwing, and
     /// keeping it, when its cleanup must be retried); without one, `wipingHouseholdRows` removes
@@ -482,10 +483,8 @@ public final class AppEnvironment {
             for intent in try context.fetch(FetchDescriptor<LocalCloudKitDeletion>()) { context.delete(intent) }
             try context.save()
         }
-        // Transfer bytes stay while deletion checkpoints are quarantined: N3 may still need them.
         try HouseholdCloudCoordinator.resetAllDurableState(
-            directory: durableStateDirectory, defaults: stateDefaults,
-            keepingTransferWorkspace: pausedDeletionCheckpointCount > 0)
+            directory: durableStateDirectory, defaults: stateDefaults)
         cloudCoordinator = nil
         cloudCoordinatorKey = nil
     }
@@ -559,7 +558,7 @@ public final class AppEnvironment {
                 if !auth.isIdentityVerified { await auth.restoreSession() }
                 guard case .signedIn(_, let current) = auth.state, current == household,
                       self.activeGardenHouseholdID == activeGardenHouseholdID else { return }
-                // N1: CloudKit paused (unconfirmed identity, deletion quarantine) or a share being
+                // N1: CloudKit paused (unconfirmed identity) or a share being
                 // adopted (its own sync follows): skip only the CloudKit pass, with no banner. The
                 // local post-sync work below still runs.
                 if isAdoptingShare { syncSkippedForAdoption = true }
@@ -642,16 +641,12 @@ public final class AppEnvironment {
     @ObservationIgnored private var cloudCoordinatorKey: String?
 
     /// N1 (parent-owned seam): CloudKit use (coordinator creation, sync, saves, photo recovery,
-    /// sharing) requires an iCloud identity confirmed this session and no paused account deletion.
-    /// Slice A applies it at those call sites; slice B maintains `pausedDeletionCheckpointCount`.
-    /// Sample-garden mode (`cloudKitPermitted` false) is never CloudKit-enabled.
+    /// sharing) requires an iCloud identity confirmed this session. Sample-garden mode
+    /// (`cloudKitPermitted` false) is never CloudKit-enabled. N3: account-deletion checkpoints no
+    /// longer pause CloudKit; `LegacyAccountDeletionCleanup` deletes them at launch.
     var canUseCloudKit: Bool {
-        cloudKitPermitted && auth.isIdentityVerified && pausedDeletionCheckpointCount == 0
+        cloudKitPermitted && auth.isIdentityVerified
     }
-
-    /// Account-deletion checkpoints left from before the server was retired. While any exist,
-    /// CloudKit stays off so a deleted garden is never re-provisioned (N1 quarantine).
-    private(set) var pausedDeletionCheckpointCount = 0
 
     /// CloudKit passes started through `runCloudSyncPass` that haven't finished. Observed, unlike
     /// the coordinator reference, so a loading state can appear when the first pass begins; a count
@@ -680,7 +675,6 @@ public final class AppEnvironment {
 
     /// Why CloudKit is paused, for Settings; nil when it is allowed.
     var cloudKitPauseReason: String? {
-        if pausedDeletionCheckpointCount > 0 { return "an earlier account deletion didn't finish" }
         if !auth.isIdentityVerified { return "your iCloud account isn't confirmed yet" }
         return nil
     }
@@ -745,85 +739,6 @@ public final class AppEnvironment {
     /// Bumped when a different-user wipe clears the pending shares. An adoption that started under
     /// an earlier epoch belongs to the previous user: it drops its share instead of re-queuing it.
     @ObservationIgnored private var pendingShareEpoch = 0
-
-    // MARK: - Resumable account deletion
-
-    /// The role-aware, resumable account-deletion flow.
-    ///
-    /// Built lazily and kept for the lifetime of the environment: it holds
-    /// the checkpoint lease and the in-memory handoff token, both of which
-    /// must survive between calls within a session. Its seams read the
-    /// live signed-in identity and participant marker on every call rather
-    /// than capturing them, so a coordinator built before sign-in still
-    /// sees the right account.
-    @ObservationIgnored private var accountDeletionCoordinator: AccountDeletionCoordinator?
-
-    var accountDeletion: AccountDeletionCoordinator {
-        if let existing = accountDeletionCoordinator { return existing }
-        let coordinator = AccountDeletionCoordinator(
-            store: AccountDeletionCheckpointStore(),
-            cloudKit: LiveAccountDeletionCloudKit(
-                // NOTE: no feature-flag gate. Whether the app is currently
-                // syncing to CloudKit says nothing about whether a zone or
-                // an accepted share exists in the account — the kill switch,
-                // a reinstall, or a second device all break that inference,
-                // and getting it wrong deletes the account while the garden
-                // lives on. Role inspection asks CloudKit itself.
-                participantZoneID: { [weak self] in self?.loadParticipantMarker()?.zoneID },
-                ownedHouseholdID: { [weak self] in
-                    guard let self, case .signedIn(_, let household) = self.auth.state else { return nil }
-                    return household.id
-                },
-                // Leaving the share is only half of a participant's exit;
-                // the marker has to go and the user's own garden has to come
-                // back. This THROWS on purpose: a rebuild that quietly
-                // failed used to let the flow march on to account deletion
-                // with the device still pointed at a zone it can no longer
-                // read.
-                rebuildOwnGardenScope: { [weak self] in try await self?.leaveSharedHousehold() }
-            ),
-            server: LiveAccountDeletionServer(client: client),
-            session: AccountDeletionSession(
-                identity: { [weak self] in
-                    guard let self, case .signedIn(let user, let household) = self.auth.state else { return nil }
-                    return .init(userID: user.id, householdID: household.id)
-                },
-                // The cached identity is the app's own record of who owns
-                // the local SwiftData store, and it survives a session the
-                // server has already destroyed — which is exactly the state
-                // the launch sweep runs in.
-                localStoreOwnerID: { [weak self] in self?.auth.loadCachedIdentity()?.user.id },
-                signOut: { [weak self] in await self?.auth.signOut() },
-                adoptTransferredGarden: { [weak self] householdID, transferID in
-                    try await self?.adoptTransferredGarden(householdID: householdID, transferID: transferID)
-                }
-            )
-        )
-        accountDeletionCoordinator = coordinator
-        return coordinator
-    }
-
-    /// The observable state behind the deletion progress sheet and the
-    /// successor acceptance sheet.
-    ///
-    /// One instance for the same reason the coordinator is one instance:
-    /// both surfaces drive the same durable flow, and a second model would
-    /// mean a handoff link opened while the deletion sheet is up ends up
-    /// talking to a coordinator that does not know about it.
-    @ObservationIgnored private var accountDeletionFlowModel: AccountDeletionFlowModel?
-
-    var accountDeletionFlow: AccountDeletionFlowModel {
-        if let existing = accountDeletionFlowModel { return existing }
-        let model = AccountDeletionFlowModel(coordinator: accountDeletion)
-        accountDeletionFlowModel = model
-        return model
-    }
-
-    /// Quarantines any deletion checkpoints before identity restore. A
-    /// checkpoint keeps CloudKit paused until N3 can resolve its state.
-    func recoverCommittedAccountDeletion() async {
-        pausedDeletionCheckpointCount = AccountDeletionQuarantine.pausedCheckpointCount(using: checkpointStore)
-    }
 
     /// Household ID that scopes locally stored garden data. In a CloudKit shared
     /// garden, the owner's zone is authoritative; server-only/rollback mode
@@ -989,19 +904,12 @@ public final class AppEnvironment {
     /// which can suppress `.onOpenURL`/`.onContinueUserActivity` — so the delegate forwards URL opens
     /// here and `SeedkeepApp` bridges this into the existing invite sheet. Observable so the bridge fires.
     var incomingInviteCode: String?
-    /// Shared-garden handoff forwarded the same way. Held here rather than
-    /// acted on: taking over a garden requires an authenticated identity
-    /// and a non-consuming inspection, both of which belong to
-    /// `AccountDeletionFlowModel`, and the token must survive arriving
-    /// while the app is signed out.
-    var incomingHandoffLink: AccountDeletionHandoffLink?
 
     /// Route an incoming URL (custom scheme or universal link) to whichever
     /// flow owns it.
     func routeIncomingURL(_ url: URL) {
         switch IncomingLink(url: url) {
         case .invite(let code): incomingInviteCode = code
-        case .gardenHandoff(let link): incomingHandoffLink = link
         case nil: break
         }
     }
@@ -1139,130 +1047,11 @@ public final class AppEnvironment {
     }
     #endif
 
-    /// Cut this device over to a garden it has just received as a
-    /// successor in an account-deletion handoff.
-    ///
-    /// Until this runs, the app is still a PARTICIPANT of the departing
-    /// owner's shared zone — the marker, the CloudKit coordinator, and the
-    /// active-garden scope all point there. The owner is about to delete
-    /// that zone. So "the garden is yours" is not true when the digests
-    /// match; it is true when this has happened:
-    ///
-    ///   1. Prove membership in the EXACT household the transfer names
-    ///      (`GET /api/households/:id`), not whichever one the "current
-    ///      household" heuristic resolves to. Verification UPSERTs a
-    ///      second `memberships` row for this user, so asking "what is my
-    ///      current household" is genuinely ambiguous the moment this
-    ///      runs — the transfer itself already knows the answer.
-    ///   2. Confirm that membership is `owner`, not merely `member` — the
-    ///      only role verification actually promotes the successor to.
-    ///   3. Re-read the TRANSFER itself and confirm it still authorizes
-    ///      the claim. The departing owner may legally cancel a `verified`
-    ///      transfer right up until the source-deletion lease is taken,
-    ///      and a cancel that late reverts the very membership row step 1
-    ///      just confirmed — so a membership check alone, made a moment
-    ///      earlier, is not enough.
-    ///   4. Adopt it into `AuthController` — state AND the cache together,
-    ///      so a later ordinary restore does not mistake the correct
-    ///      household for an identity switch and wipe it.
-    ///   5. Stop being a participant. The destination zone lives in THIS
-    ///      device's private database; keeping the marker would keep
-    ///      pointing every read at the doomed shared zone.
-    ///   6. Reset the owner state token, so the rebuilt owner coordinator
-    ///      does a FULL fetch of the destination zone instead of resuming
-    ///      a cursor that belongs to the source zone's change history.
-    ///   7. Drop the cached coordinator and sync, which rebuilds it as the
-    ///      owner of the destination.
-    ///
-    /// A MEMBER (not owner) never reaches step 4 — reporting completion
-    /// over a role the server has not actually promoted would let this
-    /// device claim a garden it does not own.
-    ///
-    /// Local SwiftData is deliberately NOT wiped: its rows are scoped to
-    /// this same household id and are exactly the contents that were
-    /// copied, so wiping would throw away a correct local garden and make
-    /// the successor wait on a full re-download for nothing.
-    ///
-    /// THROWS, and the coordinator holds `.successorAdopting` until it
-    /// returns, so a failure here is retried rather than papered over with
-    /// a completion screen.
-    func adoptTransferredGarden(householdID: String, transferID: String) async throws {
-        guard !ServerRetirement.isRetired else {
-            throw SeedkeepError(
-                code: "server_retired",
-                message: "Garden handoff links are no longer supported."
-            )
-        }
-        let membership: WireResponses.CreateOrFetchHousehold
-        do {
-            membership = try await client.household(id: householdID)
-        } catch {
-            // `not_a_member` means the re-home has not landed yet — this
-            // device is retried later by the coordinator's own drive
-            // loop, not something to report as broken. Anything else
-            // propagates unchanged.
-            throw TransferredGardenCutover.classify(error) ?? error
-        }
-        try TransferredGardenCutover.verifyOwnership(role: membership.role)
-
-        // Re-read at the LAST possible moment, not trusted from memory:
-        // between the household lookup above and here, a second owner
-        // device could still legally withdraw a `verified` transfer.
-        let transfer = try await client.accountDeletionTransfer(id: transferID)
-        try TransferredGardenCutover.verifyTransferAuthorizes(transfer.phase)
-
-        auth.adoptHousehold(membership.household)
-        guard case .signedIn(_, let household) = auth.state else {
-            throw TransferredGardenCutover.Failure.sessionUnavailable
-        }
-
-        // Only now: the destination zone is in THIS device's private
-        // database, so the participant marker — which points every read at
-        // the departing owner's doomed shared zone — has to go.
-        clearParticipantMarker()
-        // Full fetch of the destination rather than resuming a cursor that
-        // belongs to the source zone's change history.
-        try HouseholdCloudCoordinator.resetStateToken(
-            at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: householdID))
-        cloudCoordinator = nil
-        cloudCoordinatorKey = nil
-
-        // And prove the owner scope actually came up. `syncIfPossible`
-        // swallows its failures into a banner, which is right for a
-        // background pass and wrong here: "the garden is yours" must not be
-        // said over a scope that never loaded.
-        guard FeatureFlags.cloudKitHouseholdSyncEnabled else {
-            await syncIfPossible()
-            return
-        }
-        let coordinator = ensureCloudCoordinator(household: household)
-        guard await coordinator.sync() else {
-            throw TransferredGardenCutover.Failure.destinationSyncIncomplete(
-                message: coordinator.lastHumanizedError)
-        }
-        if let failure = coordinator.lastHumanizedError {
-            throw TransferredGardenCutover.Failure.destinationSyncIncomplete(message: failure)
-        }
-        // Photos-on-CloudKit D6 — TransferWorkspace is durable through destination save AND
-        // verification, then deleted. This device just confirmed the destination synced clean, so
-        // any bytes staged here for THIS household (by a prior attempt, or by whichever device ran
-        // the transfer copy) are no longer needed. Best-effort: a miss here is an orphaned
-        // directory, not a correctness/privacy issue on its own. PendingUploads/PhotoCache are
-        // deliberately left untouched — `householdID` is the SAME garden this device may already
-        // have cached photos for as a participant, and those bytes remain valid under ownership.
-        try? PhotoByteStore(lifetime: .transferWorkspace, householdID: householdID).removeAll()
-    }
-
     /// Leave the shared household: clear the marker + wipe the shared local data + drop the participant
     /// coordinator so the next sync rebuilds the OWNER coordinator (the user's own zone re-syncs).
     ///
-    /// THROWS. This used to surface a banner and return normally, which
-    /// reads as success to any caller that is not a person looking at the
-    /// screen — and account deletion is exactly such a caller. A swallowed
-    /// wipe or token-reset failure would let the deletion flow advance to
-    /// `DELETE /api/me` with this device still marked as a participant of a
-    /// share it has already left. The Settings affordance keeps the old
-    /// behaviour via `leaveSharedHouseholdSurfacingErrors()`.
+    /// THROWS, so a swallowed wipe or token-reset failure never reads as success. The Settings
+    /// affordance surfaces errors via `leaveSharedHouseholdSurfacingErrors()`.
     func leaveSharedHousehold() async throws {
         // N1: leaving rebuilds the owner scope over CloudKit; refuse before touching anything
         // while CloudKit is paused.

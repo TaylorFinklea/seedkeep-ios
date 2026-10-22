@@ -11,7 +11,6 @@ import UIKit
 struct SeedkeepApp: App {
     @State private var environment = AppEnvironment.live()
     @State private var pendingInviteCode: String?
-    @State private var pendingHandoff: AccountDeletionHandoffLink?
     #if os(macOS)
     @MainActor private static var didRunStartup = false
     #endif
@@ -52,7 +51,7 @@ struct SeedkeepApp: App {
     }
 
     @ViewBuilder private var mainRoot: some View {
-        RootView(pendingInviteCode: $pendingInviteCode, pendingHandoff: $pendingHandoff)
+        RootView(pendingInviteCode: $pendingInviteCode)
             .environment(environment)
             .environment(environment.auth)
             .modelContainer(environment.container)
@@ -70,9 +69,6 @@ struct SeedkeepApp: App {
                 Self.didRunStartup = true
                 #endif
                 appDelegate.environment = environment   // let the scene delegate drive participant adopt
-                // BEFORE resolving the identity, and deliberately not gated on it: a leftover
-                // account-deletion checkpoint must be accounted for before anything can sync.
-                await environment.recoverCommittedAccountDeletion()
                 await environment.auth.restoreSession()
                 #if os(macOS)
                 if case .signedIn = environment.auth.state {
@@ -93,15 +89,11 @@ struct SeedkeepApp: App {
             .onChange(of: environment.incomingInviteCode) { _, code in
                 if let code { pendingInviteCode = code; environment.incomingInviteCode = nil }
             }
-            .onChange(of: environment.incomingHandoffLink) { _, link in
-                if let link { pendingHandoff = link; environment.incomingHandoffLink = nil }
-            }
     }
 
     private func route(_ link: IncomingLink?) {
         switch link {
         case .invite(let code): pendingInviteCode = code
-        case .gardenHandoff(let handoff): pendingHandoff = handoff
         case nil: break
         }
     }
@@ -112,7 +104,6 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.scenePhase) private var scenePhase
     @Binding var pendingInviteCode: String?
-    @Binding var pendingHandoff: AccountDeletionHandoffLink?
     @State private var whatsNewRelease: ChangelogRelease?
     @State private var workbenchModel = WorkbenchModel()
     /// The window's Garden state, shared by both shells so a Plan survives a size-class switch.
@@ -202,11 +193,6 @@ struct RootView: View {
                 signedOutInviteView(code: route.code)
             }
         }
-        // N1: garden handoff links belonged to the retired server's account deletion. An incoming
-        // one only explains that; it is never inspected or accepted.
-        .sheet(item: $pendingHandoff) { _ in
-            handoffRetiredView
-        }
     }
 
     @ViewBuilder
@@ -264,35 +250,11 @@ struct RootView: View {
         .presentationDetents([.medium, .large])
     }
 
-    private var handoffRetiredView: some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 12) {
-                Image(systemName: "link.badge.plus")
-                    .font(.largeTitle)
-                    .foregroundStyle(WBColor.muted)
-                    .accessibilityHidden(true)
-                Text("Garden handoff links are no longer supported.")
-                    .font(.wbBody)
-                    .foregroundStyle(WBColor.ink)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 48)
-            Button("OK") {
-                pendingHandoff = nil
-            }
-            .buttonStyle(.bordered)
-        }
-        .padding(28)
-        .presentationDetents([.medium])
-    }
-
     /// Decide the What's New sheet once per launch. Never stacks on a pending
-    /// invite/handoff/CKShare sheet — if one is up, defer to the next launch. Fresh
+    /// invite/CKShare sheet — if one is up, defer to the next launch. Fresh
     /// installs baseline silently (no popup for a version never upgraded from).
     private func presentWhatsNewIfNeeded() {
-        guard pendingInviteCode == nil, pendingHandoff == nil else { return }
+        guard pendingInviteCode == nil else { return }
         let current = AppInfo.currentBuild
         let defaults = DevicePreferences.store
         let seen = WhatsNewGate.lastSeenBuild(defaults: defaults)
@@ -332,9 +294,6 @@ private struct InviteRoute: Identifiable {
 //   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike merge       (gate 1b, one sim)
 //   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike owner       (gate 2 owner)
 //   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike participant (gate 2, the OTHER sim/account)
-//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike asset-transfer-destination (gate 0b successor)
-//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike asset-transfer-source      (gate 0b source)
-//   xcrun simctl launch <udid> app.seedkeep.ios --ck-spike asset-transfer-cleanup     (gate 0b successor verify/cleanup)
 //
 // Result is os_log'd (subsystem app.seedkeep.cloud, category Spike, marker "CKSPIKE-RESULT") AND
 // written to Documents/ck-spike-result.txt (read back via `simctl get_app_container … data`).
@@ -372,12 +331,7 @@ struct CKSpikeView: View {
     }
 
     private func run() async {
-        let r: String
-        if AccountDeletionGate0bSpike.handles(mode) {
-            r = await AccountDeletionGate0bSpike.run(mode: mode)
-        } else {
-            r = await runSeedkeepSpike(mode: mode)
-        }
+        let r = await runSeedkeepSpike(mode: mode)
         result = r
         log.log("CKSPIKE-RESULT mode=\(mode, privacy: .public) :: \(r, privacy: .public)")
         try? r.write(to: CKSpike.resultURL, atomically: true, encoding: .utf8)

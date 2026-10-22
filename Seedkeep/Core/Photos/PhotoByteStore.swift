@@ -26,8 +26,8 @@ struct PhotoByteStore: Sendable {
         case pendingUploads = "PendingUploads"
         /// Bytes downloaded from CloudKit. Freely discardable — always re-fetchable.
         case cache = "PhotoCache"
-        /// Bytes staged during an account-deletion garden transfer. Durable through destination
-        /// save AND verification, then deleted.
+        /// Legacy (N3): bytes the removed account-deletion transfer staged. Nothing writes or
+        /// reads them now; the case stays so every purge still removes leftovers.
         case transferWorkspace = "TransferWorkspace"
     }
 
@@ -125,9 +125,8 @@ struct PhotoByteStore: Sendable {
     /// Remove `recordName`'s bytes from BOTH per-record mutable stores (PendingUploads +
     /// PhotoCache) for a household. Wired into `HouseholdApplyGate.deleteLocal`'s `.seedPhoto` /
     /// `.journalEntryPhoto` arms — a delete landing from CloudKit (or the local cascade) must not
-    /// leave orphaned bytes behind. TransferWorkspace has no per-record delete concept; it is
-    /// purged wholesale once a transfer completes (see `AppEnvironment.adoptTransferredGarden`, or
-    /// `purgeHousehold` for the full wipe).
+    /// leave orphaned bytes behind. The legacy TransferWorkspace has no per-record delete concept;
+    /// `purgeHousehold` and `purgeAll` remove it wholesale.
     static func purgeRecord(_ recordName: String, householdID: String) {
         PhotoByteStore(lifetime: .pendingUploads, householdID: householdID).remove(recordName)
         PhotoByteStore(lifetime: .cache, householdID: householdID).remove(recordName)
@@ -136,23 +135,23 @@ struct PhotoByteStore: Sendable {
     /// Purge every byte a household has across ALL THREE lifetimes. Wired into
     /// `HouseholdCloudCoordinator.wipeAndClear` (account switch/sign-out — AC5, a PRIVACY
     /// requirement: another household's photo bytes must not survive an account switch — plus the
-    /// CKShare adopt/leave paths, which route through that same function). THROWS — see
-    /// `removeAll`.
+    /// CKShare adopt/leave paths, which route through that same function). The legacy
+    /// TransferWorkspace is removed without being recreated (N3). THROWS — see `removeAll`.
     static func purgeHousehold(_ householdID: String) throws {
-        for lifetime in Lifetime.allCases {
+        for lifetime in Lifetime.allCases where lifetime != .transferWorkspace {
             try PhotoByteStore(lifetime: lifetime, householdID: householdID).removeAll()
+        }
+        let legacy = rootDirectory(lifetime: .transferWorkspace, householdID: householdID)
+        if FileManager.default.fileExists(atPath: legacy.path) {
+            try FileManager.default.removeItem(at: legacy)
         }
     }
 
     /// Purge every household's bytes across all three lifetimes (N1: an identity switch or a
     /// garden discard, where the households on disk are not known). `root` is the
-    /// `HouseholdSync` directory. `keepingTransferWorkspace` leaves the account-deletion transfer
-    /// bytes in place (while deletion checkpoints are quarantined). THROWS — see `removeAll`.
-    static func purgeAll(
-        under root: URL = HouseholdCloudCoordinator.householdSyncDir(),
-        keepingTransferWorkspace: Bool = false
-    ) throws {
-        for lifetime in Lifetime.allCases where !(keepingTransferWorkspace && lifetime == .transferWorkspace) {
+    /// `HouseholdSync` directory. THROWS — see `removeAll`.
+    static func purgeAll(under root: URL = HouseholdCloudCoordinator.householdSyncDir()) throws {
+        for lifetime in Lifetime.allCases {
             let directory = root.appendingPathComponent(lifetime.rawValue, isDirectory: true)
             if FileManager.default.fileExists(atPath: directory.path) {
                 try FileManager.default.removeItem(at: directory)
@@ -193,7 +192,6 @@ enum PhotoAssetSyncError: Error, LocalizedError {
     case unreadableLocalBytes(recordName: String)
     case localIntegrityMismatch(recordName: String)
     case fetchedAssetUnavailable(recordName: String)
-    case transferRosterMarkerMissing(recordName: String)
     case retryRequired(recordName: String)
 
     var errorDescription: String? {
@@ -206,64 +204,9 @@ enum PhotoAssetSyncError: Error, LocalizedError {
             return "Photo bytes failed their integrity check for \(recordName); the photo was not staged."
         case .fetchedAssetUnavailable(let recordName):
             return "CloudKit delivered \(recordName) without readable photo bytes."
-        case .transferRosterMarkerMissing(let recordName):
-            return "CloudKit delivered photo bytes for \(recordName) without a transfer roster marker."
         case .retryRequired(let recordName):
             return "Photo sync is paused for \(recordName); retry it explicitly to resume."
         }
-    }
-}
-
-/// Stage D's read boundary for account-deletion transfers. CloudKit owns the
-/// lifetime of fetched CKAsset URLs, so every read copies those bytes into the
-/// durable transfer workspace before a copy or digest is allowed to inspect
-/// the graph. Each caller receives the hashes from its own observation; source
-/// and destination verification never share asserted metadata.
-struct AccountDeletionTransferAssetStager: Sendable {
-    private let workspace: PhotoByteStore
-
-    init(householdID: String) {
-        workspace = PhotoByteStore(lifetime: .transferWorkspace, householdID: householdID)
-    }
-
-    func snapshot(_ records: [CKRecord]) throws -> AccountDeletionRecordSnapshot {
-        var assetHashes: [AssetRef: String] = [:]
-        var expectedAssets: [AssetRef] = []
-
-        for record in records {
-            guard let type = SeedkeepRecordType.type(forRecordTypeName: record.recordType) else {
-                continue
-            }
-            for field in type.fields where field.type == .asset {
-                let recordName = record.recordID.recordName
-                let assetRef = AssetRef(recordName: recordName, field: field.name)
-                let hasRosterMarker = record["\(field.name)SHA256"] != nil
-                if hasRosterMarker {
-                    expectedAssets.append(assetRef)
-                }
-                guard let raw = record[field.name] else { continue }
-                guard hasRosterMarker else {
-                    throw PhotoAssetSyncError.transferRosterMarkerMissing(
-                        recordName: recordName)
-                }
-                guard let asset = raw as? CKAsset, let sourceURL = asset.fileURL else {
-                    throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: recordName)
-                }
-                let data: Data
-                do { data = try Data(contentsOf: sourceURL) }
-                catch { throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: recordName) }
-
-                let ref = try workspace.write(data, for: recordName)
-                record[field.name] = CKAsset(fileURL: ref.url)
-                assetHashes[assetRef] = ref.sha256
-            }
-        }
-
-        if let missing = expectedAssets.first(where: { assetHashes[$0] == nil }) {
-            throw PhotoAssetSyncError.fetchedAssetUnavailable(recordName: missing.recordName)
-        }
-
-        return AccountDeletionRecordSnapshot(records: records, assetHashes: assetHashes)
     }
 }
 

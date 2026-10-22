@@ -299,17 +299,6 @@ struct SettingsContent: View {
                 }
             }
 
-            if appEnv.pausedDeletionCheckpointCount > 0 {
-                Section {
-                    statusRow(
-                        "Account deletion",
-                        "\(appEnv.pausedDeletionCheckpointCount) pending checkpoint(s) paused"
-                    )
-                } header: {
-                    WBSectionHeader("Diagnostics")
-                }
-            }
-
             if blocks.contains(.about) {
                 Section {
                     Button {

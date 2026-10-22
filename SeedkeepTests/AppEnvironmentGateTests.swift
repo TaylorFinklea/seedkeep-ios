@@ -13,20 +13,27 @@ struct AppEnvironmentGateTests {
     private static let userA = "_userA"
     private static let userB = "_userB"
 
-    /// One isolated environment: its own defaults suite, sync-state directory, checkpoint store
-    /// and in-memory container.
+    /// One isolated environment: its own defaults suite, sync-state directory, legacy
+    /// account-deletion checkpoint directory, token store and in-memory container.
     struct Harness {
         let env: AppEnvironment
         let provider: FakeCloudIdentityProvider
         let defaults: UserDefaults
         let container: ModelContainer
-        let checkpoints: AccountDeletionCheckpointStore
+        let syncDirectory: URL
+        let checkpointDirectory: URL
+        let tokenStore: InMemoryTokenStore
         let cleanup: () -> Void
     }
 
+    /// `checkpoints` maps file names to the bytes an older build left in the legacy checkpoint
+    /// directory; nil leaves no directory at all. `prepare` runs before the environment exists,
+    /// so it sees the state the launch-time cleanup will find.
     private static func makeHarness(
-        _ name: String, provider: FakeCloudIdentityProvider, checkpointUserID: String? = nil,
-        cache: (user: String, household: String)? = nil, legacy: Bool = false
+        _ name: String, provider: FakeCloudIdentityProvider, checkpoints: [String: Data]? = nil,
+        cache: (user: String, household: String)? = nil, legacy: Bool = false,
+        token: String? = nil,
+        prepare: (ModelContainer, UserDefaults, URL) throws -> Void = { _, _, _ in }
     ) throws -> Harness {
         let suite = "AppEnvironmentGateTests.\(name).\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -34,11 +41,12 @@ struct AppEnvironmentGateTests {
             .appendingPathComponent("AppEnvironmentGateTests-\(UUID().uuidString)", isDirectory: true)
         let syncDirectory = root.appendingPathComponent("HouseholdSync", isDirectory: true)
         try FileManager.default.createDirectory(at: syncDirectory, withIntermediateDirectories: true)
-        let checkpoints = AccountDeletionCheckpointStore(
-            directory: root.appendingPathComponent("AccountDeletion", isDirectory: true))
-        if let checkpointUserID {
-            try checkpoints.save(AccountDeletionCheckpoint(
-                userID: checkpointUserID, role: .participant, phase: .participantLeaving, updatedAt: 1))
+        let checkpointDirectory = root.appendingPathComponent("AccountDeletion", isDirectory: true)
+        if let checkpoints {
+            try FileManager.default.createDirectory(at: checkpointDirectory, withIntermediateDirectories: true)
+            for (file, data) in checkpoints {
+                try data.write(to: checkpointDirectory.appendingPathComponent(file))
+            }
         }
         if let cache {
             let json = """
@@ -47,11 +55,15 @@ struct AppEnvironmentGateTests {
             defaults.set(Data(json.utf8), forKey: legacy ? AuthController.legacyIdentityCacheKey : AuthController.identityCacheKey)
         }
         let container = makeTestContainer(name: "appEnvGate-\(UUID().uuidString)")
+        try prepare(container, defaults, syncDirectory)
+        let tokenStore = InMemoryTokenStore(token)
         let env = AppEnvironment.makeForTesting(
-            identity: provider, tokenStore: InMemoryTokenStore(), defaults: defaults,
-            container: container, durableStateDirectory: syncDirectory, checkpointStore: checkpoints)
+            identity: provider, tokenStore: tokenStore, defaults: defaults,
+            container: container, durableStateDirectory: syncDirectory,
+            legacyCheckpointDirectory: checkpointDirectory)
         return Harness(env: env, provider: provider, defaults: defaults, container: container,
-                       checkpoints: checkpoints, cleanup: {
+                       syncDirectory: syncDirectory, checkpointDirectory: checkpointDirectory,
+                       tokenStore: tokenStore, cleanup: {
             defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: env.scanStagingRoot)
@@ -165,21 +177,87 @@ struct AppEnvironmentGateTests {
         #expect(h.env.cloudKit == nil)
     }
 
-    @Test("a quarantined deletion checkpoint pauses CloudKit from construction, even when verified")
-    func checkpointQuarantinePausesFromInit() async throws {
-        let provider = FakeCloudIdentityProvider(recordName: Self.userA)
-        let h = try Self.makeHarness("quarantine", provider: provider, checkpointUserID: "someone",
-                                     cache: (Self.userA, "hh_a"))
+    // MARK: - N3 legacy account-deletion files
+
+    private static let legacyFiles: [String: Data] = [
+        "checkpoint-dV9zZXJ2ZXI.json": Data(#"{"user_id":"u_server","role":"solo_owner","phase":"deleting_account","updated_at":1}"#.utf8),
+        "checkpoint-ZGFtYWdlZA.json": Data("not json".utf8),
+        ".checkpoint-dV9zZXJ2ZXI.json.1234.tmp": Data("partial".utf8),
+    ]
+
+    private static let migrationMarker = "\(HouseholdCloudCoordinator.migratedKeyPrefix)production.hh_h"
+
+    /// What a device holds for garden `hh_h`: a row, a pending CloudKit deletion, a journal
+    /// recovery item, a migration marker, a participant marker, engine state, pending-upload
+    /// bytes and transfer-workspace bytes.
+    private static func prepareDevice(
+        _ container: ModelContainer, _ defaults: UserDefaults, _ syncDirectory: URL
+    ) throws {
+        try insertGardenAndRecoveryItem(container, household: "hh_h")
+        let context = ModelContext(container)
+        context.insert(LocalCloudKitDeletion(scopeID: "owner|hh_h", householdID: "hh_h",
+                                             recordName: "seed:gone", createdAt: 1))
+        try context.save()
+        defaults.set(true, forKey: migrationMarker)
+        ActiveGardenContext.recordParticipant(zoneName: "seedkeep-hh_x", ownerName: "_x", in: defaults)
+        try Data("x".utf8).write(to: syncDirectory.appendingPathComponent("engine-state-production-hh_h.json"))
+        for lifetime in [PhotoByteStore.Lifetime.pendingUploads, .transferWorkspace] {
+            let dir = syncDirectory.appendingPathComponent(lifetime.rawValue, isDirectory: true)
+                .appendingPathComponent("production/hh_h", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data("jpeg".utf8).write(to: dir.appendingPathComponent("seedPhoto_p1.abc.jpg"))
+        }
+    }
+
+    private static func exists(_ url: URL, _ path: String = "") -> Bool {
+        FileManager.default.fileExists(atPath: path.isEmpty ? url.path : url.appendingPathComponent(path).path)
+    }
+
+    /// Everything but the legacy files is exactly as `prepareDevice` left it.
+    private static func expectDeviceUntouched(_ h: Harness, sourceLocation: SourceLocation = #_sourceLocation) {
+        let context = ModelContext(h.container)
+        #expect((try? context.fetchCount(FetchDescriptor<LocalSeed>())) == 1, sourceLocation: sourceLocation)
+        #expect((try? context.fetchCount(FetchDescriptor<LocalJournalRecoveryItem>())) == 1, sourceLocation: sourceLocation)
+        #expect((try? context.fetchCount(FetchDescriptor<LocalCloudKitDeletion>())) == 1,
+                "pending CloudKit deletions stay", sourceLocation: sourceLocation)
+        #expect(h.defaults.bool(forKey: migrationMarker), sourceLocation: sourceLocation)
+        #expect(h.env.isViewingSharedHousehold, "the participant marker stays", sourceLocation: sourceLocation)
+        #expect(exists(h.syncDirectory, "engine-state-production-hh_h.json"), sourceLocation: sourceLocation)
+        #expect(exists(h.syncDirectory, "PendingUploads/production/hh_h/seedPhoto_p1.abc.jpg"), sourceLocation: sourceLocation)
+        #expect(h.env.auth.loadCachedIdentity()?.household.id == "hh_h", sourceLocation: sourceLocation)
+        #expect(h.tokenStore.load() == "tok", sourceLocation: sourceLocation)
+    }
+
+    @Test("with no checkpoint directory the legacy cleanup changes nothing")
+    func legacyCleanupWithoutCheckpointsIsANoOp() async throws {
+        let h = try Self.makeHarness("noCheckpoint", provider: FakeCloudIdentityProvider(recordName: Self.userA),
+                                     cache: (Self.userA, "hh_h"), token: "tok", prepare: Self.prepareDevice)
         defer { h.cleanup() }
-        #expect(h.env.pausedDeletionCheckpointCount == 1, "counted in init, before any task runs")
+
+        Self.expectDeviceUntouched(h)
+        #expect(!Self.exists(h.checkpointDirectory))
+        #expect(!Self.exists(h.syncDirectory, "TransferWorkspace"), "transfer bytes go even without checkpoints")
+    }
+
+    @Test("legacy checkpoint files (damaged and scratch included) and transfer bytes go; nothing else changes")
+    func legacyCleanupRemovesOnlyLegacyFiles() async throws {
+        let h = try Self.makeHarness("checkpoints", provider: FakeCloudIdentityProvider(recordName: Self.userA),
+                                     checkpoints: Self.legacyFiles, cache: (Self.userA, "hh_h"), token: "tok",
+                                     prepare: Self.prepareDevice)
+        defer { h.cleanup() }
+
+        #expect(!Self.exists(h.checkpointDirectory), "every checkpoint file goes, whatever it holds")
+        #expect(!Self.exists(h.syncDirectory, "TransferWorkspace"))
+        Self.expectDeviceUntouched(h)
 
         await h.env.auth.restoreSession()
-
-        #expect(h.env.auth.isIdentityVerified)
-        #expect(!h.env.canUseCloudKit)
-        #expect(h.env.cloudKitPauseReason == "an earlier account deletion didn't finish")
-        #expect(await h.env.prepareOwnerShare() == nil)
-        #expect(!h.env.hasCloudCoordinator)
+        guard case .signedIn(_, let household) = h.env.auth.state else {
+            Issue.record("expected signedIn, got \(h.env.auth.state)")
+            return
+        }
+        #expect(household.id == "hh_h", "the same garden is bound")
+        #expect(h.env.canUseCloudKit, "a checkpoint never pauses CloudKit")
+        #expect(h.env.cloudKitPauseReason == nil)
     }
 
     // MARK: - Share adoption epoch
