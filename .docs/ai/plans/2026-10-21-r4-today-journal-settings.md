@@ -394,3 +394,65 @@ Rebase onto S before merging.
     sidebar; it opens with no main window and while starting up.
   - **CSV:** a real export, edited and imported on the Mac.
   - **Journal search** on iPad.
+
+## Results (2026-10-21)
+
+R4 is done on `redesign/r2-design-system` (local; not pushed).
+
+- **Commits:**
+  - T `4f3cce1` (Today dashboard)
+  - J `b0bbd6b` (Journal search and filters)
+  - S `d2f91f1` (Mac Settings window and cleanup)
+  - C `06a8b19` (CSV import)
+  - fixes found by the screenshots `c13c69f`
+  - screenshot test and audit upkeep `a10dddc`
+- **Reviews:**
+  - Every slice was reviewed by Sol (`Reviewed-by`) and Opus, and C also
+    by DeepSeek.
+  - Sol rejected J once, S twice and C four times before approving. The
+    fixes covered, among other things:
+    - saves into the wrong garden
+    - a Settings window that kept stale screens after a garden change
+    - an import run that could be orphaned
+    - a change check that could miss a peer's edit
+    - backslashes lost from tags
+  - **Lead decisions:**
+    - A stored "Hosted" AI choice reads as Free.
+    - A blank packets cell on a new wishlist seed gives 0, matching Add
+      Seed.
+    - All-empty CSV rows are skipped.
+    - Sol's ask to move C to a lighter worker was declined.
+- **Gate (final):** SeedkeepKit 97, SeedkeepCloudKit 148, iOS app
+  1562 + 1, macOS app 1577 + 1. The Mac app builds.
+- **Screenshots:**
+  - `scripts/r4-screenshots.sh <UDID>` covers Today's This week and due
+    overflow, Journal search, a filter chip and both together, and the
+    CSV preview, in four configurations: 28 images, all reached.
+  - The runners now fail on missing images or unreached steps.
+  - They found the flat Journal filter menu (now submenus by kind) and the
+    system-styled CSV preview (now Workbench).
+- **Audit:**
+  - 339 unresolved findings, compared with R3's 283.
+  - The growth is in categories R2d recorded as suspected noise:
+    - contrast on tested token pairs (Today's new rows)
+    - element-less findings
+    - system toolbar buttons
+    - Settings elements, which now appear on more scroll pages because
+      the screen is shorter
+  - None was a new real defect.
+  - The banner action's colour pair (accent on `warnSoft`, about 7.5:1)
+    was added to the contrast tests.
+  - The allowlist dropped seven entries that are no longer used, followed
+    the rewritten Notifications footer, and accepts the Journal search
+    field's clipping.
+- **Not verified:**
+  - At runtime on Mac and iPad: the Settings window (⌘, opening it, the
+    garden reset, errors shown in it), Journal search on iPad, and the
+    real Files picker for import.
+  - CloudKit-on behaviour of a large import.
+- **Follow-ups (not done):**
+  - A cheaper incremental fingerprint for import: the longest main-actor
+    pause measured 0.28 s in a debug build at about 7,500 seeds.
+  - One shared helper for Windows' and Today's seed rows.
+  - Caching the Journal feed between keystrokes.
+  - An import ledger that survives the app quitting.

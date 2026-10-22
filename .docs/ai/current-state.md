@@ -1,5 +1,27 @@
 # Current State
 
+## R4 done (2026-10-21): Today, Journal, Settings and CSV import
+
+Contract and results: `.docs/ai/plans/2026-10-21-r4-today-journal-settings.md`.
+Branch `redesign/r2-design-system`, local only (not pushed).
+- **Today:** a This week block (the frost warning, then seeds to plant
+  now or soon, and See all in Windows) and "<n> more due".
+- **Journal:** search over text and attachments; filters by seed, bed or
+  planting in submenus; saves re-check the garden.
+- **Mac:** Settings is a standard Settings window (⌘,); the sidebar
+  drops it. The Server, Subscription and Hosted settings are gone.
+- **Seeds:** CSV import with a preview. Matching rows update, and export
+  round-trips.
+- **Verification:** gate 97 / 148 / 1562 + 1 / 1577 + 1; R4 screenshots
+  28/28; audit 339 findings, all in recorded noise categories.
+- **Owner checks pending:**
+  - the Mac Settings window and a real CSV import on the Mac
+  - Journal search on iPad
+  - earlier: iPad and Mac Garden and Windows, VoiceOver, the manual
+    checklist
+- **Next:** N3 (remove server code, retire legacy accounts), then N2-E,
+  then R5.
+
 ## R3 done (2026-10-21): Garden grid and planting windows
 
 Contract and results: `.docs/ai/plans/2026-10-21-r3-garden-windows.md`.

@@ -345,6 +345,21 @@
 
 **Rationale**: R3's invariant is no sync or schema change. Clearing a size is rare and can follow as its own change.
 
+## 2026-10-21 — CSV import safety and Mac Settings scope (R4)
+
+**Context**: R4 added a bulk CSV import that writes into a shared CloudKit garden, and a Mac Settings window outside the main window's scope handling.
+
+**Decision**:
+- One import runs per app (`SeedCSVImportCenter`), never orphaned by leaving the screen. It plans off the main actor and writes in short slices. Between slices it checks the garden and a fingerprint of every seed (id, `updatedAt`, deleted flag, identity fields), so any edit by any device forces a fresh preview. Each update also re-checks its target by id.
+- Matching needs all four identity columns. Without them every row adds a seed, and the preview warns about re-importing after an interruption (the ledger is in memory).
+- All-empty rows (`,,,`) and whitespace-only lines are skipped. Spreadsheets append them.
+- `activeGardenHouseholdID` is observable across share adoption and leaving (`participantMarkerRevision`). The Mac Settings window keys its stack on it, so a garden change drops stale screens and drafts.
+- A stored "Hosted" AI choice reads as Free (on-device), as before.
+
+**Alternatives considered**: refusing all-empty rows as errors; a per-create identity re-check instead of a whole-garden fingerprint; a sync apply-generation counter (exact, but it touches the sync code).
+
+**Rationale**: an import must not duplicate or overwrite seeds because of edits from another device in the meantime, and the checks have to stay cheap enough for a 5,000-row file.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in
