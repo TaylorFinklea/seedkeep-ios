@@ -132,7 +132,26 @@ echo "[r3-screenshots] Screenshots exported: $PNG_COUNT PNG file(s)"
 echo "[r3-screenshots] Output directory: $EXPORT_DIR"
 echo "[r3-screenshots] Result bundle: $RESULT_BUNDLE"
 
-if (( TIMED_OUT || STATUS != 0 || EXPORT_STATUS != 0 )); then
+# A run only counts when all four configurations ran and every step attached its screenshot: 4 executed
+# tests, 32 images, and none marked "unreached".
+EXPECTED_PNGS=32
+EXECUTED="$(grep -o 'Executed [0-9]* test' "$LOG" 2>/dev/null | tail -1 | grep -o '[0-9]*' || true)"
+UNREACHED="$(grep -o 'unreached' "$EXPORT_DIR/manifest.json" 2>/dev/null | wc -l | tr -d ' ' || true)"
+INCOMPLETE=0
+if [[ "$EXECUTED" != "4" ]]; then
+    echo "[r3-screenshots] ERROR: expected 4 executed tests, got '${EXECUTED:-none}'" >&2
+    INCOMPLETE=1
+fi
+if [[ "$PNG_COUNT" != "$EXPECTED_PNGS" ]]; then
+    echo "[r3-screenshots] ERROR: expected $EXPECTED_PNGS screenshots, got $PNG_COUNT" >&2
+    INCOMPLETE=1
+fi
+if [[ "${UNREACHED:-0}" != "0" ]]; then
+    echo "[r3-screenshots] ERROR: $UNREACHED step(s) did not reach their screen" >&2
+    INCOMPLETE=1
+fi
+
+if (( TIMED_OUT || STATUS != 0 || EXPORT_STATUS != 0 || INCOMPLETE )); then
     echo "[r3-screenshots] FINISHED WITH FAILURES: see the log and the unreached or failed steps" >&2
     exit 1
 fi

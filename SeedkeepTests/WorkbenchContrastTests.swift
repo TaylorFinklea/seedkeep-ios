@@ -110,6 +110,8 @@ struct WBContrastRequirement: Sendable, CustomTestStringConvertible {
         .text("muted on kindTransplant", WBPalette.muted, on: WBPalette.kindTransplant),
         .text("muted on kindHarvest", WBPalette.muted, on: WBPalette.kindHarvest),
         .text("muted on kindNote", WBPalette.muted, on: WBPalette.kindNote),
+        // The warning banner's action text (e.g. Today's "Open Garden").
+        .text("accent on warnSoft", WBPalette.accent, on: WBPalette.warnSoft),
     ]
 
     /// Graphics. `faint` on `panel` also covers the swatch ring.
