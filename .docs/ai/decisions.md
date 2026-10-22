@@ -406,3 +406,13 @@ Earlier entries that mention Beads are historical.
 **Alternatives considered**: Keep the flag-off branches until F (rejected: they describe a configuration no user can reach, and would be migrated twice).
 
 **Rationale**: The smallest deletion that keeps every shipping path identical. The pre-N3 store fixture (generated at c632a33) guards the on-disk store against later model removals.
+
+## [2026-10-22] N3 T2: tests run the shipping CloudKit path through a coordinator factory
+
+**Context**: Until T2 the unit-test host defaulted `FeatureFlags.cloudKitHouseholdSyncEnabled` to OFF, a configuration no shipping build could reach, and the full suite ran only in that mode. With the flag removed, a test with a verified identity would build a real `HouseholdCloudCoordinator` and reach CloudKit.
+
+**Decision**: `AppEnvironment` builds its coordinators through `CloudCoordinatorFactory`. The app uses `.live`; `makeForTesting` requires an explicit factory (no default), and tests pass `FakeCloudCoordinators`, which builds coordinators over the fake engine with no provisioner and no state URL and records what it built. The flag, its stored kill-switch and `SEEDKEEP_TEST_CLOUDKIT_ON` are gone; `ProductionPathTests` always compiles. Under unit tests a coordinator's one-time migration marker still lives in `UserDefaults.standard`, so suites that build coordinators remove the markers for every household they built.
+
+**Alternatives considered**: Keep the OFF default for tests and add an ON lane (rejected: it tests a mode no user has); give `makeForTesting` a default factory (rejected: a test could fall back to live CloudKit by accident).
+
+**Rationale**: The tests now exercise the code users run, and the required factory argument makes reaching real CloudKit from a test a compile error rather than a convention.

@@ -17,11 +17,13 @@ Contract: `.docs/ai/plans/2026-10-22-n3-server-removal.md`. Branch
   - T1 (0c0efdd): the server client and server sync are gone. Writes no
     longer queue `LocalPendingWrite` rows; old rows stay. A pre-N3 store
     fixture covers every model. Gate 25 / 148 / 1240 + 1 / 1255 + 1.
+  - T2 (1105dd0): every test runs on the CloudKit path over fake
+    engines (`CloudCoordinatorFactory`); the sync flag and the
+    CloudKit-OFF lanes are gone. Gate 25 / 148 / 1242 / 1257.
 - **Next:**
-  - T2: run every test on the CloudKit path with fake engines, remove
-    the CloudKit sync flag, retire the CloudKit-OFF lanes.
   - F: `ServerRetirement`, the API plist keys, the Sign in with Apple
     entitlement, a structural zero-transport test.
+  - Then N3 verification: R3/R4 screenshots, the audit against 339.
 - **Owner:** the server-retirement runbook is in the umbrella repo,
   owner-run and not executed.
 
