@@ -20,10 +20,12 @@ Contract: `.docs/ai/plans/2026-10-22-n3-server-removal.md`. Branch
   - T2 (1105dd0): every test runs on the CloudKit path over fake
     engines (`CloudCoordinatorFactory`); the sync flag and the
     CloudKit-OFF lanes are gone. Gate 25 / 148 / 1242 / 1257.
-- **Next:**
-  - F: `ServerRetirement`, the API plist keys, the Sign in with Apple
-    entitlement, a structural zero-transport test.
-  - Then N3 verification: R3/R4 screenshots, the audit against 339.
+  - F (55fb1b3): `ServerRetirement`, the API plist keys and the Sign in
+    with Apple entitlement are gone; the release verifier now forbids
+    that entitlement. `ZeroServerTransportTests` checks the built app.
+    Gate 25 / 148 / 1243 / 1258.
+- **Next:** N3 verification (R3/R4 screenshots, the audit against 339),
+  then N2-E.
 - **Owner:** the server-retirement runbook is in the umbrella repo,
   owner-run and not executed.
 

@@ -416,3 +416,13 @@ Earlier entries that mention Beads are historical.
 **Alternatives considered**: Keep the OFF default for tests and add an ON lane (rejected: it tests a mode no user has); give `makeForTesting` a default factory (rejected: a test could fall back to live CloudKit by accident).
 
 **Rationale**: The tests now exercise the code users run, and the required factory argument makes reaching real CloudKit from a test a compile error rather than a convention.
+
+## [2026-10-22] N3 F: the release verifier forbids Sign in with Apple; zero transport is checked on the built app
+
+**Context**: F removed the last server configuration: the `SeedkeepAPI*` Info.plist keys and the Sign in with Apple entitlement. `scripts/verify-release-archive.sh` required that entitlement, so every release would have failed. The contract asked for a structural "zero server transport" test.
+
+**Decision**: The release verifier now fails an archive that carries `com.apple.developer.applesignin`, as it already did for `aps-environment`. `ZeroServerTransportTests` runs in the hosted app on iOS and macOS: the app's Info.plist (checked to be the app's, by its `KeychainService` key) has no `SeedkeepAPI` key or server host, and the app executable and the dylibs beside it carry no `fly.dev` or `seedkeep-server` string. Entitlements are checked only on signed archives, because gate builds are unsigned. A scan save's "stays local" proof is now that structural test plus "no `LocalPendingWrite` rows". The Sign in with Apple App ID capability is removed by the owner (runbook).
+
+**Alternatives considered**: A source grep for server names (rejected: it checks text, not what ships); checking entitlements in the unit test (rejected: the unsigned test host has none to read).
+
+**Rationale**: The checks run against what ships, and a release cannot regain the entitlement unnoticed.
