@@ -30,8 +30,8 @@ public final class AppEnvironment {
     /// Replaces the old `NotificationsCenter.refreshFrostWarnings` path.
     let weatherWarnings: WeatherWarningsService
 
-    /// Lets feature views request a tab switch (e.g. TopBarSparkleButton →
-    /// Assistant). MainTabView observes this and binds it to the TabView's
+    /// Lets feature views request a tab switch (e.g. Today → Garden).
+    /// MainTabView observes this and binds it to the TabView's
     /// selection. nil means leave whatever's current.
     public var requestedTab: AppTab?
 
@@ -339,13 +339,8 @@ public final class AppEnvironment {
         // Live launches only: the unit-test host never writes the shared preferences.
         if startsBackgroundServices, FeatureFlags.canRunLiveAppStartup {
             Task { await preferences.backfillFrostDates() }
-        }
-        // Phase 4D — catalog-corrections orchestrator. Observes
-        // `.catalogCorrectionsChanged` posted by `SyncEngine` and
-        // schedules outcome pings (with cross-device dedup via the
-        // server ledger). Idempotent — safe to call from tests too.
-        if startsBackgroundServices, !ServerRetirement.isRetired {
-            CatalogCorrectionNotifier.shared.start(client: client, container: container)
+            // N3 — catalog correction outcomes came from the retired server; clear any left behind.
+            Task { await NotificationsCenter.shared.clearRetiredCatalogNotifications() }
         }
         // Stabilization B3 — journal feed refresh failures were recorded
         // into JournalStore.lastError and never displayed. Route them

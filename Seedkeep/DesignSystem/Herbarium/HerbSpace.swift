@@ -24,6 +24,6 @@ enum HerbSpace {
     /// Tight vertical rhythm inside a section (e.g. between subtitle and body).
     static let tight: CGFloat = 6
 
-    /// Bottom-pad for tab roots so SproutFAB doesn't sit atop content.
+    /// Bottom padding for tab roots, so content clears the floating tab bar.
     static let fabClearance: CGFloat = 96
 }

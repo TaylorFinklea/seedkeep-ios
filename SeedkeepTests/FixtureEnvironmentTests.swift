@@ -117,7 +117,7 @@ struct FixtureEnvironmentTests {
         let standard = UserDefaults.standard
         let notificationKeys = [
             "seedkeep.notif.frost", "seedkeep.notif.heat", "seedkeep.notif.water",
-            "seedkeep.notif.events", "seedkeep.notif.catalog",
+            "seedkeep.notif.events",
             "seedkeep.notif.pet.wilted", "seedkeep.notif.pet.departed", "seedkeep.notif.pet.roundup",
         ]
         let keys = [WhatsNewGate.lastSeenBuildKey] + notificationKeys

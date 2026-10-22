@@ -106,7 +106,6 @@ struct LibraryView: View {
             .searchable(text: $searchText, prompt: "Search seeds")
             #endif
             .refreshable { await appEnv.syncIfPossible() }
-            .publishesAssistantContext(pageType: "library")
             .toolbar {
                 ToolbarItem(placement: .platformLeading) {
                     Menu {

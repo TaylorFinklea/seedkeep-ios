@@ -69,7 +69,6 @@ struct TodayView: View {
                 }
             }
             .navigationTitle("")
-            .publishesAssistantContext(pageType: "today")
             .navigationDestination(for: PetDetailDestination.self) { dest in
                 PetDetailView(plantingEventID: dest.plantingEventID)
             }

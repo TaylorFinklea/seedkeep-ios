@@ -253,15 +253,9 @@ public final class SyncEngine {
             householdID: householdID,
             kind: Self.catalogCorrectionsKind
         )
-        // Cursor at its initial value means this is the FIRST pull on
-        // this install/device — the feed replays the user's entire
-        // correction history, so first-sight terminal rows are ingested
-        // without being treated as fresh transitions (no notification
-        // pings for months-old outcomes).
-        let isInitialSync = since == 0
         repeat {
             let page = try await client.catalogCorrectionsMine(since: since, sinceID: sinceID)
-            try upsertCatalogCorrections(page.items, isInitialSync: isInitialSync)
+            try upsertCatalogCorrections(page.items)
             since = page.cursor
             sinceID = page.cursor_id
             try saveCursor(
@@ -1259,38 +1253,21 @@ public final class SyncEngine {
     }
 
     /// Phase 4D — pull-side upsert for the catalog corrections delta
-    /// feed. Mirrors `upsertJournalEntries`/`upsertPetDepartures` with
-    /// two additions:
+    /// feed. Mirrors `upsertJournalEntries`/`upsertPetDepartures`.
     ///
-    /// 1. **Transition detection.** When an existing row's status was
-    ///    `open` / `reviewed` and the incoming DTO is `applied` or
-    ///    `dismissed`, capture the id into `correctionsToNotify`. After
-    ///    `context.save()` we post `.catalogCorrectionsChanged` on the
-    ///    main actor with the captured ids so
-    ///    `CatalogCorrectionNotifier` can debounce + schedule the
-    ///    user-facing pings.
-    ///
-    /// 2. **Tombstone hard-delete + UN cleanup.** Rows with
-    ///    `deleted_at != nil` are removed from SwiftData and any
-    ///    pending UN request for that correction is cancelled so the
-    ///    lock screen doesn't carry ghost pings for a withdrawn /
-    ///    revoked correction.
+    /// Rows with `deleted_at != nil` are hard-deleted locally.
     ///
     /// `applied_patch` consumption: rows arriving `applied` with an
     /// `applied_patch` payload patch the matching `LocalSeed` rows'
     /// growing-info snapshots in place (idempotent — re-applying the
-    /// same value is a no-op), so SeedDetail and CatalogFeedbackSheet's
-    /// `client_seen_value` read the fresh value without a follow-up
-    /// `catalogByID` round-trip. The patch values are also captured on
-    /// the local correction row (`appliedFieldName` / `appliedNewValue`)
-    /// for notification copy.
+    /// same value is a no-op), so SeedDetail reads the fresh value
+    /// without a follow-up `catalogByID` round-trip. The patch values are
+    /// also captured on the local correction row (`appliedFieldName` /
+    /// `appliedNewValue`).
     private func upsertCatalogCorrections(
-        _ items: [CatalogCorrectionDTO],
-        isInitialSync: Bool = false
+        _ items: [CatalogCorrectionDTO]
     ) throws {
         let context = ModelContext(container)
-        var correctionsToNotify: [String] = []
-        var idsToCancelPing: [String] = []
         for dto in items {
             let id = dto.id
             let descriptor = FetchDescriptor<LocalCatalogCorrection>(
@@ -1298,33 +1275,11 @@ public final class SyncEngine {
             )
             if let existing = try context.fetch(descriptor).first {
                 if dto.deleted_at != nil {
-                    // Tombstone — hard-delete locally + sweep any
-                    // pending UN request so the user doesn't get a
-                    // stale lock-screen ping for a withdrawn /
-                    // server-revoked correction.
-                    idsToCancelPing.append(existing.id)
                     context.delete(existing)
                 } else {
-                    let priorStatus = existing.status
-                    let nextStatus = dto.status
-                    let wasPending = priorStatus == "open" || priorStatus == "reviewed"
-                    let nowTerminal = nextStatus == "applied" || nextStatus == "dismissed"
-                    if wasPending && nowTerminal {
-                        correctionsToNotify.append(id)
-                    }
                     dto.apply(to: existing)
                 }
             } else if dto.deleted_at == nil {
-                // First sight of this row — if it lands already in a
-                // terminal state (e.g. the user transitioned across a
-                // device switch) treat it as a fresh transition so the
-                // notifier still gets a chance to inform the user.
-                // EXCEPT on the initial sync (cursor 0), where the feed
-                // replays the full history — those are old outcomes,
-                // not transitions.
-                if !isInitialSync, dto.status == "applied" || dto.status == "dismissed" {
-                    correctionsToNotify.append(id)
-                }
                 context.insert(dto.makeLocal())
             }
             // Applied corrections refresh the stale growing-info
@@ -1342,25 +1297,6 @@ public final class SyncEngine {
             }
         }
         try context.save()
-        if !idsToCancelPing.isEmpty {
-            Task { @MainActor in
-                for id in idsToCancelPing {
-                    NotificationsCenter.shared.cancelCatalogCorrectionPing(
-                        correctionID: id
-                    )
-                }
-            }
-        }
-        if !correctionsToNotify.isEmpty {
-            let payload = correctionsToNotify
-            Task { @MainActor in
-                NotificationCenter.default.post(
-                    name: .catalogCorrectionsChanged,
-                    object: nil,
-                    userInfo: ["transitionedIDs": payload]
-                )
-            }
-        }
     }
 
     /// Applies a correction's `applied_patch` to the local growing-info

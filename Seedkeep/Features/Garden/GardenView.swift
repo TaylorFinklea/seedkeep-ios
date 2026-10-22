@@ -141,7 +141,6 @@ private struct GardenCompactView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .publishesAssistantContext(pageType: "garden")
             .navigationDestination(for: GardenBedDestination.self) { destination in
                 BedDetailView(bedID: destination.bedID, onOpenSeed: { seedID in
                     path.append(GardenSeedDestination(seedID: seedID))

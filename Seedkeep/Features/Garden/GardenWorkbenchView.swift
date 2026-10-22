@@ -136,7 +136,6 @@ struct GardenWorkbenchView: View {
         .onChange(of: session.detailsPresented) { _, presented in
             if presented { inspectorOpen = true }
         }
-        .publishesAssistantContext(pageType: "garden")
         .accessibilityIdentifier("screen.garden")
     }
 

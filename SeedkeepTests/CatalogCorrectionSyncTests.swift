@@ -12,9 +12,9 @@ import SeedkeepKit
 ///
 /// Coverage (spec §10 iOS tier — `CatalogCorrectionSyncTests.swift`):
 ///
-/// 1. `open → applied` transition posts `.catalogCorrectionsChanged`
-///    exactly once with the row id in `userInfo["transitionedIDs"]`.
-/// 2. Idempotent re-sync (same DTO twice) posts no second notification.
+/// 1. `open → applied` transition updates the local row's status and
+///    `appliedAt`.
+/// 2. Idempotent re-sync (same DTO twice) leaves exactly one applied row.
 /// 3. Tombstone (`deleted_at` non-NULL) hard-deletes the local row.
 /// 4. `applied_patch` field is captured onto the local row
 ///    (`appliedFieldName` / `appliedNewValue`) so SeedDetail can patch
@@ -58,66 +58,6 @@ struct CatalogCorrectionSyncTests {
             ),
             bearerToken: "test_token"
         )
-    }
-
-    /// Observe `.catalogCorrectionsChanged` posts and capture the
-    /// `transitionedIDs` payload, filtered to a set of expected ids so
-    /// cross-suite contamination (the global `NotificationCenter.default`
-    /// is shared with `CatalogCorrectionNotifierTests` and any other
-    /// suite that posts on this channel in parallel) doesn't leak into
-    /// this test's assertions.
-    private static func captureNextNotification(
-        expectedIDs: Set<String>,
-        timeoutMs: UInt64 = 500
-    ) -> NotificationCapture {
-        NotificationCapture(expectedIDs: expectedIDs, timeoutMs: timeoutMs)
-    }
-
-    final class NotificationCapture: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _posted: [[String]] = []
-        private var token: NSObjectProtocol?
-        private let expectedIDs: Set<String>
-
-        var posted: [[String]] {
-            lock.lock()
-            defer { lock.unlock() }
-            return _posted
-        }
-
-        init(expectedIDs: Set<String>, timeoutMs: UInt64) {
-            self.expectedIDs = expectedIDs
-            token = NotificationCenter.default.addObserver(
-                forName: .catalogCorrectionsChanged,
-                object: nil,
-                queue: .main
-            ) { [weak self] note in
-                guard let self else { return }
-                let ids = (note.userInfo?["transitionedIDs"] as? [String]) ?? []
-                // Filter to ids this test cares about. Posts from other
-                // suites (e.g. CatalogCorrectionNotifierTests) carry
-                // their own ids and would otherwise contaminate the
-                // observed counts on the global default center.
-                let filtered = ids.filter { self.expectedIDs.contains($0) }
-                guard !filtered.isEmpty else { return }
-                self.lock.lock()
-                self._posted.append(filtered)
-                self.lock.unlock()
-            }
-        }
-
-        deinit {
-            if let token { NotificationCenter.default.removeObserver(token) }
-        }
-
-        /// Yield enough runloop ticks for the MainActor `Task` inside
-        /// `upsertCatalogCorrections` to fire its post.
-        func drain() async {
-            // The post hops to MainActor via `Task { @MainActor in … }`.
-            // A short sleep gives the scheduled Task time to land before
-            // we read `posted`.
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
     }
 
     /// Mirrors the REAL wire shape: `field_name` / `value_type` /
@@ -191,10 +131,10 @@ struct CatalogCorrectionSyncTests {
         return Data(body.utf8)
     }
 
-    // MARK: - Test 1: open → applied transition posts notification once
+    // MARK: - Test 1: open → applied transition updates the local row
 
-    @Test("open → applied transition posts .catalogCorrectionsChanged exactly once with id in userInfo")
-    func openToAppliedPostsExactlyOnce() async {
+    @Test("open → applied transition updates the local row's status and appliedAt")
+    func openToAppliedUpdatesRow() async {
         let container = Self.makeContainer()
         let context = ModelContext(container)
 
@@ -232,16 +172,7 @@ struct CatalogCorrectionSyncTests {
         let client = Self.makeRoutedClient(routes: [Self.correctionsPath: body])
         let engine = SyncEngine(client: client, container: container)
 
-        let capture = Self.captureNextNotification(expectedIDs: [id])
-
         await engine.syncAll(householdID: Self.householdID)
-        await capture.drain()
-
-        // Exactly one notification fired.
-        #expect(capture.posted.count == 1,
-                "expected 1 .catalogCorrectionsChanged, got \(capture.posted.count)")
-        #expect(capture.posted.first?.contains(id) == true,
-                "expected transitioned id \(id) in userInfo, got \(capture.posted)")
 
         // Local row reflects the new status.
         let descriptor = FetchDescriptor<LocalCatalogCorrection>(
@@ -254,21 +185,9 @@ struct CatalogCorrectionSyncTests {
 
     // MARK: - Test 2: idempotent re-sync posts no second notification
 
-    @Test("idempotent re-sync of the same applied DTO posts no second notification")
-    func idempotentResyncSilent() async {
+    @Test("re-syncing the same applied DTO keeps exactly one applied row")
+    func idempotentResyncKeepsOneRow() async {
         let container = Self.makeContainer()
-
-        // A non-zero cursor marks this device as already past its
-        // initial sync — first-sight terminal rows on later pulls are
-        // genuine cross-device transitions and should still ping.
-        let context = ModelContext(container)
-        context.insert(LocalSyncCursor(
-            householdID: Self.householdID,
-            kind: "catalog_corrections",
-            cursor: 1_716_000_000_000,
-            lastSyncedAt: 1_716_000_000_000
-        ))
-        try? context.save()
 
         // Server delivers the row in applied state on every sync.
         let id = "corr_idem"
@@ -287,22 +206,17 @@ struct CatalogCorrectionSyncTests {
         let client = Self.makeRoutedClient(routes: [Self.correctionsPath: appliedBody])
         let engine = SyncEngine(client: client, container: container)
 
-        // First sync: row lands fresh → notification fires (first-sight
-        // terminal-state rule in `upsertCatalogCorrections` — the
-        // cursor is non-zero, so this isn't suppressed as initial-sync
-        // history replay).
-        let firstCapture = Self.captureNextNotification(expectedIDs: [id])
+        // Two syncs with the same DTO must leave one row, still applied.
         await engine.syncAll(householdID: Self.householdID)
-        await firstCapture.drain()
-        #expect(firstCapture.posted.count == 1, "first sync should fire one notification")
+        await engine.syncAll(householdID: Self.householdID)
 
-        // Second sync: server returns the same DTO; status is already
-        // `applied` locally → no transition → no notification.
-        let secondCapture = Self.captureNextNotification(expectedIDs: [id])
-        await engine.syncAll(householdID: Self.householdID)
-        await secondCapture.drain()
-        #expect(secondCapture.posted.isEmpty,
-                "second sync should not re-fire — already terminal, got \(secondCapture.posted)")
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<LocalCatalogCorrection>(
+            predicate: #Predicate { $0.id == id }
+        )
+        let rows = (try? context.fetch(descriptor)) ?? []
+        #expect(rows.count == 1, "re-sync must not duplicate the row; got \(rows.count)")
+        #expect(rows.first?.status == "applied")
     }
 
     // MARK: - Test 3: tombstone hard-deletes the local row
@@ -618,10 +532,10 @@ struct CatalogCorrectionSyncTests {
                 "applied_patch must refresh the stale snapshot; got \(String(describing: seed?.growingInfo?.days_to_maturity_min))")
     }
 
-    // MARK: - Test 9: first sync (cursor 0) suppresses historical terminal pings
+    // MARK: - Test 9: first sync (cursor 0) ingests terminal history
 
-    @Test("first sync (cursor 0) ingests terminal rows WITHOUT notification pings")
-    func firstSyncSuppressesHistoricalPings() async {
+    @Test("first sync (cursor 0) ingests terminal rows from the replayed history")
+    func firstSyncIngestsHistory() async {
         let container = Self.makeContainer()
 
         // Fresh install: no cursor row, server replays the full history
@@ -651,16 +565,9 @@ struct CatalogCorrectionSyncTests {
         let client = Self.makeRoutedClient(routes: [Self.correctionsPath: body])
         let engine = SyncEngine(client: client, container: container)
 
-        let capture = Self.captureNextNotification(
-            expectedIDs: [appliedID, dismissedID]
-        )
         await engine.syncAll(householdID: Self.householdID)
-        await capture.drain()
 
-        #expect(capture.posted.isEmpty,
-                "initial sync must not replay historical terminal pings; got \(capture.posted)")
-
-        // Rows still land locally for YouView.
+        // Rows land locally, including the historical terminal ones.
         let context = ModelContext(container)
         let rows = (try? context.fetch(FetchDescriptor<LocalCatalogCorrection>())) ?? []
         let ids = Set(rows.map(\.id))

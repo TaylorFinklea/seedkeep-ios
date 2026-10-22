@@ -360,6 +360,19 @@
 
 **Rationale**: an import must not duplicate or overwrite seeds because of edits from another device in the meantime, and the checks have to stay cheap enough for a 5,000-row file.
 
+## 2026-10-22 — Dead UI removed; correction-outcome reminders go too (N3 U)
+
+**Context**: N3 retires the server. Slice U removes the screens and flows that only the server or the catalog-correction feature could reach.
+
+**Decision**:
+- The correction-outcome reminder goes with its Settings toggle. `CatalogCorrectionNotifier`, the catalog ping code in `NotificationsCenter` and `Names.swift` are deleted. The toggle controlled only those pings, so keeping them would leave outcome notifications with no switch.
+- `SyncEngine.upsertCatalogCorrections` no longer posts or cancels notifications, and its `isInitialSync` flag is gone. Rows still land locally until slice T removes the pull.
+- `CatalogFieldBounds` (the iOS mirror of the server's bounds), its `fieldBounds.canonical.json` resource and its parity test are deleted. Nothing reads them once the sheet is gone; the server keeps its own copy.
+
+**Alternatives considered**: keeping the notifier and removing only the toggle, which would leave the pings on with no way to turn them off.
+
+**Rationale**: the outcomes come from corrections filed on the server, which is being retired. Removing the switch and the pings together keeps the notification settings honest.
+
 ## Beads retired (2026-09-29)
 
 Beads (`bd`) is no longer used. The cross-repo backlog lives in

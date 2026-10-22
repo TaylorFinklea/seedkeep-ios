@@ -33,7 +33,7 @@ struct InviteAcceptView: View {
     }
 }
 
-/// Retired-capability notice, in the idiom of `AssistantView.restrictedState`: SF Symbol + display
+/// Retired-capability notice: SF Symbol + display
 /// title + italic body. Shared by the signed-in (`InviteAcceptView`) and signed-out
 /// (`SeedkeepApp.signedOutInviteView`) deep-link landings so an old invite link always lands
 /// somewhere deliberate instead of a dead accept flow.

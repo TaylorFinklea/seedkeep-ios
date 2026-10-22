@@ -57,9 +57,6 @@ struct SeedDetailView: View {
     /// Stays nil for manually-entered seeds or while loading.
     @State private var catalog: CatalogSeedDTO?
 
-    /// True while the catalog-feedback sheet is presented (Phase 4 D).
-    @State private var showCatalogFeedback = false
-
     /// Oldest capture first, so the first photo is the cover. The ID breaks a tie, so the order
     /// never depends on fetch order (N2: a scan's front is captured before its back).
     static let photoSort: [SortDescriptor<LocalSeedPhoto>] = [
@@ -104,7 +101,6 @@ struct SeedDetailView: View {
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
-                .publishesAssistantContext(pageType: "seed", entityID: seed.id, label: seed.customName)
                 .task(id: seed.id) {
                     // Fetch the catalog entry for the growing-info section.
                     // Used both as a display fallback and to backfill the
@@ -367,31 +363,8 @@ struct SeedDetailView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                // Phase 4 D — let the user flag a correction. Only
-                // surface for catalog-linked seeds, since the queue
-                // submits a `catalog_seed_id`.
-                if !ServerRetirement.isRetired, seed.catalogID != nil {
-                    Button {
-                        showCatalogFeedback = true
-                    } label: {
-                        Text("Suggest a correction")
-                            .font(.wbCaption.weight(.semibold))
-                            .tracking(1.4)
-                            .foregroundStyle(WBColor.accent)
-                            .textCase(.uppercase)
-                    }
-                }
             } header: {
                 WBSectionHeader("Growing info")
-            }
-            .sheet(isPresented: $showCatalogFeedback) {
-                if let catalogID = seed.catalogID {
-                    CatalogFeedbackSheet(
-                        catalogID: catalogID,
-                        catalogName: catalog?.common_name ?? seed.customName,
-                        currentValues: effectiveGrowingInfo(seed)
-                    )
-                }
             }
         }
     }

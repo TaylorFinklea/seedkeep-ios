@@ -356,7 +356,6 @@ struct SettingsContent: View {
         }
         .wbForm()
         .navigationTitle("Settings")
-        .publishesAssistantContext(pageType: "settings")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.large)
         #endif

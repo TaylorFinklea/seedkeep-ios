@@ -3,8 +3,8 @@ import SwiftData
 import SeedkeepKit
 
 /// R1 27d.18 — the one-time review inbox for ambiguous participant journal rows quarantined by
-/// `ParticipantRowRecovery`. Mirrors `PendingWritesView`'s list idiom. Presented as a sheet from
-/// Settings ▸ the CloudKit section's participant branch.
+/// `ParticipantRowRecovery`. Presented as a sheet from Settings ▸ the CloudKit section's participant
+/// branch.
 struct JournalRecoveryReviewView: View {
     @Environment(AppEnvironment.self) private var appEnv
     @Environment(\.dismiss) private var dismiss

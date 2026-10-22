@@ -1,6 +1,11 @@
 import Foundation
 import SwiftData
 
+/// N3: retired with the server. The screens and helpers named below (YouView,
+/// ContributionDetailSheet, CatalogFeedbackSheet, CorrectionStatusPill, CatalogFieldBounds) and the
+/// correction notifications were removed; the model stays only until unused SwiftData models are
+/// removed after a store-upgrade test.
+///
 /// Phase 4D · SwiftData mirror of `CatalogCorrectionDTO`. One row per
 /// catalog correction the user has filed (or that has flowed back from
 /// the household via the `/api/catalog/corrections/mine` delta feed —

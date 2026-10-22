@@ -17,10 +17,6 @@ struct NotificationsSettingsView: View {
     @AppStorage("seedkeep.notif.water", store: DevicePreferences.store) private var waterEnabled: Bool = false
 
     @AppStorage("seedkeep.notif.events", store: DevicePreferences.store) private var eventsEnabled: Bool = false
-    // Phase 4D — catalog correction outcomes. Default-on; new users
-    // opt-in once they file their first suggestion. Disabling sweeps
-    // pending + delivered pings (see `clearAllCatalogCorrectionPings`).
-    @AppStorage("seedkeep.notif.catalog", store: DevicePreferences.store) private var catalogEnabled: Bool = true
     // Phase 5.1.4 — plant pets. All default-off per spec line 1250.
     @AppStorage("seedkeep.notif.pet.wilted", store: DevicePreferences.store) private var petWiltedEnabled: Bool = false
     @AppStorage("seedkeep.notif.pet.departed", store: DevicePreferences.store) private var petDepartedEnabled: Bool = false
@@ -86,19 +82,6 @@ struct NotificationsSettingsView: View {
                 }
                 .onChange(of: eventsEnabled) { _, newValue in
                     Task { await applyEvents(enabled: newValue) }
-                }
-                Toggle(isOn: $catalogEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Label("Correction outcomes", systemImage: "doc.text.magnifyingglass")
-                        Text("When off, new correction outcomes won't notify you. Pending and delivered ones are removed.")
-                            .font(.wbCaption)
-                            .foregroundStyle(WBColor.muted)
-                    }
-                }
-                .onChange(of: catalogEnabled) { _, newValue in
-                    if !newValue, !DevicePreferences.isSampleGarden {
-                        Task { await NotificationsCenter.shared.clearAllCatalogCorrectionPings() }
-                    }
                 }
             } header: {
                 WBSectionHeader("what to notify")
