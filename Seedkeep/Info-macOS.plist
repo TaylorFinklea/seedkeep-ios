@@ -46,10 +46,6 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Seedkeep can attach photos from your library to seed entries.</string>
-	<key>SeedkeepAPIHost</key>
-	<string>$(SEEDKEEP_API_HOST)</string>
-	<key>SeedkeepAPIScheme</key>
-	<string>$(SEEDKEEP_API_SCHEME)</string>
 	<!-- Bundled fonts are copied flat into Contents/Resources (see project.yml resources). -->
 	<key>ATSApplicationFontsPath</key>
 	<string>.</string>

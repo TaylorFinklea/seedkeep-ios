@@ -39,10 +39,6 @@
 	<string>Seedkeep uses the camera to photograph seed packets so it can read their details.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Seedkeep can attach photos from your library to seed entries.</string>
-	<key>SeedkeepAPIHost</key>
-	<string>$(SEEDKEEP_API_HOST)</string>
-	<key>SeedkeepAPIScheme</key>
-	<string>$(SEEDKEEP_API_SCHEME)</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Spectral-Light.ttf</string>

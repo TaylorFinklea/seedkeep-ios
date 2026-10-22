@@ -3,29 +3,13 @@ import SeedkeepKit
 import Testing
 @testable import Seedkeep
 
-@Suite("Apple-only server retirement", .serialized)
-struct ServerRetirementTests {
-    @Test("the app session refuses requests before they reach the network")
-    func refusingSessionCountsAndFails() async {
-        ServerRetirement.resetRefusals()
-        let session = ServerRetirement.makeRefusingSession()
-
-        do {
-            _ = try await session.data(from: URL(string: "https://seedkeep-server.invalid/api/health")!)
-            Issue.record("expected the retired transport to refuse the request")
-        } catch let error as URLError {
-            #expect(error.code == .cannotConnectToHost)
-        } catch {
-            Issue.record("expected cannotConnectToHost, got \(error)")
-        }
-
-        #expect(ServerRetirement.refusals.count == 1)
-        #expect(ServerRetirement.refusals.lastPath == "/api/health")
-    }
-
+// Moved from ServerRetirementTests when N3 (F) deleted `ServerRetirement`: the watering ledger is
+// live on-device state, used by the weather warnings.
+@Suite("Local watering state")
+struct LocalWateringStateClientTests {
     @Test("watering timestamps persist independently per household")
     func localWateringStateIsHouseholdScopedAndMonotonic() async {
-        let suiteName = "ServerRetirementTests.\(UUID().uuidString)"
+        let suiteName = "LocalWateringStateClientTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let client = LocalWateringStateClient(defaults: defaults)
@@ -47,7 +31,7 @@ struct ServerRetirementTests {
 
     @Test("separate watering adapters cannot regress a shared timestamp")
     func localWateringAdaptersSerializeWrites() async {
-        let suiteName = "ServerRetirementAdapterTests.\(UUID().uuidString)"
+        let suiteName = "LocalWateringStateClientAdapterTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let firstClient = LocalWateringStateClient(defaults: defaults)

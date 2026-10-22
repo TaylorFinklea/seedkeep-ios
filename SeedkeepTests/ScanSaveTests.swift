@@ -147,7 +147,6 @@ struct ScanSaveTests {
         let scanID = UUID()
         let scope = Self.scope(householdID)
         try Self.stagePair(scanID, scope: scope, root: root)
-        let refusalsBefore = ServerRetirement.refusals.count
 
         let session = SeedSaveSession()
         try await session.save(
@@ -165,7 +164,9 @@ struct ScanSaveTests {
         #expect(seed.growingInfo?.scientific_name == "Solanum lycopersicum")
         #expect(seed.customType == "Tomato")
         #expect(try Self.photos(in: container).count == 2)
-        #expect(ServerRetirement.refusals.count == refusalsBefore)
+        // There is no server client to call (ZeroServerTransportTests); the save also queues
+        // nothing for an outbound sender.
+        #expect(try ModelContext(container).fetchCount(FetchDescriptor<LocalPendingWrite>()) == 0)
         #expect(ScanPhotoStaging.manifest(for: scanID, root: root) == nil)
     }
 

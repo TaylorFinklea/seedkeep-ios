@@ -95,11 +95,14 @@ expect_entitlement 'com.apple.developer.icloud-container-environment' Production
 array_contains 'com.apple.developer.associated-domains' applinks:seedkeep.app 'associated domain'
 expect_entitlement 'com.apple.developer.usernotifications.time-sensitive' true 'time-sensitive notification entitlement'
 array_contains 'com.apple.developer.icloud-services' CloudKit 'CloudKit service entitlement'
-array_contains 'com.apple.developer.applesignin' Default 'Sign in with Apple capability'
 expect_entitlement 'com.apple.developer.weatherkit' true 'WeatherKit capability'
 
 if /usr/libexec/PlistBuddy -c 'Print :aps-environment' "$entitlements_path" >/dev/null 2>&1; then
     fail 'forbidden aps-environment entitlement is present'
+fi
+# N3: the server is retired, so the app no longer signs in with Apple.
+if /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.applesignin' "$entitlements_path" >/dev/null 2>&1; then
+    fail 'forbidden Sign in with Apple entitlement is present'
 fi
 
 # Sample-garden mode is DEBUG-only (`-SeedkeepFixture`). Nothing from it may survive into an

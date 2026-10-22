@@ -25,7 +25,7 @@ make_fixture() {
     local services="${9:-CloudKit}"
     local apns="${10:-}"
     local environment="${11:-Production}"
-    local sign_in="${12:-Default}"
+    local sign_in="${12:-}"
     local weatherkit="${13:-true}"
     local archive="$TEST_ROOT/$name.xcarchive"
     local app="$archive/Products/Applications/Seedkeep.app"
@@ -52,7 +52,7 @@ PLIST
 <key>com.apple.developer.usernotifications.time-sensitive</key><$time_sensitive/>
 <key>com.apple.developer.icloud-services</key><array><string>$services</string></array>
 <key>com.apple.developer.icloud-container-environment</key><string>$environment</string>
-<key>com.apple.developer.applesignin</key><array><string>$sign_in</string></array>
+$(if [[ -n "$sign_in" ]]; then printf '<key>com.apple.developer.applesignin</key><array><string>%s</string></array>\n' "$sign_in"; fi)
 <key>com.apple.developer.weatherkit</key><$weatherkit/>
 $(if [[ -n "$apns" ]]; then printf '<key>aps-environment</key><string>%s</string>\n' "$apns"; fi)
 </dict></plist>
@@ -112,8 +112,8 @@ assert_rejected 'time-sensitive mismatch' "$(make_fixture bad-time 1.0.0 53 app.
 assert_rejected 'CloudKit service mismatch' "$(make_fixture bad-services 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true iCloudServices)"
 assert_rejected 'APNs entitlement' "$(make_fixture bad-apns 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit aps-environment)"
 assert_rejected 'CloudKit environment mismatch' "$(make_fixture bad-environment 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Development)"
-assert_rejected 'Sign in with Apple capability mismatch' "$(make_fixture bad-signin 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Production Wrong)"
-assert_rejected 'WeatherKit capability mismatch' "$(make_fixture bad-weatherkit 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Production Default false)"
+assert_rejected 'Sign in with Apple entitlement' "$(make_fixture bad-signin 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Production Default)"
+assert_rejected 'WeatherKit capability mismatch' "$(make_fixture bad-weatherkit 1.0.0 53 app.seedkeep.ios K7CBQW6MPG iCloud.app.seedkeep applinks:seedkeep.app true CloudKit '' Production '' false)"
 
 # Sample-garden markers are DEBUG-only and must never reach a Release archive.
 marked_executable="$(make_fixture marked-executable)"

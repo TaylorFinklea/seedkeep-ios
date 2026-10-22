@@ -96,9 +96,7 @@ targets:
         # self-classification report) only if we add custom cryptography
         # beyond the OS-provided TLS path.
         ITSAppUsesNonExemptEncryption: false
-        # Surfaced from xcconfig — `AppEnvironment` reads these at launch.
-        SeedkeepAPIScheme: "$(SEEDKEEP_API_SCHEME)"
-        SeedkeepAPIHost: "$(SEEDKEEP_API_HOST)"
+        # Surfaced from xcconfig — the Keychain service for BYOK provider keys.
         KeychainService: "$(KEYCHAIN_SERVICE)"
         # Custom URL scheme for development invite links
         # (`seedkeep://invite/<code>`). Universal links use the
@@ -140,8 +138,6 @@ targets:
     entitlements:
       path: Seedkeep/Seedkeep.entitlements
       properties:
-        com.apple.developer.applesignin:
-          - Default
         com.apple.developer.associated-domains:
           - "applinks:seedkeep.app"
         com.apple.developer.weatherkit: true
