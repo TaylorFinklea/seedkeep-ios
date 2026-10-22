@@ -379,3 +379,13 @@ Beads (`bd`) is no longer used. The cross-repo backlog lives in
 `~/git/seedkeep/.docs/ai/roadmap.md`; this repo's older standalone Beads
 backlog is archived in `beads-archive.jsonl` and its Backlog section here.
 Earlier entries that mention Beads are historical.
+
+## [2026-10-22] N3 A: delete leftover deletion files at launch, no classification
+
+**Context**: Account deletion and garden transfer were removed with the server. Older builds could leave checkpoint JSON in `Application Support/AccountDeletion` and staged photo bytes in `HouseholdSync/TransferWorkspace`; N1 paused CloudKit while any checkpoint existed. A first design classified each checkpoint and erased the local store for some, but Sol showed that was unsafe without a guard against re-creating a deleted CloudKit zone (the coordinator re-provisions missing zones).
+
+**Decision**: The owner confirmed no device ever started a deletion or transfer (umbrella decision 2026-10-22). `LegacyAccountDeletionCleanup` deletes both folders at launch, whatever they contain, before identity resolution. No erase, no identity or garden change; checkpoints no longer pause CloudKit. It is best effort, retried next launch, and inert under XCTest and in sample-garden mode. `PhotoByteStore.purgeHousehold` removes the legacy transfer folder without recreating it.
+
+**Alternatives considered**: Classify checkpoints and erase or pause per role and phase (rejected: unsafe without the zone guard, and moot given the owner's answer); keep the quarantine until N2-E (rejected: no device needs it).
+
+**Rationale**: Simplest safe behaviour for the real device population. The general "never recreate a zone this device has seen deleted" guard lands in N2-E.

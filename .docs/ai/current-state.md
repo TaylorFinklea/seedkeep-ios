@@ -1,5 +1,27 @@
 # Current State
 
+## N3 in progress (2026-10-22): remove the server code
+
+Contract: `.docs/ai/plans/2026-10-22-n3-server-removal.md`. Branch
+`redesign/r2-design-system`, local only (not pushed).
+- **Done:**
+  - U (6398d39): the dead UI is gone (You, catalog corrections,
+    the assistant, the MCP, server, subscription and pending-writes
+    settings). Retired catalog notifications are cleared at launch.
+  - D (91da158): privacy, support and home pages, the AASA file and the
+    submission notes. The website is not deployed.
+  - A (c632a33): account deletion and garden transfer are gone. The owner
+    confirmed no device ever started one, so launch only deletes the
+    leftover checkpoint and transfer folders; checkpoints no longer pause
+    CloudKit. Gate 97 / 148 / 1291 + 1 / 1306 + 1.
+- **Next:**
+  - T1: delete the server client and server sync.
+  - T2: move the app suite to the CloudKit path; retire the CloudKit-OFF
+    lanes.
+  - F: flags, the API plist keys, the Sign in with Apple entitlement.
+- **Owner:** the server-retirement runbook is in the umbrella repo,
+  owner-run and not executed.
+
 ## R4 done (2026-10-21): Today, Journal, Settings and CSV import
 
 Contract and results: `.docs/ai/plans/2026-10-21-r4-today-journal-settings.md`.
