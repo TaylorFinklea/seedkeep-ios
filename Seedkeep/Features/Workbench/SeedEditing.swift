@@ -147,8 +147,8 @@ enum SeedFieldEdit: Equatable, Sendable {
 /// One seed's forward patch and its reciprocal. The reciprocal is what undo sends.
 struct SeedPatchChange: Sendable {
     let seedID: String
-    let forward: SeedkeepClient.UpdateSeedInput
-    let inverse: SeedkeepClient.UpdateSeedInput
+    let forward: UpdateSeedInput
+    let inverse: UpdateSeedInput
 }
 
 struct SeedWriteFailure: Equatable, Sendable {
@@ -198,8 +198,6 @@ struct SeedWriter {
     weak var undoManager: UndoManager?
     /// Read at write time, so an undo checks the household as it is now.
     let currentHouseholdID: @MainActor () -> String?
-    /// Kicks off the push queue after a write (the views call `flushPending` the same way).
-    let flush: @MainActor () -> Void
     /// Shows failed writes. Called for forward edits, deletes, and undo and redo alike.
     let presentIssues: @MainActor (SeedWriteReport) -> Void
 
@@ -277,7 +275,6 @@ struct SeedWriter {
                 ))
             }
         }
-        if !report.changed.isEmpty { flush() }
         present(report)
         return report
     }
@@ -331,7 +328,6 @@ struct SeedWriter {
             undoManager.setActionName(actionName)
             undoManager.endUndoGrouping()
         }
-        flush()
         return report
     }
 

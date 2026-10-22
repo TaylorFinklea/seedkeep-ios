@@ -17,7 +17,7 @@ struct SeedCSVImportWriterTests {
         var errorDescription: String? { "injected failure" }
     }
 
-    /// Forwards to `SyncEngine`, failing the chosen call.
+    /// Forwards to `SyncEngine`, failing the chosen call, and records each write that reached it.
     final class FailingStore: SeedCSVImportStore {
         let engine: SyncEngine
         var failCreateSeedAt: Int?
@@ -29,8 +29,17 @@ struct SeedCSVImportWriterTests {
         /// When the first write of any kind happened.
         private(set) var firstWriteAt: ContinuousClock.Instant?
 
+        /// Every write `SyncEngine` accepted, in order, with its input as the JSON object it encodes.
+        private(set) var writes: [(type: String, op: String, id: String, payload: [String: Any])] = []
+
         private func noteWrite() {
             if firstWriteAt == nil { firstWriteAt = ContinuousClock().now }
+        }
+
+        private func record(_ type: String, _ op: String, _ id: String, _ input: some Encodable) {
+            let data = (try? JSONEncoder().encode(input)) ?? Data()
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            writes.append((type, op, id, object ?? [:]))
         }
 
         init(engine: SyncEngine) {
@@ -39,26 +48,33 @@ struct SeedCSVImportWriterTests {
 
         func enqueueCreateLocation(name: String, sortOrder: Int, householdID: String) throws -> LocalLocation {
             noteWrite()
-            return try engine.enqueueCreateLocation(name: name, sortOrder: sortOrder, householdID: householdID)
+            let location = try engine.enqueueCreateLocation(name: name, sortOrder: sortOrder, householdID: householdID)
+            record("location", "create", location.id, ["name": name])
+            return location
         }
 
         func enqueueCreateTag(name: String, color: String?, householdID: String) throws -> LocalTag {
             noteWrite()
-            return try engine.enqueueCreateTag(name: name, color: color, householdID: householdID)
+            let tag = try engine.enqueueCreateTag(name: name, color: color, householdID: householdID)
+            record("tag", "create", tag.id, ["name": name])
+            return tag
         }
 
-        func enqueueCreateSeed(_ input: SeedkeepClient.CreateSeedInput, householdID: String) throws -> LocalSeed {
+        func enqueueCreateSeed(_ input: CreateSeedInput, householdID: String) throws -> LocalSeed {
             noteWrite()
             createSeedCalls += 1
             if createSeedCalls == failCreateSeedAt { throw InjectedFailure.boom }
-            return try engine.enqueueCreateSeed(input, householdID: householdID)
+            let seed = try engine.enqueueCreateSeed(input, householdID: householdID)
+            record("seed", "create", seed.id, input)
+            return seed
         }
 
-        func enqueueUpdateSeed(id: String, _ patch: SeedkeepClient.UpdateSeedInput) throws {
+        func enqueueUpdateSeed(id: String, _ patch: UpdateSeedInput) throws {
             noteWrite()
             updateSeedCalls += 1
             if updateSeedCalls == failUpdateSeedAt { throw InjectedFailure.boom }
             try engine.enqueueUpdateSeed(id: id, patch)
+            record("seed", "update", id, patch)
         }
 
         func setLocalCustomType(seedID: String, type: String?) throws {
@@ -78,8 +94,7 @@ struct SeedCSVImportWriterTests {
 
         init() {
             container = makeTestContainer(name: "seedCSVImportWriterTests")
-            let client = SeedkeepClient(configuration: .init(baseURL: URL(string: "https://test.invalid")!))
-            engine = SyncEngine(client: client, container: container)
+            engine = SyncEngine(container: container)
             store = FailingStore(engine: engine)
         }
 
@@ -121,14 +136,9 @@ struct SeedCSVImportWriterTests {
             try ModelContext(container).fetch(FetchDescriptor<LocalTag>(predicate: #Predicate { $0.deletedAt == nil }))
         }
 
+        /// The writes the import made through its store, in order (N3: `SyncEngine` queues none).
         func pending() throws -> [(type: String, op: String, id: String, payload: [String: Any])] {
-            let rows = try ModelContext(container).fetch(FetchDescriptor<LocalPendingWrite>(
-                sortBy: [SortDescriptor(\.createdAt, order: .forward)]
-            ))
-            return rows.map { row in
-                let object = (try? JSONSerialization.jsonObject(with: Data(row.payloadJSON.utf8))) as? [String: Any]
-                return (row.entityType, row.operation, row.entityID, object ?? [:])
-            }
+            store.writes
         }
 
         func file(_ csv: String) throws -> SeedCSVImport.ParsedFile {

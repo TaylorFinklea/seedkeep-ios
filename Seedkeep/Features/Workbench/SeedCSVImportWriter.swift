@@ -23,8 +23,8 @@ import SeedkeepKit
 protocol SeedCSVImportStore: AnyObject {
     func enqueueCreateLocation(name: String, sortOrder: Int, householdID: String) throws -> LocalLocation
     func enqueueCreateTag(name: String, color: String?, householdID: String) throws -> LocalTag
-    func enqueueCreateSeed(_ input: SeedkeepClient.CreateSeedInput, householdID: String) throws -> LocalSeed
-    func enqueueUpdateSeed(id: String, _ patch: SeedkeepClient.UpdateSeedInput) throws
+    func enqueueCreateSeed(_ input: CreateSeedInput, householdID: String) throws -> LocalSeed
+    func enqueueUpdateSeed(id: String, _ patch: UpdateSeedInput) throws
     func setLocalCustomType(seedID: String, type: String?) throws
 }
 
@@ -503,9 +503,9 @@ final class SeedCSVImportWriter {
 
         switch row.action {
         case .create(let seed):
-            let input: SeedkeepClient.CreateSeedInput
+            let input: CreateSeedInput
             do {
-                input = SeedkeepClient.CreateSeedInput(
+                input = CreateSeedInput(
                     state: seed.state,
                     packet_count: seed.packets,
                     location_id: try seed.location.map(locationID),
@@ -544,9 +544,9 @@ final class SeedCSVImportWriter {
         case .update(let seedID, _, let changes):
             var saved = false
             if !changes.patchIsEmpty {
-                let patch: SeedkeepClient.UpdateSeedInput
+                let patch: UpdateSeedInput
                 do {
-                    patch = SeedkeepClient.UpdateSeedInput(
+                    patch = UpdateSeedInput(
                         state: changes.state,
                         packet_count: changes.packets,
                         location_id: try changes.location.map { try $0.map(locationID) },

@@ -4,8 +4,7 @@ import os
 
 /// Test double for `WateringStateClient`. Records every `get` / `put` call
 /// and returns whatever the test configured. Lets `WeatherWarningsService`
-/// integration tests drive the server-coordinated watering ledger without
-/// running a real `SeedkeepClient`.
+/// integration tests drive the watering ledger, including its failures.
 final class MockWateringStateClient: WateringStateClient, @unchecked Sendable {
 
     struct PutCall: @unchecked Sendable, Equatable {

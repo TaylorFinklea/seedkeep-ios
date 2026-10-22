@@ -25,10 +25,8 @@ enum FeatureFlags {
     /// sync with no working escape hatch once Phase 2 lands. The test-only compilation
     /// condition used by the release gate lets the suite run both the legacy OFF lane and the
     /// shipping default-ON lane without changing release behavior.
-    /// When ON, `SyncEngine.syncAll` skips the 7 household feeds + flushPending (else double-sync);
-    /// `catalogCorrections` (R3) stays on the server; assistant threads are gated with Sprout while
-    /// CloudKit is active. See the 2026-06-28 `r1-liveengine-wiring-spec.md`. Flipping it ON migrates local data into CloudKit
-    /// (additive, reversible); flipping OFF returns to server sync.
+    /// See the 2026-06-28 `r1-liveengine-wiring-spec.md`. N3 (T1) removed the server sync that
+    /// OFF used to select: OFF now leaves the app with no sync, which only an XCTest lane uses.
     static let cloudKitHouseholdSyncKey = "seedkeep.flag.cloudKitHouseholdSync"
     /// ALWAYS ON outside XCTest (N1, 2026-10-20): the Seedkeep server is retired, so CloudKit is
     /// the only sync path. A stored explicit `false` from the old kill-switch is ignored there;

@@ -32,7 +32,7 @@ struct ScanSaveTests {
 
         init(engine: SyncEngine) { self.engine = engine }
 
-        func enqueueCreateSeed(_ input: SeedkeepClient.CreateSeedInput, householdID: String) throws -> LocalSeed {
+        func enqueueCreateSeed(_ input: CreateSeedInput, householdID: String) throws -> LocalSeed {
             if failCreate { throw Injected() }
             createCount += 1
             return try engine.enqueueCreateSeed(input, householdID: householdID)
@@ -79,14 +79,7 @@ struct ScanSaveTests {
 
     private static func makeEngine() -> (engine: SyncEngine, container: ModelContainer) {
         let container = makeTestContainer(name: "scanSave-\(UUID().uuidString)")
-        let client = SeedkeepClient(
-            configuration: .init(
-                baseURL: URL(string: "https://test.local")!,
-                session: ServerRetirement.makeRefusingSession()
-            ),
-            bearerToken: "test_token"
-        )
-        return (SyncEngine(client: client, container: container), container)
+        return (SyncEngine(container: container), container)
     }
 
     /// Runs `body` with the CloudKit household path on, then restores the stored setting.
@@ -105,8 +98,8 @@ struct ScanSaveTests {
         return try await body()
     }
 
-    private static func input(_ name: String) -> SeedkeepClient.CreateSeedInput {
-        SeedkeepClient.CreateSeedInput(state: .active, custom_name: name)
+    private static func input(_ name: String) -> CreateSeedInput {
+        CreateSeedInput(state: .active, custom_name: name)
     }
 
     private static let userA = "_userA"
@@ -823,7 +816,7 @@ extension SeedSaveSession {
     /// Binds to the scan's scope (or `householdID`) at epoch 0 and saves, as the sheet does in a garden
     /// that does not change.
     func save(
-        _ input: SeedkeepClient.CreateSeedInput,
+        _ input: CreateSeedInput,
         householdID: String,
         scan: (scanID: UUID, scope: ScanPhotoStaging.Scope)?,
         snapshot: GrowingInfoSnapshot?,

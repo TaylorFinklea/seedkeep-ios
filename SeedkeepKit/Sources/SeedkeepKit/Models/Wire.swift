@@ -1,189 +1,21 @@
 import Foundation
 
-/// Wire-format DTOs — Codable mirrors of the Workers API JSON shapes. These
-/// are deliberately separate from the SwiftData `@Model` types in the iOS
-/// app so we can decode server payloads without touching the local store
-/// (and vice versa: tests can construct a server fixture without
-/// instantiating a ModelContainer).
+/// Value types the app shares across its local store, CloudKit records and extraction. Several
+/// keep the snake_case shapes of the retired server's JSON, which stored data still uses.
 
+/// The signed-in iCloud identity (`AuthController.State`).
 public struct UserDTO: Codable, Sendable, Equatable {
     public let id: String
     public let name: String?
     public let email: String?
 }
 
+/// The active garden (`AuthController.State`).
 public struct HouseholdDTO: Codable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let created_at: Int64
     public let updated_at: Int64
-}
-
-public struct MembershipDTO: Codable, Sendable, Equatable {
-    public let user_id: String
-    public let role: String
-    public let joined_at: Int64
-    public let name: String?
-    public let email: String?
-}
-
-public struct LocationDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let household_id: String
-    public let name: String
-    public let sort_order: Int
-    public let created_at: Int64
-    public let updated_at: Int64
-    public let deleted_at: Int64?
-}
-
-public struct TagDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let household_id: String
-    public let name: String
-    public let color: String?
-    public let created_at: Int64
-    public let updated_at: Int64
-    public let deleted_at: Int64?
-}
-
-public struct SeedDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let household_id: String
-    public let catalog_id: String?
-    public let state: SeedState
-    public let packet_count: Int
-    public let location_id: String?
-    public let year_packed: Int?
-    public let source: SeedSource
-    public let custom_name: String?
-    public let custom_variety: String?
-    public let custom_company: String?
-    public let notes: String?
-    public let created_at: Int64
-    public let updated_at: Int64
-    public let deleted_at: Int64?
-    public let tag_ids: [String]
-}
-
-public struct SeedPhotoDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let seed_id: String
-    public let household_id: String
-    public let r2_key: String
-    public let role: PhotoRole
-    public let width: Int?
-    public let height: Int?
-    public let byte_size: Int?
-    public let captured_at: Int64
-}
-
-public struct CatalogSeedDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let barcode: String?
-    public let perceptual_hash: String?
-    public let common_name: String
-    public let scientific_name: String?
-    public let variety: String?
-    public let company: String?
-    public let instructions: String?
-    public let viability_years: Int?
-    // Horticultural data — populated by AI extraction when present on
-    // the packet; null otherwise. Phase 2 surfaces these in garden-plan
-    // validation and planting-calendar derivation.
-    public let days_to_germinate_min: Int?
-    public let days_to_germinate_max: Int?
-    public let days_to_maturity_min: Int?
-    public let days_to_maturity_max: Int?
-    public let soil_temp_min_f: Int?
-    public let soil_temp_max_f: Int?
-    public let seed_depth_inches: Double?
-    public let plant_spacing_inches: Int?
-    public let row_spacing_inches: Int?
-    public let sun_requirement: String?   // "full" | "partial" | "shade"
-    public let frost_tolerance: String?   // "tender" | "half_hardy" | "hardy"
-    public let sow_method: String?        // "direct" | "transplant" | "either"
-    public let life_cycle: String?        // "annual" | "biennial" | "perennial"
-    public let hardiness_zone_min: Int?
-    public let hardiness_zone_max: Int?
-    public let status: String
-    public let confidence: Double?
-    public let created_at: Int64
-    public let updated_at: Int64
-    public let published_at: Int64?
-}
-
-/// Phase 2: garden bed (a named, household-scoped growing space).
-public struct BedDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let household_id: String
-    public let name: String
-    public let description: String?
-    public let width_feet: Double?
-    public let length_feet: Double?
-    public let sort_order: Int
-    public let created_at: Int64
-    public let updated_at: Int64
-    public let deleted_at: Int64?
-}
-
-/// Phase 2: planting event — a single dated action inside a bed.
-/// `kind` is one of "sowing", "transplant", "harvest", "note".
-/// `planned_for` is a YYYY-MM-DD string (date-only, no timezone).
-/// `completed_at` is ms-epoch when the user marks the event done.
-///
-/// Phase 5: every planting also carries a "plant pet" identity stamped
-/// server-side at create time. The six `pet_*` fields are nullable so
-/// legacy rows (pre-0018 migration) decode cleanly; the iOS UI gates
-/// pet rendering on `pet_seed != nil`. `pet_personality` ships as a raw
-/// JSON string — use `decodedPetPersonality()` for a structured view.
-public struct PlantingEventDTO: Codable, Sendable, Equatable {
-    public let id: String
-    public let household_id: String
-    public let bed_id: String?
-    public let seed_id: String?
-    public let catalog_seed_id: String?
-    public let kind: String
-    public let planned_for: String
-    public let completed_at: Int64?
-    public let notes: String?
-    /// Position within the bed, measured in feet from the bottom-left
-    /// corner (origin 0,0). Both nil until the user places the event.
-    public let x_feet: Double?
-    public let y_feet: Double?
-    public let created_at: Int64
-    public let updated_at: Int64
-    public let deleted_at: Int64?
-
-    // Phase 5 — plant pet identity (server-of-record). All optional so
-    // legacy rows and not-yet-migrated environments round-trip cleanly.
-    /// sha256 of the planting_event_id; 64-char lowercase hex. Used as
-    /// the deterministic seed for rarity + creature_kind.
-    public let pet_seed: String?
-    /// Raw rarity tier — one of `common`, `uncommon`, `rare`,
-    /// `legendary`, `mythical`. Mirrors the server CHECK constraint.
-    public let pet_rarity: String?
-    /// Bestiary identifier (e.g. `garden_worm`, `spirit_fox`). Open set
-    /// from the iOS side; the server enforces the catalog.
-    public let pet_creature_kind: String?
-    /// Denormalized cache of `pet_personality.name` for query speed.
-    public let pet_name: String?
-    /// Raw JSON string (TEXT on the server) holding the Sprout-authored
-    /// personality blob. Decode via `decodedPetPersonality()`. Nullable
-    /// for legacy rows and during the brief INSERT→UPDATE window before
-    /// the personality call returns.
-    public let pet_personality: String?
-    /// Epoch milliseconds. Acts as the pet's "birth time" — single clock
-    /// for mood + age stars (per design decision #1).
-    public let pet_spawned_at: Int64?
-
-    /// Decodes `pet_personality` JSON, returning `nil` when the field is
-    /// absent or the payload is malformed. The struct shape matches the
-    /// Sprout/spec-locked schema; unknown fields are tolerated.
-    public func decodedPetPersonality() -> PetPersonality? {
-        guard let json = pet_personality, !json.isEmpty else { return nil }
-        return try? JSONDecoder().decode(PetPersonality.self, from: Data(json.utf8))
-    }
 }
 
 /// Plant-pet rarity tier. Matches the `pet_rarity` CHECK constraint on
@@ -197,13 +29,12 @@ public enum PetRarity: String, Codable, Sendable, CaseIterable, Hashable {
     case mythical
 }
 
-/// Sprout-authored personality vignette for a plant pet. Stored on the
-/// server as `planting_events.pet_personality` TEXT (JSON-encoded) and
-/// surfaced by `PlantingEventDTO.decodedPetPersonality()`.
+/// Sprout-authored personality vignette for a plant pet, stored as JSON in
+/// `LocalPlantingEvent.petPersonalityJSON` (the retired server's
+/// `planting_events.pet_personality`).
 ///
-/// The `name` field inside this struct is authoritative; the parent
-/// DTO's `pet_name` column is a denormalized cache (`pet_name == name`
-/// by server invariant). `version` lets us evolve the shape later.
+/// The `name` field inside this struct is authoritative; the planting's
+/// `petName` is a denormalized cache. `version` lets us evolve the shape later.
 ///
 /// `fallback`, `fallbackAttempts`, and `lastAttemptAt` are surfaced
 /// from the server-internal retry bookkeeping. They are not used by the
@@ -242,7 +73,7 @@ public struct PetPersonality: Codable, Sendable, Equatable, Hashable {
         self.lastAttemptAt = lastAttemptAt
     }
 
-    // Wire shape is snake_case to match the rest of `PlantingEventDTO`.
+    // Stored shape is snake_case, as the retired server wrote it.
     // Defensive defaults make missing-key payloads (e.g. early fallback
     // rows, future shape evolutions) decode cleanly.
     private enum CodingKeys: String, CodingKey {
@@ -295,44 +126,6 @@ public enum PetLifecyclePhase: String, Codable, Sendable, CaseIterable, Hashable
     case departing
     case departed
     case graduated
-}
-
-/// Wire-format DTO for the `pet_departures` sidecar row. Returned inline
-/// by `POST /api/pets/:planting_event_id/depart` (alongside the parent
-/// `PlantingEventDTO`) and by the per-household departures delta-sync
-/// feed (lands later in Phase 5.1.x).
-///
-/// **Field naming**: snake_case throughout, matching `PlantingEventDTO`
-/// — *not* the camelCase used by the journal feed. Sync upserts must
-/// branch on `deleted_at`, not `deletedAt`.
-///
-/// `goodbye_note` is a raw JSON string (TEXT on the server) holding the
-/// `{ note_text, signoff, fallback, fallback_attempts, last_attempt_at }`
-/// payload. Decode via `decodedGoodbyeNote()` for a typed view; the wire
-/// shape stays a string so the server can re-encode without round-tripping
-/// the struct shape on every retry.
-public struct PetDepartureDTO: Codable, Sendable, Equatable {
-    public let planting_event_id: String
-    public let household_id: String
-    /// JSON-encoded `PetGoodbyeNote`. Null while the server is mid-flight
-    /// on the Sprout call (rare; the route inserts the fallback before
-    /// returning so this should always be present in v1).
-    public let goodbye_note: String?
-    /// One of `inactivity`, `wilted_too_long`, `user_dismissed`. v1 ships
-    /// only `wilted_too_long`; the others are reserved.
-    public let reason: String
-    /// Epoch milliseconds — immutable after insert.
-    public let departed_at: Int64
-    public let created_at: Int64
-    public let updated_at: Int64
-    public let deleted_at: Int64?
-
-    /// Decoded view over `goodbye_note`. Returns nil when the field is
-    /// absent / empty or the payload doesn't match the expected shape.
-    public func decodedGoodbyeNote() -> PetGoodbyeNote? {
-        guard let json = goodbye_note, !json.isEmpty else { return nil }
-        return try? JSONDecoder().decode(PetGoodbyeNote.self, from: Data(json.utf8))
-    }
 }
 
 /// Sprout-authored departure note. Mirrors the server-side
@@ -407,108 +200,8 @@ public enum PlantingEventKind: String, Codable, Sendable, CaseIterable, Identifi
     }
 }
 
-/// Generic delta-sync response: `{ items: [T], cursor: <ms>, has_more: bool }`.
-///
-/// `cursor_id` (stabilization contract decision 9) is the id of the last
-/// item on the page — the tiebreaker the client echoes back as `since_id`
-/// so rows sharing one `updated_at` millisecond can't be skipped across
-/// page boundaries. Optional: servers that don't emit it yet decode to
-/// `nil` and the client falls back to the legacy cursor-only behavior.
-public struct DeltaPage<Item: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
-    public let items: [Item]
-    public let cursor: Int64
-    public let has_more: Bool
-    public let cursor_id: String?
-
-    public init(items: [Item], cursor: Int64, has_more: Bool, cursor_id: String? = nil) {
-        self.items = items
-        self.cursor = cursor
-        self.has_more = has_more
-        self.cursor_id = cursor_id
-    }
-}
-
-/// Response payloads used by typed `SeedkeepClient` calls.
+/// Namespace kept for `ExtractionFields`, the packet fields an on-device or BYOK extraction fills.
 public enum WireResponses {
-    public struct Me: Codable, Sendable, Equatable {
-        public let user: UserDTO
-    }
-
-    public struct CreateOrFetchHousehold: Codable, Sendable, Equatable {
-        public let household: HouseholdDTO
-        public let role: String
-    }
-
-    public struct Members: Codable, Sendable, Equatable {
-        public let household: HouseholdDTO
-        public let members: [MembershipDTO]
-    }
-
-    public struct LocationOne: Codable, Sendable, Equatable {
-        public let location: LocationDTO
-    }
-
-    public struct BedOne: Codable, Sendable, Equatable {
-        public let bed: BedDTO
-    }
-
-    public struct PlantingEventOne: Codable, Sendable, Equatable {
-        public let planting_event: PlantingEventDTO
-    }
-
-    /// Response from `POST /api/pets/:planting_event_id/depart` — the
-    /// updated parent planting (its `updated_at` bumped by the route) plus
-    /// the freshly-inserted (or idempotently returned) departure row.
-    public struct PetDepartureOne: Codable, Sendable, Equatable {
-        public let planting_event: PlantingEventDTO
-        public let departure: PetDepartureDTO
-    }
-
-    public struct TagOne: Codable, Sendable, Equatable {
-        public let tag: TagDTO
-    }
-
-    /// `POST/PUT/GET/DELETE /api/account-deletion/transfers…` all return
-    /// this shape. `handoff_token` is the raw single-use token and is
-    /// non-null on exactly one response: the create/reissue call that
-    /// minted it. Everywhere else the server only holds its hash.
-    public struct AccountDeletionTransferOne: Codable, Sendable, Equatable {
-        public let transfer: AccountDeletionTransferDTO
-        public let handoff_token: String?
-
-        /// Public because the deletion coordinator's tests stand in for the
-        /// server; the synthesized memberwise init is internal to this
-        /// module. Matches `AccountDeletionTransferDTO`, which is likewise
-        /// constructible from outside.
-        public init(transfer: AccountDeletionTransferDTO, handoff_token: String?) {
-            self.transfer = transfer
-            self.handoff_token = handoff_token
-        }
-    }
-
-    public struct SeedOne: Codable, Sendable, Equatable {
-        public let seed: SeedDTO
-    }
-
-    public struct SeedDetail: Codable, Sendable, Equatable {
-        public let seed: SeedDTO
-        public let photos: [SeedPhotoDTO]
-    }
-
-    public struct ExtractionResult: Codable, Sendable, Equatable {
-        public let extraction_id: String
-        public let catalog_seed_id: String?
-        public let decision: ExtractionDecision
-        public let extraction: ExtractionFields
-        public let review: ExtractionReview
-        public let photo_keys: ExtractionPhotoKeys
-    }
-
-    public struct ExtractionDecision: Codable, Sendable, Equatable {
-        public let status: String   // "published" | "pending" | "rejected"
-        public let reason: String?
-    }
-
     public struct ExtractionFields: Codable, Sendable, Equatable {
         public let common_name: String?
         public let scientific_name: String?
@@ -579,29 +272,5 @@ public enum WireResponses {
             self.hardiness_zone_max = hardiness_zone_max
             self.self_confidence = self_confidence
         }
-    }
-
-    public struct ExtractionReview: Codable, Sendable, Equatable {
-        public let score: Double
-        public let notes: String
-    }
-
-    public struct ExtractionPhotoKeys: Codable, Sendable, Equatable {
-        public let front: String
-        public let back: String
-    }
-
-    /// Response from `POST /api/extractions/pre-extracted`. Mirrors
-    /// `ExtractionResult` except `photo_keys` is a flat array (the
-    /// pre-extracted route stores 0–2 photos depending on what the client
-    /// uploaded) and `review.score` is the client-supplied
-    /// `self_confidence` rather than a server-side reviewer score.
-    public struct PreExtractedResult: Codable, Sendable, Equatable {
-        public let extraction_id: String
-        public let catalog_seed_id: String?
-        public let decision: ExtractionDecision
-        public let extraction: ExtractionFields
-        public let review: ExtractionReview
-        public let photo_keys: [String]
     }
 }

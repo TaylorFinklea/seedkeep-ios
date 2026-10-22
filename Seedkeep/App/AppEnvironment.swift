@@ -5,27 +5,19 @@ import SeedkeepKit
 import SeedkeepCloudKit
 import CloudKit
 
-/// Reads launch-time configuration from `Info.plist`, wires the
-/// `SeedkeepClient`, the SwiftData `ModelContainer`, the `SyncEngine`,
-/// and the `AuthController`. SwiftUI views read this as an `@Environment`.
-///
-/// Server URL resolution: the bundled xcconfig provides the *default*
-/// (e.g. localhost in dev, official cloud host in release). Users can
-/// override per-install via Settings → Server, which writes a URL into
-/// `AppPreferences`. We honor the override on launch + when it changes.
+/// Reads launch-time configuration from `Info.plist` (the Keychain service), wires the SwiftData
+/// `ModelContainer`, the `SyncEngine`, the `JournalStore`, the CloudKit coordinator and the
+/// `AuthController`. SwiftUI views read this as an `@Environment`.
 @MainActor
 @Observable
 public final class AppEnvironment {
-    public let client: SeedkeepClient
     let auth: AuthController
     public let container: ModelContainer
     public let sync: SyncEngine
     public let recommendations: RecommendationStore
     let journal: JournalStore
-    let assistant: AIAssistantCoordinator
     public let preferences: AppPreferences
     public let apiKeys: APIKeyStore
-    public let subscriptions: SubscriptionManager
     /// Phase 4C — orchestrator for frost / heat / water weather warnings.
     /// Replaces the old `NotificationsCenter.refreshFrostWarnings` path.
     let weatherWarnings: WeatherWarningsService
@@ -36,8 +28,8 @@ public final class AppEnvironment {
     public var requestedTab: AppTab?
 
     /// User-facing error banner string. Set via `surfaceError` from call
-    /// sites that previously swallowed `try?`, or mirrored from
-    /// `sync.lastError` after a sync completes. `nil` hides the banner.
+    /// sites that previously swallowed `try?`, or mirrored from the
+    /// CloudKit coordinator after a sync completes. `nil` hides the banner.
     public var bannerError: String?
 
     /// Debounce state — the last string we surfaced + when. Repeated
@@ -95,26 +87,21 @@ public final class AppEnvironment {
         // identity resolution or CloudKit coordinator. Never in the unit-test host (it shares the
         // real app's data) or in sample-garden mode (returned above).
         LegacyAccountDeletionCleanup.removeLegacyFiles(enabled: FeatureFlags.canRunLiveAppStartup)
-        let bundleDefaultURL = Self.resolveBundleDefaultURL()
-        let prefs = AppPreferences(bundleDefaultURL: bundleDefaultURL)
+        let prefs = AppPreferences()
         let keychainService = Self.resolveKeychainService()
-        let store = KeychainTokenStore(service: keychainService)
+        let store = legacyTokenStore(service: keychainService)
         let apiKeys = APIKeyStore(service: keychainService)
-        let client = makeServerClient(baseURL: prefs.effectiveServerURL)
         // N1: the iCloud account is the identity. The token store is kept only so a legacy
         // rebind can clear the old Sign in with Apple bearer token.
         let auth = AuthController(identity: LiveCloudIdentityProvider(), tokenStore: store)
         let container = Self.makeModelContainer()
-        let sync = SyncEngine(client: client, container: container)
+        let sync = SyncEngine(container: container)
         // Stabilization B3 — sign-out / identity-switch wipe is wired in init() (below), where the
         // AppEnvironment instance exists so the wipe can ALSO tear down the CloudKit coordinator
         // (state token + per-record synced-state file + migration marker), not just SwiftData. See
         // wireSignOutEraser().
         let recommendations = RecommendationStore(preferences: prefs)
-        let journal = JournalStore(client: client, container: container)
-        let assistant = AIAssistantCoordinator(client: client, container: container)
-        assistant.wireSync(sync)
-        let subscriptions = SubscriptionManager(client: client)
+        let journal = JournalStore(container: container)
         // Phase 4C — weather warnings service. Replaces the legacy
         // `NotificationsCenter.refreshFrostWarnings` path with the
         // actor-orchestrated frost/heat/water flow. Providers are
@@ -147,22 +134,12 @@ public final class AppEnvironment {
             }
         )
         return AppEnvironment(
-            client: client, auth: auth, container: container,
+            auth: auth, container: container,
             sync: sync, recommendations: recommendations,
-            journal: journal, assistant: assistant,
+            journal: journal,
             preferences: prefs, apiKeys: apiKeys,
-            subscriptions: subscriptions,
             weatherWarnings: weatherWarnings
         )
-    }
-
-    /// The Seedkeep server client. N1: its session refuses every request
-    /// (`ServerRetirement.makeRefusingSession()`), so nothing reaches the retired server.
-    static func makeServerClient(baseURL: URL) -> SeedkeepClient {
-        SeedkeepClient(configuration: .init(
-            baseURL: baseURL,
-            session: ServerRetirement.makeRefusingSession()
-        ))
     }
 
     /// N1 test seam: an environment over `container` and a fake identity provider, with every
@@ -183,11 +160,9 @@ public final class AppEnvironment {
         forecastSource: @escaping RecommendationStore.ForecastSource = WeatherKitRefiner.fetchForecast,
         apiKeys: APIKeyStore = APIKeyStore(service: "app.seedkeep.tests.\(UUID().uuidString)")
     ) -> AppEnvironment {
-        let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://seedkeep.invalid")!)
-        let client = makeServerClient(baseURL: prefs.bundleDefault)
+        let prefs = AppPreferences(defaults: defaults)
         let auth = AuthController(identity: identity, tokenStore: tokenStore, defaults: defaults)
-        let sync = SyncEngine(client: client, container: container)
-        let assistant = AIAssistantCoordinator(client: client, container: container)
+        let sync = SyncEngine(container: container)
         let weatherWarnings = WeatherWarningsService(
             container: container,
             provider: WeatherKitProvider(container: container),
@@ -201,12 +176,11 @@ public final class AppEnvironment {
             togglesProvider: { (frost: false, heat: false, water: false) }
         )
         let env = AppEnvironment(
-            client: client, auth: auth, container: container,
+            auth: auth, container: container,
             sync: sync,
             recommendations: RecommendationStore(preferences: prefs, forecastSource: forecastSource),
-            journal: JournalStore(client: client, container: container), assistant: assistant,
+            journal: JournalStore(container: container),
             preferences: prefs, apiKeys: apiKeys,
-            subscriptions: SubscriptionManager(client: client),
             weatherWarnings: weatherWarnings,
             stateDefaults: defaults,
             durableStateDirectory: durableStateDirectory,
@@ -281,16 +255,13 @@ public final class AppEnvironment {
     #endif
 
     private init(
-        client: SeedkeepClient,
         auth: AuthController,
         container: ModelContainer,
         sync: SyncEngine,
         recommendations: RecommendationStore,
         journal: JournalStore,
-        assistant: AIAssistantCoordinator,
         preferences: AppPreferences,
         apiKeys: APIKeyStore,
-        subscriptions: SubscriptionManager,
         weatherWarnings: WeatherWarningsService,
         stateDefaults: UserDefaults = .standard,
         durableStateDirectory: URL = HouseholdCloudCoordinator.householdSyncDirURL(),
@@ -299,16 +270,13 @@ public final class AppEnvironment {
         cloudKitPermitted: Bool = true
     ) {
         self.cloudKitPermitted = cloudKitPermitted
-        self.client = client
         self.auth = auth
         self.container = container
         self.sync = sync
         self.recommendations = recommendations
         self.journal = journal
-        self.assistant = assistant
         self.preferences = preferences
         self.apiKeys = apiKeys
-        self.subscriptions = subscriptions
         self.weatherWarnings = weatherWarnings
         self.stateDefaults = stateDefaults
         self.durableStateDirectory = durableStateDirectory
@@ -344,14 +312,8 @@ public final class AppEnvironment {
             // N3 — catalog correction outcomes came from the retired server; clear any left behind.
             Task { await NotificationsCenter.shared.clearRetiredCatalogNotifications() }
         }
-        // Stabilization B3 — journal feed refresh failures were recorded
-        // into JournalStore.lastError and never displayed. Route them
-        // through the same banner mount every other surfaced error uses.
-        journal.wireErrorSink { [weak self] error in
-            self?.surfaceError(error)
-        }
         // Stabilization B3 + R1 — sign-out / identity-switch wipe. Erases every model (generic over
-        // SeedkeepSchema.all — includes the pending-write queue + sync cursors), drops notifications,
+        // SeedkeepSchema.all — includes legacy pending-write and sync-cursor rows), drops notifications,
         // AND tears down the CloudKit coordinator (engine state token + per-record synced-state file +
         // migration marker) and nils its reference so a re-sign-in to the SAME household rebuilds a
         // fresh coordinator that re-provisions + rehydrates rather than reusing a stale `started` one.
@@ -503,7 +465,7 @@ public final class AppEnvironment {
 
     /// Surfaces an error to the user via `bannerError`. Replaces silent
     /// `try?` swallows at call sites where the user needs to know
-    /// something went wrong (sync enqueue failures, assistant launch, etc).
+    /// something went wrong (local write failures, sharing, etc).
     public func surfaceError(_ error: Error) {
         presentBanner(humanizeError(error))
     }
@@ -535,21 +497,18 @@ public final class AppEnvironment {
         bannerError = message
     }
 
-    /// Triggers a sync if the user is signed in. Safe to call repeatedly —
-    /// `SyncEngine` debounces concurrent calls with `isSyncing`.
+    /// Triggers a CloudKit sync if the user is signed in. Safe to call repeatedly —
+    /// overlapping passes are counted in `cloudSyncPassesInFlight`.
     ///
-    /// After a successful sync, runs `PetStateEngine.tickAll` on every
-    /// alive pet in the household — this is the single canonical place
-    /// where mood snapshots are materialized and lifecycle transitions
-    /// are detected. Server departure side effects stay disabled while
-    /// the Seedkeep server is retired.
-    /// Notification scheduling for the other transitions lands in
-    /// Phase 5.1.4 (the side-effect helper has the hook points stubbed).
+    /// After a sync, runs `PetStateEngine.tickAll` on every alive pet in the
+    /// household — this is the single canonical place where mood snapshots
+    /// are materialized and lifecycle transitions are detected.
     public func syncIfPossible() async {
         if case .signedIn(_, let household) = auth.state {
             let activeGardenHouseholdID = self.activeGardenHouseholdID ?? household.id
-            // R1 routes household garden data through CloudKit. The legacy server
-            // branch remains for XCTest coverage; live builds always use CloudKit.
+            // R1 routes household garden data through CloudKit, the only sync (N3 removed the
+            // server's). Live builds always have it on; with it off (an XCTest lane until F)
+            // there is nothing to sync and only the local post-sync work runs.
             let banner: String?
             if isCloudKitSyncEnabled {
                 // N1: CloudKit only on a confirmed identity. An unconfirmed one resolves first; a
@@ -585,35 +544,16 @@ public final class AppEnvironment {
                     banner = nil
                 }
             } else {
-                let ran = await sync.syncAll(householdID: household.id)
-                // Skipped (another sync already in flight): lastError still
-                // holds the PREVIOUS pass's outcome — re-presenting it here
-                // shows a phantom banner — and the post-sync orchestration
-                // below would run against a mid-sweep store. The in-flight
-                // caller does all of it when its pass finishes.
-                guard ran else { return }
-                banner = sync.lastHumanizedError
+                banner = nil
             }
-            // Mirror the sync outcome into the user-facing banner.
-            // SyncEngine isn't @Observable, so SwiftUI can't react to it
-            // directly — we surface here instead, on the boundary that
-            // every sync flows through. `lastHumanizedError` is the
-            // humanizeError rendering (raw codes/statuses/body excerpts
-            // stay in `lastError` for the Settings diagnostics row).
-            // Debounce inside presentBanner keeps repeated identical
-            // errors from strobing the UI.
+            // Mirror the sync outcome into the user-facing banner, on the boundary that every
+            // sync flows through. Debounce inside presentBanner keeps repeated identical errors
+            // from strobing the UI.
             if let banner { presentBanner(banner) }
-            let transitions = PetStateEngine.tickAll(
+            PetStateEngine.tickAll(
                 householdID: activeGardenHouseholdID,
                 container: container
             )
-            if !ServerRetirement.isRetired {
-                await PetStateEngine.performSideEffects(
-                    for: transitions,
-                    client: client,
-                    container: container
-                )
-            }
             // Phase 5.1.4: re-bake the weekly roundup body with the
             // current household snapshot. iOS preserves the next-fire
             // date when re-scheduling with the same identifier + same
@@ -655,10 +595,9 @@ public final class AppEnvironment {
 
     var isCloudSyncRunning: Bool { cloudSyncPassesInFlight > 0 }
 
-    /// Whether a screen with no rows yet should show a loading state: the legacy engine or a
-    /// CloudKit pass is running. (`sync.isSyncing` alone never turns on in the CloudKit path.)
+    /// Whether a screen with no rows yet should show a loading state: a CloudKit pass is running.
     var isSyncingForDisplay: Bool {
-        sync.isSyncing || isCloudSyncRunning || (cloudKit?.isSyncing ?? false)
+        isCloudSyncRunning || (cloudKit?.isSyncing ?? false)
     }
 
     /// Runs one CloudKit pass counted in `cloudSyncPassesInFlight`.
@@ -1193,51 +1132,9 @@ public final class AppEnvironment {
         )
     }
 
-    /// Validates that `url` answers `/api/health` then mutates the live
-    /// `SeedkeepClient` to point at it and persists the override.
-    /// Returns `nil` on success or a human-readable error.
-    public func setServerURL(_ url: URL) async -> String? {
-        // The probe below would run on `URLSession.shared`, outside the refusing session.
-        guard !ServerRetirement.isRetired else { return "The Seedkeep server is retired." }
-        let probe = SeedkeepClient(configuration: .init(baseURL: url))
-        do {
-            _ = try await probe.health()
-        } catch let err as SeedkeepError {
-            return "\(err.code): \(err.message)"
-        } catch {
-            return "Could not reach \(url.absoluteString): \(error.localizedDescription)"
-        }
-        await client.setBaseURL(url)
-        preferences.serverURLOverride = url == preferences.bundleDefault ? nil : url
-        return nil
-    }
-
-    /// Resets to the bundle default URL.
-    public func resetServerURLToDefault() async {
-        await client.setBaseURL(preferences.bundleDefault)
-        preferences.serverURLOverride = nil
-    }
-
-    /// Refreshes the cached tier by calling `/api/subscriptions/me`.
-    /// Safe to call without a sign-in — returns silently on auth errors.
-    public func refreshTier() async {
-        guard !ServerRetirement.isRetired else { return }
-        do {
-            let res = try await client.subscriptionMe()
-            preferences.cachedTier = res.tier
-        } catch {
-            // Quietly ignore — UI continues to render the last cached tier.
-        }
-    }
-
-    private static func resolveBundleDefaultURL() -> URL {
-        let info = Bundle.main.infoDictionary ?? [:]
-        let scheme = (info["SeedkeepAPIScheme"] as? String) ?? "http"
-        let host = (info["SeedkeepAPIHost"] as? String) ?? "localhost:8787"
-        guard let url = URL(string: "\(scheme)://\(host)") else {
-            fatalError("Invalid SeedkeepAPIScheme/SeedkeepAPIHost — check AppConfig.xcconfig")
-        }
-        return url
+    /// The store the legacy rebind clears: exactly the retired bearer-token item in `service`.
+    static func legacyTokenStore(service: String) -> KeychainTokenStore {
+        KeychainTokenStore(service: service, account: KeychainTokenStore.legacyBearerTokenAccount)
     }
 
     private static func resolveKeychainService() -> String {

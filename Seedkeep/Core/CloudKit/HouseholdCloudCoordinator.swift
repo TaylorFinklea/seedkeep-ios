@@ -250,10 +250,9 @@ final class HouseholdCloudCoordinator {
     }
 
     /// Reconcile one pass: ensure started (provision + migrate once), pull + project, push dirty.
-    /// Never throws — surfaces failures via `lastHumanizedError` (mirrors SyncEngine's contract so
-    /// AppEnvironment's banner mirror works unchanged). Degrades quietly when iCloud is unavailable.
-    /// Returns `false` (and does nothing) when another pass is already in flight, so the caller can
-    /// skip its post-sync orchestration — same contract as `SyncEngine.syncAll`.
+    /// Never throws — surfaces failures via `lastHumanizedError` for AppEnvironment's banner mirror.
+    /// Degrades quietly when iCloud is unavailable. Returns `false` (and does nothing) when another
+    /// pass is already in flight, so the caller can skip its post-sync orchestration.
     @discardableResult
     func sync() async -> Bool {
         guard isCloudKitAllowed(), !isSyncing else { return false }

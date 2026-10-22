@@ -1,9 +1,10 @@
 import Foundation
 import SwiftData
 
-/// Write-ahead log entry. Every optimistic local mutation enqueues one of
-/// these in the same SwiftData transaction, so a crash between local
-/// commit and server push doesn't lose data.
+/// Retired server write queue (N3). Nothing creates, sends or changes these
+/// rows any more: rows older builds left in the store stay as they were, and
+/// the model stays so existing stores open unchanged. The rest of this
+/// comment describes the retired lifecycle.
 ///
 /// Lifecycle:
 /// 1. Insert with `attemptCount = 0`, `nextAttemptAt = createdAt`.

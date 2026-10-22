@@ -2,8 +2,7 @@ import Foundation
 import SeedkeepKit
 
 /// Phase 5.1.6 — single source for the pet age-star computation. Used by
-/// PetCard.menagerie, PetDetailView, and AIAssistantCoordinator's
-/// `client_pet_state` map.
+/// PetCard.menagerie and PetDetailView.
 ///
 /// Rule (spec line 730): 1 age-star per 14 days alive, cap at 5 stars
 /// at 70 days. Wilted/departing time still counts as alive. Departed /

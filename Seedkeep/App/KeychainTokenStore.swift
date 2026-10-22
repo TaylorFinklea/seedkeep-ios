@@ -1,30 +1,28 @@
 import Foundation
 import Security
 
-/// Abstraction over the bearer-token store so `AuthController` can be
-/// unit-tested without the real Keychain. The unit-test host bundle lacks
-/// the keychain-access-group entitlement that newer iOS simulators require,
-/// so `SecItemAdd` fails with `errSecMissingEntitlement` and writes are
-/// silently lost — making restore tests collapse to `.signedOut`. Production
-/// uses `KeychainTokenStore`; tests inject an in-memory conformer.
+/// What `AuthController` needs from the legacy bearer-token item: deleting it. N1 made the iCloud
+/// account the identity; a legacy rebind clears the old Sign in with Apple token, and nothing
+/// reads or writes one any more. Tests inject an in-memory conformer (the unit-test host lacks
+/// the keychain-access-group entitlement newer simulators require).
 public protocol TokenStoring: Sendable {
-    func load() -> String?
-    func save(_ token: String)
     func clear()
 }
 
-/// Minimal Keychain-backed token store. Items are device-local —
-/// `kSecAttrSynchronizable` is not set, so the token does not sync
-/// to iCloud Keychain. Items survive app reinstall on iOS by default
-/// (no `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` set), which
-/// matches the "stay signed in across reinstalls on the same device"
-/// expectation for Sign in with Apple. No `kSecAttrAccessGroup`, so
-/// the item stays bound to this app's bundle id.
+/// Minimal Keychain item store for one `service` + `account`. Holds the BYOK provider keys
+/// (`APIKeyStore`), and deletes the legacy bearer token through `TokenStoring`. Items are
+/// device-local (`kSecAttrSynchronizable` is not set) and have no `kSecAttrAccessGroup`, so they
+/// stay bound to this app's bundle id. Every operation is scoped to the exact service and
+/// account: nothing clears the whole service.
 public struct KeychainTokenStore: TokenStoring, Sendable {
+    /// The account that held the retired server's Sign in with Apple bearer token. Kept so the
+    /// legacy rebind deletes exactly that item.
+    public static let legacyBearerTokenAccount = "bearer-token"
+
     public let service: String
     public let account: String
 
-    public init(service: String, account: String = "bearer-token") {
+    public init(service: String, account: String) {
         self.service = service
         self.account = account
     }

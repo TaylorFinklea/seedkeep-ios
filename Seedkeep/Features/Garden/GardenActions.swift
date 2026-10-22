@@ -71,7 +71,7 @@ struct GardenActions {
             guard !squareContents(square, size: size, excluding: nil, in: context).blocksPainting else {
                 return .refused(GardenInteraction.occupiedMessage(square))
             }
-            let input = SeedkeepClient.CreatePlantingEventInput(
+            let input = CreatePlantingEventInput(
                 bed_id: scope.bedID,
                 seed_id: seedID,
                 kind: .sowing,
@@ -102,10 +102,7 @@ struct GardenActions {
             guard !squareContents(square, size: size, excluding: eventID, in: context).blocksPainting else {
                 return .refused(GardenInteraction.occupiedMessage(square))
             }
-            try sync.enqueueUpdatePlantingEvent(
-                id: eventID,
-                SeedkeepClient.UpdatePlantingEventInput(x_feet: to.x, y_feet: to.y)
-            )
+            try sync.enqueueUpdatePlantingEvent(id: eventID, Self.movePatch(to: to))
             didWrite()
             return .written
         }
@@ -115,38 +112,25 @@ struct GardenActions {
 
     @discardableResult
     func setKind(_ kind: PlantingEventKind, eventID: String) throws -> Outcome {
-        try edit(eventID) { event in
-            event.kindRaw == kind.rawValue ? nil : .init(kind: kind)
-        }
+        try edit(eventID) { Self.kindPatch(kind, for: $0) }
     }
 
     @discardableResult
     func setPlannedFor(_ day: CalendarDay, eventID: String) throws -> Outcome {
-        try edit(eventID) { event in
-            event.plannedFor == day.ymd ? nil : .init(planned_for: day.ymd)
-        }
+        try edit(eventID) { Self.plannedForPatch(day, for: $0) }
     }
 
     /// Done on stamps `now`; done off sends `completed_at: .some(nil)`.
     @discardableResult
     func setDone(_ done: Bool, eventID: String, now: Date = Date()) throws -> Outcome {
-        try edit(eventID) { event in
-            if done == (event.completedAt != nil) { return nil }
-            return done
-                ? .init(completed_at: .some(Int64(now.timeIntervalSince1970 * 1000)))
-                : .init(completed_at: .some(nil))
-        }
+        try edit(eventID) { Self.donePatch(done, for: $0, now: now) }
     }
 
     /// Notes are saved on commit. Blank notes clear them (sent as an empty string, since the field has
     /// no explicit null); notes equal to the stored ones write nothing.
     @discardableResult
     func setNotes(_ notes: String, eventID: String) throws -> Outcome {
-        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        return try edit(eventID) { event in
-            let stored = (event.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return stored == trimmed ? nil : .init(notes: trimmed)
-        }
+        try edit(eventID) { Self.notesPatch(notes, for: $0) }
     }
 
     /// Deletes one event: `enqueueDeletePlantingEvent` tombstones it and cancels its reminder.
@@ -160,6 +144,33 @@ struct GardenActions {
         return .written
     }
 
+    // MARK: - Patches (pure: each carries only its own field; nil when the event already holds the value)
+
+    static func movePatch(to point: GardenInteraction.Point) -> UpdatePlantingEventInput {
+        UpdatePlantingEventInput(x_feet: point.x, y_feet: point.y)
+    }
+
+    static func kindPatch(_ kind: PlantingEventKind, for event: LocalPlantingEvent) -> UpdatePlantingEventInput? {
+        event.kindRaw == kind.rawValue ? nil : .init(kind: kind)
+    }
+
+    static func plannedForPatch(_ day: CalendarDay, for event: LocalPlantingEvent) -> UpdatePlantingEventInput? {
+        event.plannedFor == day.ymd ? nil : .init(planned_for: day.ymd)
+    }
+
+    static func donePatch(_ done: Bool, for event: LocalPlantingEvent, now: Date) -> UpdatePlantingEventInput? {
+        if done == (event.completedAt != nil) { return nil }
+        return done
+            ? .init(completed_at: .some(Int64(now.timeIntervalSince1970 * 1000)))
+            : .init(completed_at: .some(nil))
+    }
+
+    static func notesPatch(_ notes: String, for event: LocalPlantingEvent) -> UpdatePlantingEventInput? {
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stored = (event.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return stored == trimmed ? nil : .init(notes: trimmed)
+    }
+
     // MARK: - Checks
 
     private struct Refusal: Error {
@@ -168,7 +179,7 @@ struct GardenActions {
 
     private func edit(
         _ eventID: String,
-        patch: (LocalPlantingEvent) -> SeedkeepClient.UpdatePlantingEventInput?
+        patch: (LocalPlantingEvent) -> UpdatePlantingEventInput?
     ) throws -> Outcome {
         let context = ModelContext(container)
         if let refusal = checkBed(in: context) { return refusal }

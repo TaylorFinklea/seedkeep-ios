@@ -1,8 +1,9 @@
 import Foundation
 import SwiftData
 
-/// Single-row record (per household) tracking the last successful pull
-/// cursor for each table. We key on `householdID` + `kind` so multi-
+/// Retired server pull cursor (N3): nothing reads or writes these rows any
+/// more; the model stays so existing stores open unchanged. It tracked the
+/// last successful pull cursor for each table, per household. We key on `householdID` + `kind` so multi-
 /// household scenarios in a future phase don't require a migration.
 @Model
 public final class LocalSyncCursor {

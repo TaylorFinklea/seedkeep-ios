@@ -2,14 +2,9 @@ import Foundation
 import Observation
 
 /// User-configurable preferences that survive app launches via
-/// `UserDefaults`. Exposes server URL + AI provider as observable
+/// `UserDefaults`. Exposes the AI provider and home location as observable
 /// properties so SwiftUI views and `AppEnvironment` can react to changes
 /// without singleton wiring.
-///
-/// The two values are intentionally separate from `Info.plist` config:
-/// the plist gives us the *default* server URL (e.g. the official cloud
-/// host) and `serverURLOverride` lets users point at their own
-/// self-hosted backend without rebuilding the app.
 @MainActor
 @Observable
 public final class AppPreferences {
@@ -54,9 +49,7 @@ public final class AppPreferences {
     }
 
     private enum Key {
-        static let serverURLOverride = "seedkeep.serverURL"
         static let aiProvider = "seedkeep.aiProvider"
-        static let cachedTier = "seedkeep.cachedTier"
         static let homeZip = "seedkeep.location.homeZip"
         static let cachedUsdaZone = "seedkeep.location.usdaZone"
         static let cachedLatitude = "seedkeep.location.latitude"
@@ -66,18 +59,14 @@ public final class AppPreferences {
     }
 
     private let defaults: UserDefaults
-    private let bundleDefaultURL: URL
 
-    public init(defaults: UserDefaults = .standard, bundleDefaultURL: URL) {
+    public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.bundleDefaultURL = bundleDefaultURL
-        self._serverURLOverride = defaults.url(forKey: Key.serverURLOverride)
         let stored = defaults.string(forKey: Key.aiProvider).flatMap(AIProvider.init(rawValue:)) ?? .free
         // If a stored preference points at a tier that's currently
         // gated off, fall back to .free so ScanFlow doesn't keep
         // dispatching to a path the UI can no longer reach.
         self._aiProvider = (stored == .hosted && !Self.isHostedTierEnabled) ? .free : stored
-        self._cachedTier = defaults.string(forKey: Key.cachedTier)
         self._homeZip = defaults.string(forKey: Key.homeZip)
         self._cachedUsdaZone = defaults.string(forKey: Key.cachedUsdaZone)
         self._cachedLatitude = defaults.object(forKey: Key.cachedLatitude) as? Double
@@ -86,53 +75,12 @@ public final class AppPreferences {
         self._avgFirstFrost = defaults.string(forKey: Key.avgFirstFrost)
     }
 
-    private var _serverURLOverride: URL?
-    public var serverURLOverride: URL? {
-        get { _serverURLOverride }
-        set {
-            _serverURLOverride = newValue
-            if let url = newValue {
-                defaults.set(url, forKey: Key.serverURLOverride)
-            } else {
-                defaults.removeObject(forKey: Key.serverURLOverride)
-            }
-        }
-    }
-
-    /// The URL the app should actually use right now: override if set,
-    /// otherwise the bundle default.
-    public var effectiveServerURL: URL {
-        serverURLOverride ?? bundleDefaultURL
-    }
-
-    public var bundleDefault: URL { bundleDefaultURL }
-
-    public var isUsingDefaultServer: Bool { serverURLOverride == nil }
-
     private var _aiProvider: AIProvider
     public var aiProvider: AIProvider {
         get { _aiProvider }
         set {
             _aiProvider = newValue
             defaults.set(newValue.rawValue, forKey: Key.aiProvider)
-        }
-    }
-
-    /// The most recently observed server-reported tier. Persisted so the
-    /// UI can render a useful state on cold launch before the server
-    /// round-trip completes. Authoritative answer always comes from
-    /// `GET /api/subscriptions/me` — this is just a cache.
-
-    private var _cachedTier: String?
-    public var cachedTier: String? {
-        get { _cachedTier }
-        set {
-            _cachedTier = newValue
-            if let v = newValue {
-                defaults.set(v, forKey: Key.cachedTier)
-            } else {
-                defaults.removeObject(forKey: Key.cachedTier)
-            }
         }
     }
 

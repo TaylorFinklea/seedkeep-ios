@@ -111,11 +111,11 @@ public final class RecommendationStore {
         ].joined(separator: "|")
     }
 
-    /// The growing info the planting engine reads for a seed: the seed's own snapshot when it has data, else the
-    /// fallback (a loaded catalog row, when there is one). nil when neither has data.
-    static func effectiveGrowingInfo(for seed: LocalSeed, catalogFallback: GrowingInfoSnapshot? = nil) -> GrowingInfoSnapshot? {
+    /// The growing info the planting engine reads for a seed: the seed's own snapshot when it has data, else nil.
+    /// (N3 removed the server catalog row that used to be the fallback.)
+    static func effectiveGrowingInfo(for seed: LocalSeed) -> GrowingInfoSnapshot? {
         if let snap = seed.growingInfo, snap.hasAny { return snap }
-        return catalogFallback
+        return nil
     }
 
     /// True when the growing info has a field the engine reads: the frost tolerance, sow method, soil temperature,

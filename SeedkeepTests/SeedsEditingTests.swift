@@ -12,6 +12,12 @@ private final class IssueLog {
     var reports: [SeedWriteReport] = []
 }
 
+/// Counts the local writes `SyncEngine` signals (`onLocalHouseholdMutation`), one per seed write.
+@MainActor
+private final class WriteLog {
+    var count = 0
+}
+
 @MainActor
 @Suite("Seeds table — inline edits, bulk changes and undo", .serialized)
 struct SeedsEditingTests {
@@ -38,16 +44,16 @@ struct SeedsEditingTests {
         container: ModelContainer,
         undo: UndoManager,
         household: HouseholdBox,
-        log: IssueLog = IssueLog()
+        log: IssueLog = IssueLog(),
+        writes: WriteLog = WriteLog()
     ) -> SeedWriter {
-        let client = SeedkeepClient(configuration: .init(baseURL: URL(string: "https://test.invalid")!))
-        let sync = SyncEngine(client: client, container: container)
+        let sync = SyncEngine(container: container)
+        sync.onLocalHouseholdMutation = { writes.count += 1 }
         return SeedWriter(
             sync: sync,
             container: container,
             undoManager: undo,
             currentHouseholdID: { household.id },
-            flush: {},
             presentIssues: { report in log.reports.append(report) }
         )
     }
@@ -88,22 +94,6 @@ struct SeedsEditingTests {
         let target = id
         let descriptor = FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == target })
         return try #require(try context.fetch(descriptor).first)
-    }
-
-    /// The queued seed writes for one seed, oldest first, as their decoded JSON objects.
-    private static func pendingPayloads(for id: String, in container: ModelContainer) throws -> [(operation: String, payload: [String: Any])] {
-        let context = ModelContext(container)
-        let rows = try context.fetch(FetchDescriptor<LocalPendingWrite>(
-            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
-        ))
-        return try rows
-            .filter { $0.entityType == "seed" && $0.entityID == id }
-            .map { row in
-                let object = try #require(
-                    JSONSerialization.jsonObject(with: Data(row.payloadJSON.utf8)) as? [String: Any]
-                )
-                return (operation: row.operation, payload: object)
-            }
     }
 
     private static func key(_ id: String, _ field: SeedDraftField) -> SeedDraftKey {
@@ -180,7 +170,8 @@ struct SeedsEditingTests {
     func inlineCommitPatchesOnlyTheField() throws {
         let container = Self.makeContainer()
         try Self.insert([Self.seed("s1", packets: 2, year: 2020)], into: container)
-        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household))
+        let writes = WriteLog()
+        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household), writes: writes)
 
         let result = writer.commitDraft(Self.key("s1", .year), text: "2022", currentYear: 2026)
 
@@ -190,34 +181,32 @@ struct SeedsEditingTests {
         #expect(stored.yearPacked == 2022)
         #expect(stored.packetCount == 2, "other fields are untouched")
         #expect(stored.updatedAt > 1, "the edit advances updatedAt")
-
-        let writes = try Self.pendingPayloads(for: "s1", in: container)
-        let update = try #require(writes.first)
-        #expect(update.operation == "update")
-        #expect(Set(update.payload.keys) == ["year_packed"], "the patch carries only the changed field")
-        #expect(update.payload["year_packed"] as? Int == 2022)
+        #expect(stored.customName == "Seed s1" && stored.locationID == nil && stored.state == .active,
+                "the patch carries only the changed field")
+        #expect(writes.count == 1)
     }
 
     @Test("clearing the year sends an explicit null")
     func clearingYearSendsNull() throws {
         let container = Self.makeContainer()
         try Self.insert([Self.seed("s1", year: 2020)], into: container)
-        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household))
+        let writes = WriteLog()
+        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household), writes: writes)
 
         _ = writer.commitDraft(Self.key("s1", .year), text: "  ", currentYear: 2026)
 
         let stored = try Self.fetchSeed("s1", in: container)
-        #expect(stored.yearPacked == nil)
-        let update = try #require(try Self.pendingPayloads(for: "s1", in: container).first)
-        #expect(update.payload["year_packed"] is NSNull)
-        #expect(Set(update.payload.keys) == ["year_packed"])
+        #expect(stored.yearPacked == nil, "an explicit null clears the stored year")
+        #expect(stored.packetCount == 2 && stored.customName == "Seed s1")
+        #expect(writes.count == 1)
     }
 
     @Test("an invalid draft writes nothing and returns the error")
     func invalidDraftWritesNothing() throws {
         let container = Self.makeContainer()
         try Self.insert([Self.seed("s1", packets: 2, year: 2020)], into: container)
-        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household))
+        let writes = WriteLog()
+        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household), writes: writes)
 
         #expect(writer.commitDraft(Self.key("s1", .packets), text: "-3", currentYear: 2026) == .failure(.packetsNotWholeNumber))
         #expect(writer.commitDraft(Self.key("s1", .year), text: "1899", currentYear: 2026)
@@ -226,7 +215,7 @@ struct SeedsEditingTests {
         let stored = try Self.fetchSeed("s1", in: container)
         #expect(stored.packetCount == 2)
         #expect(stored.yearPacked == 2020)
-        #expect(try Self.pendingPayloads(for: "s1", in: container).isEmpty)
+        #expect(writes.count == 0)
     }
 
     @Test("a commit to the value already stored writes nothing and is not undoable")
@@ -234,14 +223,71 @@ struct SeedsEditingTests {
         let container = Self.makeContainer()
         try Self.insert([Self.seed("s1", packets: 2)], into: container)
         let undo = Self.makeUndoManager()
-        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household))
+        let writes = WriteLog()
+        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household), writes: writes)
 
         let report = try #require(try? writer.commitDraft(Self.key("s1", .packets), text: "2", currentYear: 2026).get())
 
         #expect(report.unchanged == ["s1"])
         #expect(report.changed.isEmpty)
-        #expect(try Self.pendingPayloads(for: "s1", in: container).isEmpty)
+        #expect(writes.count == 0)
         #expect(!undo.canUndo)
+    }
+
+    // MARK: - Patch key sets
+
+    /// Each edit's forward patch and its undo patch carry only the edited field. The undo patch is
+    /// built from the pre-edit seed, so an extra key would silently revert a change that arrived
+    /// from CloudKit in between.
+    @Test("every edit's forward and undo patches carry only the edited field")
+    func changePatchesCarryOnlyTheEditedField() throws {
+        let seed = Self.seed("s1", packets: 2, year: 2020, state: .active, locationID: "loc_shed", tagIDs: ["tag_a"])
+        func keys(_ edit: SeedFieldEdit) throws -> (forward: [String: Any], inverse: [String: Any]) {
+            let change = try #require(SeedWriter.change(for: edit, on: seed))
+            #expect(change.seedID == "s1")
+            return (try encodedObject(change.forward), try encodedObject(change.inverse))
+        }
+
+        let status = try keys(.status(.archived))
+        #expect(Set(status.forward.keys) == ["state"] && Set(status.inverse.keys) == ["state"])
+        #expect(status.forward["state"] as? String == "archived" && status.inverse["state"] as? String == "active")
+
+        let location = try keys(.location(nil))
+        #expect(Set(location.forward.keys) == ["location_id"] && Set(location.inverse.keys) == ["location_id"])
+        #expect(location.forward["location_id"] is NSNull, "moving to no location is an explicit null")
+        #expect(location.inverse["location_id"] as? String == "loc_shed")
+
+        let packets = try keys(.packets(5))
+        #expect(Set(packets.forward.keys) == ["packet_count"] && Set(packets.inverse.keys) == ["packet_count"])
+        #expect(packets.forward["packet_count"] as? Int == 5 && packets.inverse["packet_count"] as? Int == 2)
+
+        let year = try keys(.year(2022))
+        #expect(Set(year.forward.keys) == ["year_packed"] && Set(year.inverse.keys) == ["year_packed"])
+        #expect(year.forward["year_packed"] as? Int == 2022 && year.inverse["year_packed"] as? Int == 2020)
+
+        let clearedYear = try keys(.year(nil))
+        #expect(Set(clearedYear.forward.keys) == ["year_packed"])
+        #expect(clearedYear.forward["year_packed"] is NSNull, "clearing the year is an explicit null")
+
+        let tag = try keys(.addTag("tag_b"))
+        #expect(Set(tag.forward.keys) == ["tag_ids"] && Set(tag.inverse.keys) == ["tag_ids"])
+        #expect(tag.forward["tag_ids"] as? [String] == ["tag_a", "tag_b"] && tag.inverse["tag_ids"] as? [String] == ["tag_a"])
+
+        // A seed that already holds the value gets no patch at all.
+        #expect(SeedWriter.change(for: .status(.active), on: seed) == nil)
+        #expect(SeedWriter.change(for: .location("loc_shed"), on: seed) == nil)
+        #expect(SeedWriter.change(for: .packets(2), on: seed) == nil)
+        #expect(SeedWriter.change(for: .year(2020), on: seed) == nil)
+        #expect(SeedWriter.change(for: .addTag("tag_a"), on: seed) == nil)
+    }
+
+    @Test("a cleared-year undo patch restores the old year and nothing else")
+    func clearedYearUndoRestoresOnlyTheYear() throws {
+        let seed = Self.seed("s1", year: nil)
+        let change = try #require(SeedWriter.change(for: .year(2021), on: seed))
+        let inverse = try encodedObject(change.inverse)
+        #expect(Set(inverse.keys) == ["year_packed"])
+        #expect(inverse["year_packed"] is NSNull, "undo clears the year it set")
     }
 
     // MARK: - Undo and redo
@@ -314,12 +360,12 @@ struct SeedsEditingTests {
         let container = Self.makeContainer()
         try Self.insert([Self.seed("a", locationID: "loc_shed")], into: container)
         let undo = Self.makeUndoManager()
-        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household))
+        let writes = WriteLog()
+        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household), writes: writes)
 
         _ = writer.apply(.location(nil), to: ["a"])
-        #expect(try Self.fetchSeed("a", in: container).locationID == nil)
-        let update = try #require(try Self.pendingPayloads(for: "a", in: container).first)
-        #expect(update.payload["location_id"] is NSNull)
+        #expect(try Self.fetchSeed("a", in: container).locationID == nil, "an explicit null clears the location")
+        #expect(writes.count == 1)
 
         undo.undo()
         #expect(try Self.fetchSeed("a", in: container).locationID == "loc_shed")
@@ -348,17 +394,17 @@ struct SeedsEditingTests {
         let container = Self.makeContainer()
         try Self.insert([Self.seed("s1", year: 2020)], into: container)
         let undo = Self.makeUndoManager()
-        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household))
+        let writes = WriteLog()
+        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household), writes: writes)
 
         _ = writer.commitDraft(Self.key("s1", .year), text: "2022", currentYear: 2026)
         _ = writer.confirmDeletion(writer.requestDeletion(["s1"]))
         #expect(try Self.fetchSeed("s1", in: container).deletedAt != nil)
+        #expect(writes.count == 2)
 
         undo.undo()
 
-        let updates = try Self.pendingPayloads(for: "s1", in: container).filter { $0.operation == "update" }
-        #expect(updates.count == 1)
-        #expect(updates.first?.payload["year_packed"] as? Int == 2022, "no reverting write was queued")
+        #expect(writes.count == 2, "no reverting write was made")
         #expect(try Self.fetchSeed("s1", in: container).yearPacked == 2022)
     }
 

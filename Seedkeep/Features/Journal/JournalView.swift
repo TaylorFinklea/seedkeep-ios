@@ -66,8 +66,8 @@ enum JournalDatePresentation {
 }
 
 /// Top-level Journal tab. Read-only feed of `LocalJournalEntry` rows
-/// reverse-sorted by `occurredOn`. Pull-to-refresh hits the server feed
-/// via `JournalStore.refresh()`. Rows + the toolbar "+" both push into
+/// reverse-sorted by `occurredOn`. Pull-to-refresh calls
+/// `JournalStore.refresh()`. Rows + the toolbar "+" both push into
 /// `JournalEntryView`.
 ///
 /// `filterParent` is the starting filter, from `EntityScopedJournalSection`'s

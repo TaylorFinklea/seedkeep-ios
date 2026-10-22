@@ -27,7 +27,7 @@ struct RecommendationForecastSourceTests {
     ) -> (RecommendationStore, AppPreferences, UserDefaults, String) {
         let suiteName = "RecommendationForecastSourceTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://example.invalid")!)
+        let prefs = AppPreferences(defaults: defaults)
         return (RecommendationStore(preferences: prefs, forecastSource: source), prefs, defaults, suiteName)
     }
 

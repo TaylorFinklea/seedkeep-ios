@@ -388,7 +388,7 @@ struct AddSeedView: View {
             return
         }
 
-        let input = SeedkeepClient.CreateSeedInput(
+        let input = CreateSeedInput(
             state: state,
             packet_count: state == .wishlist ? 0 : packetCount,
             location_id: locationID,
@@ -413,10 +413,7 @@ struct AddSeedView: View {
                 current: { [appEnv] in appEnv.scanBinding }
             )
             // Dismiss immediately — the seed is in local SwiftData, the user
-            // sees it in Library right away. The server push is retired (N2), so there is nothing to flush.
-            if !ServerRetirement.isRetired {
-                Task { try? await appEnv.sync.flushPending() }
-            }
+            // sees it in Library right away.
             dismiss()
         } catch is SeedSaveSession.ScopeChanged {
             // The account or garden changed under the sheet: its scan is discarded, and it closes.

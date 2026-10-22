@@ -185,14 +185,13 @@ struct SettingsContent: View {
                         Task {
                             await appEnv.syncIfPossible()
                             isSyncingNow = false
-                            // Only show the success ✓ when the pass actually succeeded (no error
-                            // surfaced on either path) — a green check next to an error banner lies.
-                            // N1: with CloudKit on, only a completed CloudKit pass counts; none
-                            // runs while paused (`cloudKit` is nil then).
+                            // Only show the success ✓ when the pass actually succeeded — a green
+                            // check next to an error banner lies. N1: with CloudKit on, only a
+                            // completed CloudKit pass counts; none runs while paused (`cloudKit` is
+                            // nil then).
                             let cloudKitClean = !FeatureFlags.cloudKitHouseholdSyncEnabled
                                 || (appEnv.cloudKit.map { $0.lastPassCompleted && $0.lastHumanizedError == nil } ?? false)
-                            let clean = appEnv.sync.lastError == nil && cloudKitClean
-                            syncedJustNow = clean
+                            syncedJustNow = cloudKitClean
                             try? await Task.sleep(nanoseconds: 2_500_000_000)
                             if syncToken == token { syncedJustNow = false }   // don't clear a newer tap's ✓
                         }
@@ -208,9 +207,6 @@ struct SettingsContent: View {
                         }
                     }
                     .disabled(isSyncingNow)
-                    if let err = appEnv.sync.lastError {
-                        errorRow(err)
-                    }
                     if FeatureFlags.cloudKitHouseholdSyncEnabled {
                         // Visible CloudKit status so the beta test isn't blind.
                         Button {

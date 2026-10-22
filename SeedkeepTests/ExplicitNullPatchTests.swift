@@ -10,8 +10,9 @@ import SeedkeepKit
 /// `UpdatePlantingEventInput.completed_at` are double-optional.
 ///
 /// These tests exercise `SyncEngine.enqueueUpdateSeed` /
-/// `enqueueUpdatePlantingEvent` purely locally (no network): the local
-/// optimistic apply plus the queued `LocalPendingWrite` payload JSON.
+/// `enqueueUpdatePlantingEvent` locally: the local apply, and that no
+/// `LocalPendingWrite` row is queued (N3). The JSON-null encoding itself is
+/// covered by SeedkeepKit's `StabilizationB3WireTests`.
 @MainActor
 @Suite("SyncEngine — explicit-null patches (Stabilization B3)", .serialized)
 struct ExplicitNullPatchTests {
@@ -23,13 +24,7 @@ struct ExplicitNullPatchTests {
     }
 
     private static func makeEngine(container: ModelContainer) -> SyncEngine {
-        // No requests are issued by enqueue paths; a default-session
-        // client pointed at a dead host keeps the type requirements
-        // satisfied without stubbing.
-        let client = SeedkeepClient(
-            configuration: .init(baseURL: URL(string: "https://test.invalid")!)
-        )
-        return SyncEngine(client: client, container: container)
+        SyncEngine(container: container)
     }
 
     private static func insertSeed(_ container: ModelContainer) throws -> LocalSeed {
@@ -60,7 +55,7 @@ struct ExplicitNullPatchTests {
         return rows.map(\.payloadJSON)
     }
 
-    @Test("clearing location/year/name/notes nulls the local row and queues JSON null")
+    @Test("clearing location/year/name/notes nulls the local row and queues nothing")
     func clearAppliesLocallyAndQueuesNull() async throws {
         let container = Self.makeContainer()
         let engine = Self.makeEngine(container: container)
@@ -81,14 +76,7 @@ struct ExplicitNullPatchTests {
         #expect(seed.yearPacked == nil)
         #expect(seed.customName == nil)
         #expect(seed.notes == nil)
-
-        let payload = try #require(Self.pendingPayloads(container).first)
-        let obj = try #require(
-            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
-        #expect(obj["location_id"] is NSNull, "queued payload must carry JSON null")
-        #expect(obj["custom_name"] is NSNull)
-        #expect(obj["notes"] is NSNull)
-        #expect(obj["year_packed"] is NSNull)
+        #expect(Self.pendingPayloads(container).isEmpty, "N3: nothing is queued for a server")
     }
 
     @Test("omitted fields leave the local row untouched")
@@ -107,15 +95,10 @@ struct ExplicitNullPatchTests {
         #expect(seed.locationID == "loc_1", "omitted location must not be cleared")
         #expect(seed.customName == "Cherokee Purple")
         #expect(seed.notes == "old notes")
-
-        let payload = try #require(Self.pendingPayloads(container).first)
-        let obj = try #require(
-            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
-        #expect(!obj.keys.contains("location_id"), "omitted fields must not ride the wire")
-        #expect(!obj.keys.contains("custom_name"))
+        #expect(Self.pendingPayloads(container).isEmpty)
     }
 
-    @Test("mark incomplete clears completedAt locally and queues JSON null")
+    @Test("mark incomplete clears completedAt locally and queues nothing")
     func markIncompleteClearsCompletedAt() async throws {
         let container = Self.makeContainer()
         let engine = Self.makeEngine(container: container)
@@ -141,11 +124,7 @@ struct ExplicitNullPatchTests {
         ).first)
         #expect(event.completedAt == nil,
                 "mark incomplete must clear completedAt so Today/pets/weather see the event again")
-
-        let payload = try #require(Self.pendingPayloads(container).first)
-        let obj = try #require(
-            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
-        #expect(obj["completed_at"] is NSNull, "wire payload must be JSON null, not 0")
+        #expect(Self.pendingPayloads(container).isEmpty)
     }
 
     @Test("update without completed_at leaves completion state alone")

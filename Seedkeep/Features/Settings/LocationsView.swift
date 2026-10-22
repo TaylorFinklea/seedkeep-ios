@@ -109,7 +109,6 @@ struct LocationsView: View {
                 sortOrder: activeLocations.count,
                 householdID: appEnv.activeGardenHouseholdID ?? household.id
             )
-            Task { try? await appEnv.sync.flushPending() }
         } catch {
             appEnv.surfaceError(error)
         }
@@ -120,7 +119,6 @@ struct LocationsView: View {
         guard !trimmed.isEmpty, let id = renamingID else { return }
         do {
             try appEnv.sync.enqueueUpdateLocation(id: id, name: trimmed, sortOrder: nil)
-            Task { try? await appEnv.sync.flushPending() }
         } catch {
             appEnv.surfaceError(error)
         }
@@ -136,6 +134,5 @@ struct LocationsView: View {
                 appEnv.surfaceError(error)
             }
         }
-        Task { try? await appEnv.sync.flushPending() }
     }
 }

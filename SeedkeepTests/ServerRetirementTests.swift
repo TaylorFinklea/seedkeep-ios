@@ -23,20 +23,6 @@ struct ServerRetirementTests {
         #expect(ServerRetirement.refusals.lastPath == "/api/health")
     }
 
-    @MainActor
-    @Test("subscription manager construction makes no immediate server request")
-    func subscriptionManagerDoesNotStartListener() {
-        ServerRetirement.resetRefusals()
-        let client = SeedkeepClient(configuration: .init(
-            baseURL: URL(string: "https://seedkeep-server.invalid")!,
-            session: ServerRetirement.makeRefusingSession()
-        ))
-        let manager = SubscriptionManager(client: client)
-
-        #expect(ServerRetirement.refusals.count == 0)
-        _ = manager
-    }
-
     @Test("watering timestamps persist independently per household")
     func localWateringStateIsHouseholdScopedAndMonotonic() async {
         let suiteName = "ServerRetirementTests.\(UUID().uuidString)"

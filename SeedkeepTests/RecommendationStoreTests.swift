@@ -24,7 +24,7 @@ struct RecommendationStoreTests {
     private func makeStore() -> (RecommendationStore, AppPreferences, UserDefaults, String) {
         let suiteName = "RecommendationStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://example.invalid")!)
+        let prefs = AppPreferences(defaults: defaults)
         return (RecommendationStore(preferences: prefs), prefs, defaults, suiteName)
     }
 
@@ -132,13 +132,11 @@ struct RecommendationStoreTests {
         #expect(second == PlantingEngine.recommend(growingInfo: tenderDirect, climate: zone3, today: PlantingEngine.localToday()))
     }
 
-    @Test("the fallback growing info is used only when the seed has none")
-    func fallbackOnlyWhenSeedHasNone() {
+    @Test("a seed's own growing info is used, and a seed without any has none")
+    func ownGrowingInfoOnly() {
         let own = GrowingInfoSnapshot(frost_tolerance: "hardy")
-        let fallback = GrowingInfoSnapshot(frost_tolerance: "tender")
 
-        #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: own), catalogFallback: fallback) == own)
-        #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: nil), catalogFallback: fallback) == fallback)
+        #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: own)) == own)
         #expect(RecommendationStore.effectiveGrowingInfo(for: seed(growingInfo: nil)) == nil)
     }
 

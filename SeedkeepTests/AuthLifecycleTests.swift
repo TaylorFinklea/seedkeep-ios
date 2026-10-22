@@ -121,9 +121,7 @@ struct AuthLifecycleTests {
     @Test("eraseAllLocalData wipes every model in SeedkeepSchema.all, including queue and cursors")
     func eraseWipesGenerically() async throws {
         let container = makeTestContainer(name: "authErase")
-        let client = SeedkeepClient(configuration: .init(
-            baseURL: URL(string: "https://test.local")!, session: ServerRetirement.makeRefusingSession()))
-        let engine = SyncEngine(client: client, container: container)
+        let engine = SyncEngine(container: container)
         let context = ModelContext(container)
         context.insert(LocalSeed(
             id: "seed_wipe", householdID: "hh_auth", state: .active,
@@ -145,7 +143,7 @@ struct AuthLifecycleTests {
         let fresh = ModelContext(container)
         #expect(try fresh.fetch(FetchDescriptor<LocalSeed>()).isEmpty)
         #expect(try fresh.fetch(FetchDescriptor<LocalPendingWrite>()).isEmpty,
-                "queued writes must never flush into another account's household")
+                "legacy queued writes belong to the previous account's store")
         #expect(try fresh.fetch(FetchDescriptor<LocalSyncCursor>()).isEmpty,
                 "cursors must reset — corrections feed is per-user")
         #expect(try fresh.fetch(FetchDescriptor<LocalJournalEntry>()).isEmpty)
@@ -1176,5 +1174,19 @@ struct AuthLifecycleTests {
         #expect(UUID(uuidString: id) != nil)
         #expect(id == id.lowercased())
         #expect(id.count == 36)
+    }
+}
+
+/// The legacy rebind deletes exactly the retired server's bearer-token Keychain item. Its account
+/// identifier must never change, or upgraded devices would keep the old token. No Keychain access.
+@MainActor
+@Suite("Legacy bearer-token account")
+struct LegacyBearerTokenAccountTests {
+    @Test("the legacy account is pinned to \"bearer-token\" and the live store uses it")
+    func legacyAccountIsPinned() {
+        #expect(KeychainTokenStore.legacyBearerTokenAccount == "bearer-token")
+        let store = AppEnvironment.legacyTokenStore(service: "app.seedkeep.tests")
+        #expect(store.account == "bearer-token")
+        #expect(store.service == "app.seedkeep.tests")
     }
 }

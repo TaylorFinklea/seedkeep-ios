@@ -109,7 +109,6 @@ struct TagsView: View {
                 color: hex,
                 householdID: appEnv.activeGardenHouseholdID ?? household.id
             )
-            Task { try? await appEnv.sync.flushPending() }
         } catch {
             appEnv.surfaceError(error)
         }
@@ -120,7 +119,6 @@ struct TagsView: View {
         guard !trimmed.isEmpty, let id = renamingID else { return }
         do {
             try appEnv.sync.enqueueUpdateTag(id: id, name: trimmed, color: nil)
-            Task { try? await appEnv.sync.flushPending() }
         } catch {
             appEnv.surfaceError(error)
         }
@@ -136,7 +134,6 @@ struct TagsView: View {
                 appEnv.surfaceError(error)
             }
         }
-        Task { try? await appEnv.sync.flushPending() }
     }
 
     private func colorFor(hex: String?) -> Color {

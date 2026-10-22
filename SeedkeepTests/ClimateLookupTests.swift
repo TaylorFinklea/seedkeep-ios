@@ -75,7 +75,7 @@ struct HomeClimatePreferencesTests {
     private func makePreferences() -> (AppPreferences, UserDefaults, String) {
         let suiteName = "HomeClimatePreferencesTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        let prefs = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://example.invalid")!)
+        let prefs = AppPreferences(defaults: defaults)
         return (prefs, defaults, suiteName)
     }
 
@@ -110,7 +110,7 @@ struct HomeClimatePreferencesTests {
         let climate = try #require(ClimateLookup.climate(forZip: "10001"))
         prefs.saveHomeClimate(climate)
 
-        let relaunched = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://example.invalid")!)
+        let relaunched = AppPreferences(defaults: defaults)
         #expect(relaunched.homeClimate == climate)
     }
 

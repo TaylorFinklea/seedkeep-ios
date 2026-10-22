@@ -8,7 +8,7 @@ import SeedkeepKit
 @MainActor
 @Suite("Production-default CloudKit gate", .serialized)
 struct ProductionDefaultCloudKitGateTests {
-    @Test("shipping default routes a household mutation away from legacy POST flush")
+    @Test("shipping default routes a household mutation to CloudKit and queues no server write")
     func productionDefaultRoutesHouseholdMutationToCloudKit() async throws {
         let defaults = UserDefaults.standard
         let key = FeatureFlags.cloudKitHouseholdSyncKey
@@ -26,28 +26,21 @@ struct ProductionDefaultCloudKitGateTests {
         defaults.removeObject(forKey: key)
         #expect(FeatureFlags.cloudKitHouseholdSyncEnabled == true)
 
-        let emptyFeed = Data(#"{"ok":true,"data":{"items":[],"cursor":0,"has_more":false}}"#.utf8)
-        let session = CatalogRouterMockURLProtocol.makeSession(
-            fallbackBody: emptyFeed,
-            fallbackStatus: 200
-        )
-        let client = SeedkeepClient(
-            configuration: .init(baseURL: URL(string: "https://test.local")!, session: session),
-            bearerToken: "test"
-        )
         let container = makeTestContainer(name: "productionDefaultCloudKitGate")
-        let engine = SyncEngine(client: client, container: container)
+        let engine = SyncEngine(container: container)
+        var signals = 0
+        engine.onLocalHouseholdMutation = { signals += 1 }
 
-        _ = try engine.enqueueCreateSeed(
+        let seed = try engine.enqueueCreateSeed(
             .init(state: .active, custom_name: "CloudKit gate seed"),
             householdID: "household-cloudkit-gate"
         )
-        _ = await engine.syncAll(householdID: "household-cloudkit-gate")
 
         let context = ModelContext(container)
-        let pending = try context.fetch(FetchDescriptor<LocalPendingWrite>())
-        #expect(pending.count == 1)
-        #expect(CatalogRouterMockURLProtocol.capturedMethodPaths().filter { $0.method == "POST" }.isEmpty)
+        let seedID = seed.id
+        #expect(try context.fetch(FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == seedID })).count == 1)
+        #expect(signals == 1, "the CloudKit coordinator's save hook fires once")
+        #expect(try context.fetch(FetchDescriptor<LocalPendingWrite>()).isEmpty)
     }
 }
 #endif

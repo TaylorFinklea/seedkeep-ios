@@ -56,7 +56,7 @@ struct SettingsPolicyTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("hosted", forKey: "seedkeep.aiProvider")
 
-        let preferences = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://example.invalid")!)
+        let preferences = AppPreferences(defaults: defaults)
 
         // Hosted's server is retired: the stored choice reads as Free (on-device), the app's default,
         // so scanning keeps working without a key.
@@ -70,14 +70,13 @@ struct SettingsPolicyTests {
         let suite = "settings-policy-choices-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let bundle = URL(string: "https://example.invalid")!
 
-        #expect(AppPreferences(defaults: defaults, bundleDefaultURL: bundle).aiProvider == .free)
+        #expect(AppPreferences(defaults: defaults).aiProvider == .free)
 
         defaults.set("byok", forKey: "seedkeep.aiProvider")
-        #expect(AppPreferences(defaults: defaults, bundleDefaultURL: bundle).aiProvider == .byok)
+        #expect(AppPreferences(defaults: defaults).aiProvider == .byok)
 
         defaults.set("free", forKey: "seedkeep.aiProvider")
-        #expect(AppPreferences(defaults: defaults, bundleDefaultURL: bundle).aiProvider == .free)
+        #expect(AppPreferences(defaults: defaults).aiProvider == .free)
     }
 }

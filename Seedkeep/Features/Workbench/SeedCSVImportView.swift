@@ -407,12 +407,9 @@ private struct SeedCSVImportFlow: ViewModifier {
     }
 
     /// One nudge at the end of a run: the household-mutation hook schedules the CloudKit save (as each
-    /// enqueue does), and the server queue is flushed where the server still runs.
+    /// enqueue does).
     static func nudge(_ sync: SyncEngine) {
         sync.onLocalHouseholdMutation?()
-        if !ServerRetirement.isRetired {
-            Task { try? await sync.flushPending() }
-        }
     }
 
     #if DEBUG

@@ -7,7 +7,7 @@ import SeedkeepKit
 /// on purpose.
 @MainActor
 protocol ScanSaveWriter: AnyObject {
-    func enqueueCreateSeed(_ input: SeedkeepClient.CreateSeedInput, householdID: String) throws -> LocalSeed
+    func enqueueCreateSeed(_ input: CreateSeedInput, householdID: String) throws -> LocalSeed
     func setLocalGrowingInfo(seedID: String, snapshot: GrowingInfoSnapshot?) throws
     func setLocalCustomType(seedID: String, type: String?) throws
     func uploadPhoto(
@@ -69,7 +69,7 @@ final class SeedSaveSession {
     /// again after a throw. Throws `ScopeChanged` when the scope moved; otherwise a detail or photo
     /// failure first, then a staging failure, after everything else was written.
     func save(
-        _ input: SeedkeepClient.CreateSeedInput,
+        _ input: CreateSeedInput,
         scanID: UUID?,
         snapshot: GrowingInfoSnapshot?,
         customType: String?,

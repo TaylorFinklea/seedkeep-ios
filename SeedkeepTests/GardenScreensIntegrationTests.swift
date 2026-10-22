@@ -18,11 +18,13 @@ struct GardenScreensIntegrationTests {
         let container: ModelContainer
         let engine: SyncEngine
         var household: String? = GardenScreensIntegrationTests.household
+        /// Local household writes `SyncEngine` signalled (`onLocalHouseholdMutation`).
+        var signals = 0
 
         init() {
             container = makeTestContainer(name: "gardenScreensTests")
-            let client = SeedkeepClient(configuration: .init(baseURL: URL(string: "https://test.invalid")!))
-            engine = SyncEngine(client: client, container: container)
+            engine = SyncEngine(container: container)
+            engine.onLocalHouseholdMutation = { [unowned self] in self.signals += 1 }
         }
 
         func update(_ form: BedForm, bedID: String) throws -> GardenActions.Outcome {
@@ -66,17 +68,6 @@ struct GardenScreensIntegrationTests {
             try ModelContext(container).fetch(
                 FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.id == id })
             ).first
-        }
-
-        /// Pending writes for one entity, payloads decoded.
-        func pending(_ entityID: String) throws -> [(op: String, payload: [String: Any])] {
-            let rows = try ModelContext(container).fetch(FetchDescriptor<LocalPendingWrite>(
-                sortBy: [SortDescriptor(\.createdAt, order: .forward)]
-            )).filter { $0.entityID == entityID }
-            return rows.map { row in
-                let object = (try? JSONSerialization.jsonObject(with: Data(row.payloadJSON.utf8))) as? [String: Any]
-                return (row.operation, object ?? [:])
-            }
         }
 
         func snapshot(householdID: String? = GardenScreensIntegrationTests.household) throws -> GardenSession.Snapshot {
@@ -123,11 +114,8 @@ struct GardenScreensIntegrationTests {
         #expect(bed.widthFeet == 4)
         #expect(bed.lengthFeet == 8)
         #expect(bed.bedDescription == "Raised")
-        let write = try #require(try h.pending(created.id).first)
-        #expect(write.op == "create")
-        #expect(write.payload["width_feet"] as? Double == 4)
-        #expect(write.payload["length_feet"] as? Double == 8)
-        #expect(write.payload["name"] as? String == "North")
+        #expect(bed.name == "North")
+        #expect(h.signals == 1)
     }
 
     @Test func aBlankSizeCreatesABedWithoutAGrid() throws {
@@ -145,18 +133,35 @@ struct GardenScreensIntegrationTests {
         try h.insert([Self.bed("north", width: 60, length: 8.5, description: "Raised")])
         var form = BedForm.edit(.init(name: "North", description: "Raised", widthFeet: 60, lengthFeet: 8.5))
         #expect(try h.update(form, bedID: "north") == .unchanged)
-        #expect(try h.pending("north").isEmpty)
+        #expect(h.signals == 0)
 
         form.name = "North bed"
         #expect(try h.update(form, bedID: "north") == .written)
-        let write = try #require(try h.pending("north").last)
-        #expect(write.op == "update")
-        #expect(Set(write.payload.keys) == ["name"])
+        #expect(h.signals == 1)
         let bed = try #require(try h.bed("north"))
         #expect(bed.name == "North bed")
         #expect(bed.widthFeet == 60)
         #expect(bed.lengthFeet == 8.5)
         #expect(bed.bedDescription == "Raised")
+    }
+
+    @Test func bedUpdateInputsCarryOnlyTheChangedFields() throws {
+        let stored = BedForm.edit(.init(name: "North", description: "Raised", widthFeet: 60, lengthFeet: 8.5))
+        #expect(stored.updateInput == nil, "an untouched form builds no update")
+        var renamed = stored
+        renamed.name = "North bed"
+        let name = try encodedObject(try #require(renamed.updateInput))
+        #expect(Set(name.keys) == ["name"] && name["name"] as? String == "North bed")
+        var resized = BedForm.edit(.init(name: "North", description: nil, widthFeet: 4, lengthFeet: 8))
+        resized.width = "3"
+        resized.length = "6"
+        let size = try encodedObject(try #require(resized.updateInput))
+        #expect(Set(size.keys) == ["width_feet", "length_feet"])
+        var cleared = stored
+        cleared.description = "  "
+        let description = try encodedObject(try #require(cleared.updateInput))
+        #expect(Set(description.keys) == ["description"] && description["description"] as? String == "",
+                "a blank description is sent as an empty string")
     }
 
     @Test func resizingNeverMovesPlantings() throws {
@@ -171,10 +176,12 @@ struct GardenScreensIntegrationTests {
         form.length = "6"
         #expect(try h.update(form, bedID: "north") == .written)
 
-        let write = try #require(try h.pending("north").last)
-        #expect(Set(write.payload.keys) == ["width_feet", "length_feet"])
-        // No planting was written or moved.
-        #expect(try h.pending("far").isEmpty)
+        let bed = try #require(try h.bed("north"))
+        #expect(bed.widthFeet == 3 && bed.lengthFeet == 6)
+        #expect(bed.name == "North")
+        // Only the bed was written; no planting was written or moved.
+        #expect(h.signals == 1)
+        #expect(try h.event("far")?.updatedAt == 1)
         #expect(try h.event("far")?.xFeet == 3.5)
         #expect(try h.event("far")?.yFeet == 7.5)
 
@@ -195,11 +202,8 @@ struct GardenScreensIntegrationTests {
         var form = BedForm.edit(.init(name: "North", description: "Raised", widthFeet: 4, lengthFeet: 8))
         form.description = "  "
         #expect(try h.update(form, bedID: "north") == .written)
-        let write = try #require(try h.pending("north").last)
-        #expect(write.op == "update")
-        #expect(Set(write.payload.keys) == ["description"])
-        #expect(write.payload["description"] as? String == "")
         #expect(try h.bed("north")?.bedDescription == "")
+        #expect(try h.bed("north")?.name == "North")
     }
 
     @Test func deletingABedTombstonesItAndQueuesADelete() throws {
@@ -207,9 +211,9 @@ struct GardenScreensIntegrationTests {
         try h.insert([Self.bed("north", width: 4, length: 8), Self.seed(), Self.event("e1", bed: "north", x: 0.5, y: 0.5)])
         #expect(try h.deleteBed("north") == .written)
         #expect(try h.bed("north")?.deletedAt != nil)
-        #expect(try h.pending("north").map(\.op) == ["delete"])
+        #expect(h.signals == 1)
         // Its plantings aren't written.
-        #expect(try h.pending("e1").isEmpty)
+        #expect(try h.event("e1")?.updatedAt == 1)
         #expect(try h.event("e1")?.deletedAt == nil)
     }
 
@@ -221,7 +225,7 @@ struct GardenScreensIntegrationTests {
         form.name = "North bed"
         #expect(try h.update(form, bedID: "north") == .refused(GardenActions.scopeChangedMessage))
         #expect(try h.deleteBed("north") == .refused(GardenActions.scopeChangedMessage))
-        #expect(try h.all(LocalPendingWrite.self).isEmpty)
+        #expect(h.signals == 0)
         let bed = try #require(try h.bed("north"))
         #expect(bed.name == "North")
         #expect(bed.deletedAt == nil)
@@ -229,7 +233,7 @@ struct GardenScreensIntegrationTests {
 
     @Test func bedEditAndDeleteOfABedDeletedElsewhereWriteNothing() throws {
         let h = Harness()
-        // Another device's delete lands as a local tombstone, with no pending write here.
+        // Another device's delete lands as a local tombstone.
         let gone = Self.bed("north", width: 4, length: 8)
         gone.deletedAt = 5
         try h.insert([gone, Self.bed("other", width: 4, length: 8)])
@@ -243,7 +247,7 @@ struct GardenScreensIntegrationTests {
             #expect(try h.update(form, bedID: id) == .refused(BedFormWriter.bedDeletedMessage))
             #expect(try h.deleteBed(id) == .refused(BedFormWriter.bedDeletedMessage))
         }
-        #expect(try h.all(LocalPendingWrite.self).isEmpty)
+        #expect(h.signals == 0)
         #expect(try h.bed("north")?.deletedAt == 5)
         #expect(try h.bed("foreign")?.name == "Foreign")
     }
@@ -265,11 +269,7 @@ struct GardenScreensIntegrationTests {
         #expect(event.kindRaw == "transplant")
         #expect(event.xFeet == 3.5)
         #expect(event.yFeet == 6.5)
-        let write = try #require(try h.pending(created.id).first)
-        #expect(write.op == "create")
-        #expect(write.payload["x_feet"] as? Double == 3.5)
-        #expect(write.payload["y_feet"] as? Double == 6.5)
-        #expect(write.payload["bed_id"] as? String == "north")
+        #expect(h.signals == 1)
         // It shows in that square.
         let data = try h.data(bedID: "north")
         #expect(data.squares[GridSquare(column: 3, rowFromTop: 1)]?.events.map(\.id) == [created.id])

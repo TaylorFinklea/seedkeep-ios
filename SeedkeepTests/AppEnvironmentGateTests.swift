@@ -336,17 +336,6 @@ struct AppEnvironmentGateTests {
         #expect(queue.take() == "cold-launch")
     }
     #endif
-
-    // MARK: - Transport
-
-    @Test("the live server client's session refuses every request")
-    func serverClientUsesRefusingProtocol() async throws {
-        let client = AppEnvironment.makeServerClient(baseURL: URL(string: "https://seedkeep.invalid")!)
-        let protocols = await client.configuration.session.configuration.protocolClasses ?? []
-        #expect(protocols.contains { $0 == RefusingURLProtocol.self })
-        #expect(protocols.first.map { $0 == RefusingURLProtocol.self } == true,
-                "RefusingURLProtocol must be consulted first")
-    }
 }
 
 /// T2: a timed-out share accept keeps running and a retry of the same share collects it.

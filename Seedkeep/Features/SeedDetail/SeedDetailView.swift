@@ -43,19 +43,13 @@ struct SeedDetailView: View {
     @State private var refinedRecommendation: RefinedRecommendation?
 
     /// Local edit buffers for the Identity section. Mirrored from the seed
-    /// on appear so TextFields can bind to non-optional Strings; pushed back
-    /// through the sync queue on each change, flushed on disappear (same
-    /// throttle pattern as Notes).
+    /// on appear so TextFields can bind to non-optional Strings; written
+    /// back through `SyncEngine` on each change.
     @State private var typeDraft: String = ""
     @State private var nameDraft: String = ""
     @State private var varietyDraft: String = ""
     @State private var companyDraft: String = ""
     @State private var identityHydrated = false
-
-    /// Catalog metadata (scientific name, growing conditions, etc.) fetched
-    /// when the view appears if the seed is linked to a catalog entry.
-    /// Stays nil for manually-entered seeds or while loading.
-    @State private var catalog: CatalogSeedDTO?
 
     /// Oldest capture first, so the first photo is the cover. The ID breaks a tie, so the order
     /// never depends on fetch order (N2: a scan's front is captured before its back).
@@ -101,22 +95,6 @@ struct SeedDetailView: View {
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
-                .task(id: seed.id) {
-                    // Fetch the catalog entry for the growing-info section.
-                    // Used both as a display fallback and to backfill the
-                    // local snapshot for seeds saved before snapshots
-                    // existed. Failures are silent — the section falls back
-                    // to the local snapshot (or hides entirely).
-                    if !ServerRetirement.isRetired, let catalogID = seed.catalogID {
-                        catalog = try? await appEnv.client.catalogByID(catalogID)
-                        if seed.growingInfo == nil, let cat = catalog {
-                            let snap = Self.snapshot(from: cat)
-                            if snap.hasAny {
-                                try? appEnv.sync.setLocalGrowingInfo(seedID: seed.id, snapshot: snap)
-                            }
-                        }
-                    }
-                }
                 .task(id: appEnv.recommendations.refinementKey(for: seed)) {
                     // Apply WeatherKit refinement when coordinates are available. The task is keyed by the
                     // inputs, so a change to the growing info, the home location or the day refines again.
@@ -305,11 +283,8 @@ struct SeedDetailView: View {
         }
     }
 
-    /// Growing information for the seed. Reads from the local snapshot
-    /// captured at save time so it works offline, for manual entries, and
-    /// before the catalog row has been populated. Falls back to the live
-    /// catalog fetch when no snapshot exists yet. Hidden when neither has
-    /// any data.
+    /// Growing information for the seed, from the local snapshot captured at
+    /// save time. Hidden when it has no data.
     @ViewBuilder
     private func growingInfoSection(_ seed: LocalSeed) -> some View {
         if let info = effectiveGrowingInfo(seed), info.hasAny {
@@ -369,34 +344,9 @@ struct SeedDetailView: View {
         }
     }
 
-    /// Prefer the on-seed snapshot (offline-safe, survives catalog gaps)
-    /// and fall back to the freshly-fetched catalog while it's loading or
-    /// for legacy seeds without a snapshot.
+    /// The on-seed growing-info snapshot, when it has any data.
     private func effectiveGrowingInfo(_ seed: LocalSeed) -> GrowingInfoSnapshot? {
-        RecommendationStore.effectiveGrowingInfo(for: seed, catalogFallback: catalog.map(Self.snapshot(from:)))
-    }
-
-    fileprivate static func snapshot(from c: CatalogSeedDTO) -> GrowingInfoSnapshot {
-        GrowingInfoSnapshot(
-            scientific_name: c.scientific_name,
-            life_cycle: c.life_cycle,
-            sun_requirement: c.sun_requirement,
-            frost_tolerance: c.frost_tolerance,
-            sow_method: c.sow_method,
-            seed_depth_inches: c.seed_depth_inches,
-            days_to_germinate_min: c.days_to_germinate_min,
-            days_to_germinate_max: c.days_to_germinate_max,
-            days_to_maturity_min: c.days_to_maturity_min,
-            days_to_maturity_max: c.days_to_maturity_max,
-            soil_temp_min_f: c.soil_temp_min_f,
-            soil_temp_max_f: c.soil_temp_max_f,
-            plant_spacing_inches: c.plant_spacing_inches,
-            row_spacing_inches: c.row_spacing_inches,
-            hardiness_zone_min: c.hardiness_zone_min,
-            hardiness_zone_max: c.hardiness_zone_max,
-            viability_years: c.viability_years,
-            instructions: c.instructions
-        )
+        RecommendationStore.effectiveGrowingInfo(for: seed)
     }
 
     private func humanLifeCycle(_ raw: String?) -> String? {
@@ -539,9 +489,6 @@ struct SeedDetailView: View {
                 identityHydrated = true
             }
         }
-        .onDisappear {
-            Task { try? await appEnv.sync.flushPending() }
-        }
     }
 
     @ViewBuilder
@@ -554,7 +501,6 @@ struct SeedDetailView: View {
                     set: { newState in
                         do {
                             try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(state: newState))
-                            Task { try? await appEnv.sync.flushPending() }
                         } catch {
                             appEnv.surfaceError(error)
                         }
@@ -582,7 +528,6 @@ struct SeedDetailView: View {
                     set: { newCount in
                         do {
                             try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(packet_count: newCount))
-                            Task { try? await appEnv.sync.flushPending() }
                         } catch {
                             appEnv.surfaceError(error)
                         }
@@ -605,7 +550,6 @@ struct SeedDetailView: View {
                     set: { newID in
                         do {
                             try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(location_id: newID))
-                            Task { try? await appEnv.sync.flushPending() }
                         } catch {
                             appEnv.surfaceError(error)
                         }
@@ -625,7 +569,6 @@ struct SeedDetailView: View {
                     set: { newSet in
                         do {
                             try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(tag_ids: Array(newSet)))
-                            Task { try? await appEnv.sync.flushPending() }
                         } catch {
                             appEnv.surfaceError(error)
                         }
@@ -657,7 +600,6 @@ struct SeedDetailView: View {
                     set: { newSource in
                         do {
                             try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(source: newSource))
-                            Task { try? await appEnv.sync.flushPending() }
                         } catch {
                             appEnv.surfaceError(error)
                         }
@@ -677,7 +619,6 @@ struct SeedDetailView: View {
                     set: { newYear in
                         do {
                             try appEnv.sync.enqueueUpdateSeed(id: seed.id, .init(year_packed: newYear))
-                            Task { try? await appEnv.sync.flushPending() }
                         } catch {
                             appEnv.surfaceError(error)
                         }
@@ -702,8 +643,6 @@ struct SeedDetailView: View {
                                 id: seed.id,
                                 .init(notes: newNotes.isEmpty ? nil : newNotes)
                             )
-                            // Throttle: don't push every keystroke. Push once when
-                            // the user navigates away — handled by .onDisappear.
                         } catch {
                             appEnv.surfaceError(error)
                         }
@@ -714,9 +653,6 @@ struct SeedDetailView: View {
             .lineLimit(3...8)
         } header: {
             WBSectionHeader("Notes")
-        }
-        .onDisappear {
-            Task { try? await appEnv.sync.flushPending() }
         }
     }
 
@@ -762,7 +698,6 @@ struct SeedDetailView: View {
             Button("Delete", role: .destructive) {
                 do {
                     try appEnv.sync.enqueueDeleteSeed(id: seed.id)
-                    Task { try? await appEnv.sync.flushPending() }
                     dismiss()
                 } catch {
                     appEnv.surfaceError(error)

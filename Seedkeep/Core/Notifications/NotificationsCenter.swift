@@ -214,7 +214,7 @@ final class NotificationsCenter {
     /// Schedule (or replace) the weekly Sunday-8am pet roundup. Idempotent:
     /// re-scheduling with the same identifier preserves the next-fire date.
     /// `thrivingCount` + `wiltingCount` are baked into the body at schedule
-    /// time; the caller is expected to re-invoke this after each `syncAll`.
+    /// time; the caller is expected to re-invoke this after each sync.
     func schedulePetWeeklyRoundup(thrivingCount: Int, wiltingCount: Int) async {
         guard DevicePreferences.store.bool(forKey: "seedkeep.notif.pet.roundup") else { return }
         guard await ensureGranted() else { return }

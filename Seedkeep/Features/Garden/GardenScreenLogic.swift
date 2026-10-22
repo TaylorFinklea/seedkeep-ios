@@ -111,10 +111,10 @@ struct BedForm: Equatable, Sendable {
     }
 
     /// The create input for a new bed, or nil when the form can't be saved.
-    var createInput: SeedkeepClient.CreateBedInput? {
+    var createInput: CreateBedInput? {
         guard isNew, canSave,
               case .value(let width) = size(.width), case .value(let length) = size(.length) else { return nil }
-        return SeedkeepClient.CreateBedInput(
+        return CreateBedInput(
             name: trimmedName,
             description: trimmedDescription.isEmpty ? nil : trimmedDescription,
             width_feet: width,
@@ -124,9 +124,9 @@ struct BedForm: Equatable, Sendable {
 
     /// The update for an edit with only the changed fields, or nil when nothing changed or the form
     /// can't be saved.
-    var updateInput: SeedkeepClient.UpdateBedInput? {
+    var updateInput: UpdateBedInput? {
         guard let stored, canSave else { return nil }
-        var input = SeedkeepClient.UpdateBedInput()
+        var input = UpdateBedInput()
         var changed = false
         if trimmedName != stored.name.trimmingCharacters(in: .whitespacesAndNewlines) {
             input.name = trimmedName
@@ -403,9 +403,9 @@ enum PlaceInBed {
         square: GridSquare?,
         widthFeet: Double?,
         lengthFeet: Double?
-    ) -> SeedkeepClient.CreatePlantingEventInput {
+    ) -> CreatePlantingEventInput {
         let position = coordinates(square: square, widthFeet: widthFeet, lengthFeet: lengthFeet)
-        return SeedkeepClient.CreatePlantingEventInput(
+        return CreatePlantingEventInput(
             bed_id: bedID,
             seed_id: seedID,
             catalog_seed_id: nil,

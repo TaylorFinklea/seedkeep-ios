@@ -1,9 +1,8 @@
 // Apple-only app (N1). PARENT-OWNED contract: workers use these and do not change their shape.
 //
-// The Seedkeep server is retired: the app makes no requests to it. `isRetired` gates every
-// server caller and hides server-only UI; the client's transport also refuses every request
-// without touching the network, so a missed gate fails fast instead of hanging on a dead host.
-// N3 deletes the server code and this switch with it.
+// The Seedkeep server is retired: the app makes no requests to it, and N3 (T1) deleted the server
+// client and every caller this switch gated. The switch and the refusing session stay until F
+// removes them.
 import Foundation
 import OSLog
 import Synchronization
@@ -13,8 +12,8 @@ enum ServerRetirement {
     /// compiles (and its unit tests still run) until N3 removes it.
     static let isRetired = true
 
-    /// The URLSession `SeedkeepClient` uses in the app: every request fails immediately with
-    /// `URLError(.cannotConnectToHost)` and never reaches the network.
+    /// A URLSession whose every request fails immediately with `URLError(.cannotConnectToHost)`
+    /// and never reaches the network.
     static func makeRefusingSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [RefusingURLProtocol.self]

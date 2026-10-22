@@ -93,8 +93,6 @@ struct FixtureCloudIdentityProvider: CloudIdentityProviding {
 
 /// Holds no token. Sample-garden mode never signs in, and the Keychain is never read or written.
 struct FixtureTokenStore: TokenStoring {
-    func load() -> String? { nil }
-    func save(_ token: String) {}
     func clear() {}
 }
 #endif

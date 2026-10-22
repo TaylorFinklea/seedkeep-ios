@@ -283,9 +283,6 @@ struct SeedsTableView: View {
             container: appEnv.container,
             undoManager: undoTarget,
             currentHouseholdID: { [appEnv] in appEnv.activeGardenHouseholdID },
-            flush: { [appEnv] in
-                Task { try? await appEnv.sync.flushPending() }
-            },
             // Reports go to the window banner, not a view-local alert: an undo or redo can run
             // after Seeds has left the screen, and its failures must still be seen.
             presentIssues: { [appEnv] report in

@@ -68,7 +68,7 @@ struct FixtureModeTests {
         let suite = "app.seedkeep.tests.fixture.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = AppPreferences(defaults: defaults, bundleDefaultURL: URL(string: "https://seedkeep.invalid")!)
+        let preferences = AppPreferences(defaults: defaults)
 
         try FixtureSampleGarden.seed(
             into: container.mainContext,

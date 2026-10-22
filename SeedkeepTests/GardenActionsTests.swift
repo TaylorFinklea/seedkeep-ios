@@ -21,11 +21,13 @@ struct GardenActionsTests {
         let engine: SyncEngine
         var household: String? = GardenActionsTests.household
         var writes = 0
+        /// Local household writes `SyncEngine` signalled (`onLocalHouseholdMutation`).
+        var signals = 0
 
         init() {
             container = makeTestContainer(name: "gardenActionsTests")
-            let client = SeedkeepClient(configuration: .init(baseURL: URL(string: "https://test.invalid")!))
-            engine = SyncEngine(client: client, container: container)
+            engine = SyncEngine(container: container)
+            engine.onLocalHouseholdMutation = { [unowned self] in self.signals += 1 }
         }
 
         @MainActor
@@ -55,17 +57,6 @@ struct GardenActionsTests {
             try ModelContext(container).fetch(
                 FetchDescriptor<LocalPlantingEvent>(predicate: #Predicate { $0.deletedAt == nil })
             )
-        }
-
-        /// Pending writes in order, payloads decoded.
-        func pending() throws -> [(op: String, id: String, payload: [String: Any])] {
-            let rows = try ModelContext(container).fetch(FetchDescriptor<LocalPendingWrite>(
-                sortBy: [SortDescriptor(\.createdAt, order: .forward)]
-            ))
-            return rows.map { row in
-                let object = (try? JSONSerialization.jsonObject(with: Data(row.payloadJSON.utf8))) as? [String: Any]
-                return (row.operation, row.entityID, object ?? [:])
-            }
         }
     }
 
@@ -113,10 +104,7 @@ struct GardenActionsTests {
         #expect(created.xFeet == 2.5)
         #expect(created.yFeet == 6.5)
         #expect(created.completedAt == nil)
-        let write = try #require(try h.pending().first)
-        #expect(write.op == "create")
-        #expect(write.payload["x_feet"] as? Double == 2.5)
-        #expect(write.payload["y_feet"] as? Double == 6.5)
+        #expect(h.signals == 1)
     }
 
     @Test func paintingASquareThatFilledMeanwhileIsRefused() throws {
@@ -128,7 +116,7 @@ struct GardenActionsTests {
         try h.insert([Self.event("other", x: 0.4, y: 0.6)])
         let outcome = try h.actions.perform(try #require(effects.first), size: Self.size)
         #expect(outcome == .refused("Row 8, square 1 already has a planting."))
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
         #expect(h.writes == 0)
     }
 
@@ -154,24 +142,26 @@ struct GardenActionsTests {
         #expect(try actions.setKind(.transplant, eventID: "e1") == .written)
         #expect(try actions.setPlannedFor(CalendarDay.make(year: 2026, month: 6, day: 2)!, eventID: "e1") == .written)
         #expect(try actions.setNotes("  thinned  ", eventID: "e1") == .written)
-        // Coalesced into one pending update; each call added only its key.
-        let payloads = try h.pending()
-        #expect(payloads.count == 1)
-        let keys = Set(try #require(payloads.first).payload.keys)
-        #expect(keys == ["kind", "planned_for", "notes"])
+        // Each call changed only its own field.
         let stored = try #require(try h.event("e1"))
         #expect(stored.kindRaw == "transplant")
         #expect(stored.plannedFor == "2026-06-02")
         #expect(stored.notes == "thinned")
         #expect(stored.xFeet == 0.5 && stored.yFeet == 0.5)
+        #expect(stored.completedAt == nil && stored.seedID == "seed_g1" && stored.bedID == Self.bedID)
         #expect(h.writes == 3)
+        #expect(h.signals == 3)
     }
 
     @Test func aSingleEditCarriesNoOtherKeys() throws {
         let h = Harness()
         try h.insert([Self.bed(), Self.event("e1")])
         try h.actions.setPlannedFor(CalendarDay.make(year: 2026, month: 7, day: 1)!, eventID: "e1")
-        #expect(Set(try #require(try h.pending().first).payload.keys) == ["planned_for"])
+        let stored = try #require(try h.event("e1"))
+        #expect(stored.plannedFor == "2026-07-01")
+        #expect(stored.kindRaw == "sowing" && stored.notes == nil && stored.completedAt == nil)
+        #expect(stored.xFeet == 0.5 && stored.yFeet == 0.5)
+        #expect(h.signals == 1)
     }
 
     @Test func unchangedEditsWriteNothing() throws {
@@ -182,7 +172,7 @@ struct GardenActionsTests {
         #expect(try actions.setPlannedFor(CalendarDay.make(year: 2026, month: 5, day: 1)!, eventID: "e1") == .unchanged)
         #expect(try actions.setNotes(" keep\n", eventID: "e1") == .unchanged)
         #expect(try actions.setDone(false, eventID: "e1") == .unchanged)
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
         #expect(h.writes == 0)
     }
 
@@ -190,9 +180,9 @@ struct GardenActionsTests {
         let h = Harness()
         try h.insert([Self.bed(), Self.event("e1", notes: "thin to 4")])
         #expect(try h.actions.setNotes("  \n", eventID: "e1") == .written)
-        let payload = try #require(try h.pending().first).payload
-        #expect(Set(payload.keys) == ["notes"])
-        #expect(payload["notes"] as? String == "")
+        let stored = try #require(try h.event("e1"))
+        #expect(stored.notes == "")
+        #expect(stored.kindRaw == "sowing" && stored.plannedFor == "2026-05-01" && stored.completedAt == nil)
     }
 
     @Test func completeThenUncompleteSendsSomeNil() throws {
@@ -201,12 +191,48 @@ struct GardenActionsTests {
         let now = Date(timeIntervalSince1970: 1_780_000_000)
         #expect(try h.actions.setDone(true, eventID: "e1", now: now) == .written)
         #expect(try h.event("e1")?.completedAt == 1_780_000_000_000)
-        #expect(try h.pending().first?.payload["completed_at"] as? Int64 == 1_780_000_000_000)
         #expect(try h.actions.setDone(false, eventID: "e1") == .written)
-        #expect(try h.event("e1")?.completedAt == nil)
-        let payload = try #require(try h.pending().first).payload
-        #expect(payload["completed_at"] is NSNull, "not done must be JSON null, not omitted or 0")
-        #expect(Set(payload.keys) == ["completed_at"])
+        #expect(try h.event("e1")?.completedAt == nil, "not done clears completion (.some(nil)), not 0")
+        #expect(try h.event("e1")?.plannedFor == "2026-05-01")
+        #expect(h.signals == 2)
+    }
+
+    // MARK: - Patch key sets
+
+    /// Each edit's patch carries only its own key, so a write never sends (or, through CloudKit, reverts)
+    /// a field the user didn't touch.
+    @Test func editPatchesCarryOnlyTheirOwnKey() throws {
+        let event = Self.event("e1", notes: "thin to 4")
+        let kind = try encodedObject(try #require(GardenActions.kindPatch(.transplant, for: event)))
+        #expect(Set(kind.keys) == ["kind"] && kind["kind"] as? String == "transplant")
+        let day = CalendarDay.make(year: 2026, month: 6, day: 2)!
+        let planned = try encodedObject(try #require(GardenActions.plannedForPatch(day, for: event)))
+        #expect(Set(planned.keys) == ["planned_for"] && planned["planned_for"] as? String == "2026-06-02")
+        let notes = try encodedObject(try #require(GardenActions.notesPatch("  thinned  ", for: event)))
+        #expect(Set(notes.keys) == ["notes"] && notes["notes"] as? String == "thinned")
+        let cleared = try encodedObject(try #require(GardenActions.notesPatch("  \n", for: event)))
+        #expect(Set(cleared.keys) == ["notes"] && cleared["notes"] as? String == "", "blank notes send an empty string")
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let done = try encodedObject(try #require(GardenActions.donePatch(true, for: event, now: now)))
+        #expect(Set(done.keys) == ["completed_at"] && (done["completed_at"] as? NSNumber)?.int64Value == 1_780_000_000_000)
+        let completed = Self.event("e2", done: 1_000)
+        let undone = try encodedObject(try #require(GardenActions.donePatch(false, for: completed, now: now)))
+        #expect(Set(undone.keys) == ["completed_at"])
+        #expect(undone["completed_at"] is NSNull, "not done must be JSON null, not omitted or 0")
+    }
+
+    @Test func unchangedEditsBuildNoPatch() {
+        let event = Self.event("e1", notes: "keep")
+        #expect(GardenActions.kindPatch(.sowing, for: event) == nil)
+        #expect(GardenActions.plannedForPatch(CalendarDay.make(year: 2026, month: 5, day: 1)!, for: event) == nil)
+        #expect(GardenActions.notesPatch(" keep\n", for: event) == nil)
+        #expect(GardenActions.donePatch(false, for: event, now: Date()) == nil)
+    }
+
+    @Test func aMovePatchCarriesExactlyBothCoordinates() throws {
+        let move = try encodedObject(GardenActions.movePatch(to: .init(x: 3.5, y: 7.5)))
+        #expect(Set(move.keys) == ["x_feet", "y_feet"])
+        #expect(move["x_feet"] as? Double == 3.5 && move["y_feet"] as? Double == 7.5)
     }
 
     // MARK: - Move
@@ -217,10 +243,10 @@ struct GardenActionsTests {
         let state = GardenInteraction.State(mode: .moving(eventID: "e1"), selectedEventID: "e1")
         let effects = GardenInteraction.reduce(state, .activate(Self.sq(3, 0)), context: try Self.context(h)).effects
         #expect(try h.actions.perform(try #require(effects.first), size: Self.size) == .written)
-        let payload = try #require(try h.pending().first).payload
-        #expect(Set(payload.keys) == ["x_feet", "y_feet"])
-        #expect(payload["x_feet"] as? Double == 3.5)
-        #expect(payload["y_feet"] as? Double == 7.5)
+        let stored = try #require(try h.event("e1"))
+        #expect(stored.xFeet == 3.5)
+        #expect(stored.yFeet == 7.5)
+        #expect(stored.kindRaw == "sowing" && stored.plannedFor == "2026-05-01")
     }
 
     @Test func aOneAxisMoveSendsBothWithTheUntouchedValueUnchanged() throws {
@@ -229,9 +255,9 @@ struct GardenActionsTests {
         let effects = GardenInteraction.reduce(GardenInteraction.State(selectedEventID: "e1"), .moveSelected(.right),
                                                context: try Self.context(h)).effects
         #expect(try h.actions.perform(try #require(effects.first), size: Self.size) == .written)
-        let payload = try #require(try h.pending().first).payload
-        #expect(payload["x_feet"] as? Double == 1.5)
-        #expect(payload["y_feet"] as? Double == 1.2)
+        let stored = try #require(try h.event("e1"))
+        #expect(stored.xFeet == 1.5)
+        #expect(stored.yFeet == 1.2)
     }
 
     @Test func aNoOpMoveWritesNothing() throws {
@@ -243,7 +269,7 @@ struct GardenActionsTests {
         // The reducer's own-square tap produces no effect at all.
         let state = GardenInteraction.State(mode: .moving(eventID: "e1"), selectedEventID: "e1")
         #expect(GardenInteraction.reduce(state, .activate(Self.sq(0, 7)), context: try Self.context(h)).effects.isEmpty)
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
         #expect(h.writes == 0)
     }
 
@@ -256,7 +282,8 @@ struct GardenActionsTests {
         stored.xFeet = 2.5
         try stored.modelContext?.save()
         #expect(try h.actions.perform(try #require(effects.first), size: Self.size) == .refused(GardenActions.eventMovedMessage))
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
+        #expect(try h.event("e1")?.xFeet == 2.5)
     }
 
     @Test func placingAnUnplacedEventSendsBothCoordinates() throws {
@@ -278,8 +305,7 @@ struct GardenActionsTests {
         #expect(try h.actions.delete(eventID: "b") == .written)
         #expect(try h.event("b")?.deletedAt != nil)
         #expect(Set(try h.liveEvents().map(\.id)) == ["a", "c"])
-        let write = try #require(try h.pending().first)
-        #expect(write.op == "delete" && write.id == "b")
+        #expect(h.signals == 1)
         // The square keeps its completed history.
         let inSquare = GardenGrid.contents(of: Self.sq(0, 7), events: try h.liveEvents().map { GridEvent($0, isFrostFlagged: false) },
                                            bedID: Self.bedID, size: Self.size)
@@ -307,7 +333,8 @@ struct GardenActionsTests {
         #expect(try h.actions.setDone(false, eventID: "old1") == .written)
         #expect(try h.event("old2")?.completedAt == 2)
         #expect(try h.event("now")?.notes == "Second sowing")
-        #expect(try h.pending().map(\.id) == ["old1"])
+        #expect(try h.event("old1")?.completedAt == nil)
+        #expect(h.signals == 1)
     }
 
     // MARK: - Stale-state re-checks
@@ -322,7 +349,7 @@ struct GardenActionsTests {
         let paint = GardenInteraction.Effect.createSowing(seedID: "seed_g1", square: Self.sq(1, 1),
                                                           position: .init(x: 1.5, y: 6.5), plannedFor: Self.day)
         #expect(try actions.perform(paint, size: Self.size) == .refused(GardenActions.scopeChangedMessage))
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
     }
 
     @Test func aDeletedOrResizedBedRefusesGridWrites() throws {
@@ -331,7 +358,7 @@ struct GardenActionsTests {
         let paint = GardenInteraction.Effect.createSowing(seedID: "seed_g1", square: Self.sq(1, 1),
                                                           position: .init(x: 1.5, y: 6.5), plannedFor: Self.day)
         #expect(try h.actions.perform(paint, size: Self.size) == .refused(GardenActions.bedGoneMessage))
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
     }
 
     @Test func aDeletedBedRefusesEditsAndDeletes() throws {
@@ -347,7 +374,7 @@ struct GardenActionsTests {
         #expect(try actions.setDone(true, eventID: "e1") == .refused(GardenActions.bedGoneMessage))
         #expect(try actions.setNotes("new", eventID: "e1") == .refused(GardenActions.bedGoneMessage))
         #expect(try actions.delete(eventID: "e1") == .refused(GardenActions.bedGoneMessage))
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
         #expect(h.writes == 0)
         let stored = try #require(try h.event("e1"))
         #expect(stored.deletedAt == nil && stored.notes == "keep" && stored.completedAt == nil)
@@ -369,7 +396,7 @@ struct GardenActionsTests {
         try stored.modelContext?.save()
         #expect(try h.actions.setDone(true, eventID: "e1") == .refused(GardenActions.eventGoneMessage))
         #expect(try h.actions.delete(eventID: "e1") == .refused(GardenActions.eventGoneMessage))
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
     }
 
     @Test func anEventInAnotherBedIsRefused() throws {
@@ -389,6 +416,6 @@ struct GardenActionsTests {
     @Test func aRefuseEffectWritesNothing() throws {
         let h = Harness()
         #expect(try h.actions.perform(.refuse("No"), size: Self.size) == .refused("No"))
-        #expect(try h.pending().isEmpty)
+        #expect(h.signals == 0)
     }
 }
