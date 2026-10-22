@@ -435,6 +435,7 @@ struct SeedCSVImportSheet: View {
     var body: some View {
         NavigationStack {
             content
+                .background { WBScreenBackground() }
                 .navigationTitle("Import CSV")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -505,9 +506,13 @@ struct SeedCSVImportSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("csvImport.result")
                 if canReview {
-                    Button("Review the rest") { Task { await session.buildPreview() } }
-                        .frame(minHeight: WBMetrics.minTouchTarget)
-                        .accessibilityIdentifier("csvImport.review")
+                    Button { Task { await session.buildPreview() } } label: {
+                        // The minimum height and the hit shape sit inside the label, so the target grows.
+                        Text("Review the rest")
+                            .frame(minHeight: WBMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityIdentifier("csvImport.review")
                 }
                 Spacer(minLength: 0)
             }
@@ -563,7 +568,7 @@ private struct SeedCSVImportPreview: View {
                 countRow("Skipped", plan.skippedCount, id: "skipped")
                 countRow("Errors", plan.errorRowCount, id: "errors")
             } header: {
-                Text("Seeds")
+                WBSectionHeader("Seeds")
             } footer: {
                 if plan.matchingEnabled {
                     Text(SeedCSVImportText.identityExplanation)
@@ -571,17 +576,19 @@ private struct SeedCSVImportPreview: View {
                 }
             }
             if !plan.newLocations.isEmpty || !plan.newTags.isEmpty {
-                Section("Will be created") {
+                Section {
                     if !plan.newLocations.isEmpty {
                         valueRow("Locations", plan.newLocations.map(\.name).joined(separator: ", "), id: "newLocations")
                     }
                     if !plan.newTags.isEmpty {
                         valueRow("Tags", plan.newTags.map(\.name).joined(separator: ", "), id: "newTags")
                     }
+                } header: {
+                    WBSectionHeader("Will be created")
                 }
             }
             if !plan.issues.isEmpty {
-                Section("Errors") {
+                Section {
                     ForEach(Array(plan.issues.prefix(Self.listLimit).enumerated()), id: \.offset) { _, issue in
                         Text(issue.text)
                             .font(.wbFootnote)
@@ -592,11 +599,13 @@ private struct SeedCSVImportPreview: View {
                             .font(.wbFootnote)
                             .foregroundStyle(WBColor.muted)
                     }
+                } header: {
+                    WBSectionHeader("Errors")
                 }
             }
             let skipped = plan.skippedTexts
             if !skipped.isEmpty {
-                Section("Skipped") {
+                Section {
                     ForEach(Array(skipped.prefix(Self.listLimit).enumerated()), id: \.offset) { _, text in
                         Text(text)
                             .font(.wbFootnote)
@@ -607,6 +616,8 @@ private struct SeedCSVImportPreview: View {
                             .font(.wbFootnote)
                             .foregroundStyle(WBColor.muted)
                     }
+                } header: {
+                    WBSectionHeader("Skipped")
                 }
             }
             if plan.writeCount == 0 {
@@ -618,7 +629,9 @@ private struct SeedCSVImportPreview: View {
             }
         }
         .formStyle(.grouped)
+        // On the Form itself: after `wbForm()`'s ZStack it would replace the rows' own identifiers.
         .accessibilityIdentifier("csvImport.preview")
+        .wbForm()
     }
 
     private func countRow(_ title: String, _ value: Int, id: String) -> some View {

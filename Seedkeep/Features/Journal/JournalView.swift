@@ -285,23 +285,28 @@ struct JournalView: View {
             .accessibilityIdentifier("journal.filter.remove")
         }
         .padding(.leading, 12)
-        .background(WBColor.accentSoft, in: Capsule())
-        .overlay(Capsule().strokeBorder(WBColor.line, lineWidth: 1))
+        // A capsule at one line (44pt tall); when large text wraps it onto more lines, the corners stay
+        // 22pt instead of curving across the text.
+        .background(WBColor.accentSoft, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(WBColor.line, lineWidth: 1))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("journal.filter.chip")
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The filter menu: every live seed, bed and planting in the household, plus "All entries".
+    /// The filter menu: "All entries", then every live seed, bed and planting in the household, each kind in
+    /// its own submenu so a long garden stays navigable.
     private func filterMenu(_ feed: JournalFeed) -> some View {
         Menu {
-            Picker("Filter", selection: $criteria.filter) {
-                Text("All entries").tag(JournalTarget?.none)
-                filterSection("Seeds", feed.index.seedOptions)
-                filterSection("Beds", feed.index.bedOptions)
-                filterSection("Plantings", feed.index.plantingOptions)
+            Button {
+                criteria.filter = nil
+            } label: {
+                filterItemLabel("All entries", isSelected: criteria.filter == nil)
             }
-            .pickerStyle(.inline)
+            .accessibilityAddTraits(criteria.filter == nil ? .isSelected : [])
+            filterSubmenu("Seeds", feed.index.seedOptions)
+            filterSubmenu("Beds", feed.index.bedOptions)
+            filterSubmenu("Plantings", feed.index.plantingOptions)
         } label: {
             Image(systemName: criteria.filter == nil
                   ? "line.3.horizontal.decrease.circle"
@@ -317,13 +322,29 @@ struct JournalView: View {
     }
 
     @ViewBuilder
-    private func filterSection(_ title: String, _ options: [JournalFilterOption]) -> some View {
+    private func filterSubmenu(_ title: String, _ options: [JournalFilterOption]) -> some View {
         if !options.isEmpty {
-            Section(title) {
+            Menu(title) {
                 ForEach(options, id: \.target) { option in
-                    Text(option.label).tag(Optional(option.target))
+                    let isSelected = criteria.filter == option.target
+                    Button {
+                        criteria.filter = option.target
+                    } label: {
+                        filterItemLabel(option.label, isSelected: isSelected)
+                    }
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
+        }
+    }
+
+    /// A menu item's label, with a checkmark when it is the active filter.
+    @ViewBuilder
+    private func filterItemLabel(_ title: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
         }
     }
 
