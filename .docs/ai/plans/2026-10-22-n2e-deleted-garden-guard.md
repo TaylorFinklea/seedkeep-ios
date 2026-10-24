@@ -2,8 +2,7 @@
 
 Status: draft 7, approved by Sol on round 7 (2026-10-23) with no open
 findings. Owner decisions are in the umbrella `decisions.md` ([2026-10-22]
-N2-E). The residual limits below need the owner's explicit acceptance
-before implementation. Branch `redesign/r2-design-system`.
+N2-E). The owner accepted the residual limits below on 2026-10-24. Branch `redesign/r2-design-system`.
 
 ## Owner decisions (fixed)
 
@@ -370,7 +369,7 @@ later launch confirms the defaults against the successor.
 G3 starts by checking this table against the schema, the code's
 per-household keys and the recovery restore path, and records any change.
 
-## Limits (proposed; need the owner's acceptance)
+## Limits (accepted by the owner, 2026-10-24)
 
 1. **Older builds** still recreate zones. N2-E devices treat a recreated
    zone as gone, because its root has a new `creationDate`. The old build's
@@ -407,7 +406,7 @@ per-household keys and the recovery restore path, and records any change.
 ## Slices (they ship together; none is release-safe alone)
 
 1. **G1 — Guard store, binding authority, grants, fresh IDs, discovery**
-   (`worker-opus`): §1, §2, §4. It adds a fake provisioner that records every
+   (`worker-sonnet`): §1, §2, §4. It adds a fake provisioner that records every
    zone save, root save and `.saveZone` staging. Tests:
    - existing gardens never create a zone (startup, first save,
      `zoneNotFound` retry, share, restored `.saveZone` in engine state);
@@ -434,7 +433,7 @@ per-household keys and the recovery restore path, and records any change.
      unprovisioned: it and its grant survive the relaunch, and no other
      garden is created;
    - account entries kept across switches.
-2. **G2 — Checks, signals, runner and fence** (`worker-opus`): §3, §5, §6.
+2. **G2 — Checks, signals, runner and fence** (`worker-sonnet`): §3, §5, §6.
    The fake engine gains zone deletions for each reason, zone fetch errors,
    permission failures, a recreated root, coalesced delete-then-modify
    batches, and multiple batches per send. Tests:
@@ -456,7 +455,7 @@ per-household keys and the recovery restore path, and records any change.
    - the pure classifier for every event and error, and the batch hook
      through the real `HouseholdSyncEngine` delegate code with a stub
      database.
-3. **G3 — Choice, keep, discard, silent re-home** (`worker-opus`): §7.
+3. **G3 — Choice, keep, discard, silent re-home** (`worker-sonnet`): §7.
    Tests:
    - crash and resume between every effect and its checkpoint, for keep,
      discard and the silent re-home;
