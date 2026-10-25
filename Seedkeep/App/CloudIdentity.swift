@@ -37,6 +37,15 @@ struct GardenZoneSummary: Equatable, Sendable, Identifiable {
     let name: String?
     let createdAt: Int64?
     let updatedAt: Int64?
+    /// What the listing learned about the zone's `Household` root. Only `.absent` (the root record
+    /// does not exist in the listed zone) means the zone is incomplete; `.unknown` (a timeout, a
+    /// network or batch failure) is never read as absent.
+    var rootStatus: RootStatus = .present
+
+    enum RootStatus: Equatable, Sendable { case present, absent, unknown }
+
+    /// Complete: the root was read. Discovery and resolution offer only complete zones.
+    var hasRoot: Bool { rootStatus == .present }
 
     var id: String { "\(scope.rawValue):\(ownerName):\(zoneName)" }
 }
@@ -52,9 +61,9 @@ protocol CloudIdentityProviding: Sendable {
     func listGardenZones(_ scope: GardenDatabaseScope) async throws -> [GardenZoneSummary]
 }
 
-/// Household ID for an account that has no garden yet. Derived from the iCloud user record name
-/// so two of the user's devices bootstrapping at the same time compute the same ID, and the
-/// existing idempotent zone provisioning converges on one zone.
+/// The household ID older builds minted for an account with no garden. Derived from the iCloud
+/// user record name. N2-E: kept only to resolve gardens that already use it; nothing creates a new
+/// garden with it (`GardenHouseholdID.make()` does).
 enum DeterministicHouseholdID {
     static func make(userRecordName: String) -> String {
         let digest = SHA256.hash(data: Data("seedkeep.household.v1:\(userRecordName)".utf8))
@@ -65,6 +74,17 @@ enum DeterministicHouseholdID {
                                b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
         return uuid.uuidString.lowercased()
     }
+}
+
+/// Household IDs of gardens created from N2-E on: `hhr_` plus a random UUID. A random ID never
+/// repeats, so a new garden cannot reuse the name of a zone that was deleted, and the prefix marks
+/// a garden made by an N2-E build. `DeterministicHouseholdID` stays only to resolve existing gardens.
+enum GardenHouseholdID {
+    static let prefix = "hhr_"
+
+    static func make() -> String { prefix + UUID().uuidString.lowercased() }
+
+    static func isRandomFormat(_ householdID: String) -> Bool { householdID.hasPrefix(prefix) }
 }
 
 /// Why the app cannot enter a garden right now.
@@ -95,6 +115,11 @@ struct GardenChoice: Equatable, Sendable {
         /// One garden is shared with the user and they also own one: candidates = the shared zone;
         /// ownGarden = their own garden.
         case sharedOrOwnGarden
+        /// N2-E discovery: the account lists a complete owned garden this device has neither seen
+        /// nor acknowledged (two devices creating gardens at once is the typical case).
+        /// `candidates` are those gardens; `ownGarden` is the garden this device holds, offered as
+        /// "keep".
+        case discoveredOwnGardens
     }
 
     let reason: Reason

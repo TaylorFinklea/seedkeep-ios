@@ -183,7 +183,7 @@ struct SettingsContent: View {
                         syncToken += 1
                         let token = syncToken
                         Task {
-                            await appEnv.syncIfPossible()
+                            await appEnv.syncIfPossible(userInitiated: true)
                             isSyncingNow = false
                             // Only show the success ✓ when the pass actually succeeded — a green
                             // check next to an error banner lies. N1: only a completed CloudKit pass
@@ -206,6 +206,24 @@ struct SettingsContent: View {
                         }
                     }
                     .disabled(isSyncingNow)
+                    // N2-E: three abandoned garden creations in 24 hours pause creating the garden.
+                    if let account = appEnv.auth.currentAccountKey, appEnv.gardenGuard.isCreationPaused(account) {
+                        VStack(alignment: .leading, spacing: WBMetrics.gap) {
+                            Text("Seedkeep couldn't create your garden in iCloud")
+                                .font(.wbBody)
+                                .foregroundStyle(WBColor.ink)
+                            Text("Your garden keeps working on this device.")
+                                .font(.wbCaption)
+                                .foregroundStyle(WBColor.muted)
+                            Button("Try again") {
+                                try? appEnv.gardenGuard.resumeCreation(account)
+                                Task { await appEnv.syncIfPossible(userInitiated: true) }
+                            }
+                            .accessibilityIdentifier("settings.creationPaused.tryAgain")
+                        }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("settings.creationPaused")
+                    }
                     // Visible CloudKit status so the beta test isn't blind.
                     Button {
                         checkingICloud = true
@@ -386,6 +404,10 @@ struct SettingsContent: View {
 /// the app-wide and device rows stay usable. The Server and Subscription rows are gone: the server
 /// is retired, so nothing here can reach them.
 enum SettingsPolicy {
+    /// N2-E: Settings content is shown only while the garden guard is readable; otherwise every
+    /// window, the Mac Settings window included, shows the blocking screen.
+    static func showsContent(guardReadable: Bool) -> Bool { guardReadable }
+
     enum Block: Equatable, CaseIterable {
         /// Shown in place of the household rows when no garden is open.
         case gardenUnavailable
@@ -429,6 +451,15 @@ struct MacSettingsWindow: View {
     @Environment(AppEnvironment.self) private var appEnv
 
     var body: some View {
+        if SettingsPolicy.showsContent(guardReadable: appEnv.gardenGuard.isReadable) {
+            content
+        } else {
+            GardenGuardBlockedView()
+                .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 620)
+        }
+    }
+
+    private var content: some View {
         NavigationStack {
             SettingsContent()
         }

@@ -12,6 +12,10 @@ import CloudKit
 @Observable
 public final class AppEnvironment {
     let auth: AuthController
+    /// N2-E: the garden guard store (binding authority, creation grants, discovery record).
+    let gardenGuard: GardenGuardStore
+    /// N2-E seam: where the silent re-home (G3) runs.
+    @ObservationIgnored let gardenRehomer: any GardenRehoming
     public let container: ModelContainer
     public let sync: SyncEngine
     public let recommendations: RecommendationStore
@@ -93,7 +97,10 @@ public final class AppEnvironment {
         let apiKeys = APIKeyStore(service: keychainService)
         // N1: the iCloud account is the identity. The token store is kept only so a legacy
         // rebind can clear the old Sign in with Apple bearer token.
-        let auth = AuthController(identity: LiveCloudIdentityProvider(), tokenStore: store)
+        let gardenGuard = GardenGuardStore.live()
+        let rehomer = DeferredGardenRehomer()
+        let auth = AuthController(identity: LiveCloudIdentityProvider(), tokenStore: store,
+                                  guardStore: gardenGuard, rehomer: rehomer)
         let container = Self.makeModelContainer()
         let sync = SyncEngine(container: container)
         // Stabilization B3 — sign-out / identity-switch wipe is wired in init() (below), where the
@@ -137,7 +144,8 @@ public final class AppEnvironment {
             sync: sync, recommendations: recommendations,
             journal: journal,
             preferences: prefs, apiKeys: apiKeys,
-            weatherWarnings: weatherWarnings
+            weatherWarnings: weatherWarnings,
+            gardenGuard: gardenGuard, gardenRehomer: rehomer
         )
     }
 
@@ -158,11 +166,16 @@ public final class AppEnvironment {
         scanStagingRoot: URL? = nil,
         cloudKitPermitted: Bool = true,
         cloudCoordinators: CloudCoordinatorFactory,
+        gardenGuard: GardenGuardStore = GardenGuardStore(directory: nil),
+        gardenRehomer: any GardenRehoming = DeferredGardenRehomer(),
+        makeHouseholdID: @escaping () -> String = { GardenHouseholdID.make() },
         forecastSource: @escaping RecommendationStore.ForecastSource = WeatherKitRefiner.fetchForecast,
         apiKeys: APIKeyStore = APIKeyStore(service: "app.seedkeep.tests.\(UUID().uuidString)")
     ) -> AppEnvironment {
         let prefs = AppPreferences(defaults: defaults)
-        let auth = AuthController(identity: identity, tokenStore: tokenStore, defaults: defaults)
+        let auth = AuthController(identity: identity, tokenStore: tokenStore, defaults: defaults,
+                                  guardStore: gardenGuard, rehomer: gardenRehomer,
+                                  makeHouseholdID: makeHouseholdID)
         let sync = SyncEngine(container: container)
         let weatherWarnings = WeatherWarningsService(
             container: container,
@@ -189,7 +202,8 @@ public final class AppEnvironment {
                 .appendingPathComponent("scan-staging-\(UUID().uuidString)", isDirectory: true),
             startsBackgroundServices: false,
             cloudKitPermitted: cloudKitPermitted,
-            cloudCoordinators: cloudCoordinators
+            cloudCoordinators: cloudCoordinators,
+            gardenGuard: gardenGuard, gardenRehomer: gardenRehomer
         )
         env.clearAppNotifications = {}
         // N3 test seam: the live launch's legacy-file cleanup, over the caller's directories.
@@ -272,8 +286,12 @@ public final class AppEnvironment {
         scanStagingRoot: URL = ScanPhotoStaging.rootURL(),
         startsBackgroundServices: Bool = true,
         cloudKitPermitted: Bool = true,
-        cloudCoordinators: CloudCoordinatorFactory = .live
+        cloudCoordinators: CloudCoordinatorFactory = .live,
+        gardenGuard: GardenGuardStore,
+        gardenRehomer: any GardenRehoming
     ) {
+        self.gardenGuard = gardenGuard
+        self.gardenRehomer = gardenRehomer
         self.cloudKitPermitted = cloudKitPermitted
         self.cloudCoordinators = cloudCoordinators
         self.auth = auth
@@ -509,7 +527,9 @@ public final class AppEnvironment {
     /// After a sync, runs `PetStateEngine.tickAll` on every alive pet in the
     /// household — this is the single canonical place where mood snapshots
     /// are materialized and lifecycle transitions are detected.
-    public func syncIfPossible() async {
+    public func syncIfPossible(userInitiated: Bool = false) async {
+        // N2-E: "Sync now" ends the wait that follows an abandoned garden creation.
+        if userInitiated { gardenGuard.releaseCreationHolds() }
         if case .signedIn(_, let household) = auth.state {
             let activeGardenHouseholdID = self.activeGardenHouseholdID ?? household.id
             // Household garden data syncs through CloudKit, the only sync (N3 removed the server's
@@ -587,7 +607,8 @@ public final class AppEnvironment {
     /// (`cloudKitPermitted` false) is never CloudKit-enabled. N3: account-deletion checkpoints no
     /// longer pause CloudKit; `LegacyAccountDeletionCleanup` deletes them at launch.
     var canUseCloudKit: Bool {
-        cloudKitPermitted && auth.isIdentityVerified
+        // N2-E: an unreadable guard blocks every garden's CloudKit sends.
+        cloudKitPermitted && auth.isIdentityVerified && gardenGuard.isReadable
     }
 
     /// CloudKit passes started through `runCloudSyncPass` that haven't finished. Observed, unlike
@@ -616,6 +637,7 @@ public final class AppEnvironment {
 
     /// Why CloudKit is paused, for Settings; nil when it is allowed.
     var cloudKitPauseReason: String? {
+        if !gardenGuard.isReadable { return "Seedkeep can't read its iCloud safety record" }
         if !auth.isIdentityVerified { return "your iCloud account isn't confirmed yet" }
         return nil
     }
@@ -697,12 +719,22 @@ public final class AppEnvironment {
     /// zone. Participant-first: the marker is checked before the owner path so a relaunch re-boots as
     /// participant and never orphan-mints a solo zone.
     private func ensureCloudCoordinator(household: HouseholdDTO) -> HouseholdCloudCoordinator {
+        func wire(_ coordinator: HouseholdCloudCoordinator) {
+            coordinator.isCloudKitAllowed = { [weak self] in self?.canUseCloudKit ?? false }
+            coordinator.purgeScanStaging = { [weak self] in try self?.purgeScanStaging() }
+            coordinator.guardContext = GardenGuardContext(
+                store: gardenGuard,
+                accountKey: { [weak self] in self?.auth.currentAccountKey },
+                rehomer: gardenRehomer)
+            coordinator.onOwnedGardensListed = { [weak self] owned, account, householdID in
+                self?.auth.considerDiscovery(owned: owned, accountKey: account, householdID: householdID)
+            }
+        }
         if let marker = loadParticipantMarker() {
             let key = HouseholdCloudCoordinator.participantScopeID(ownerZoneID: marker.zoneID)
             if let existing = cloudCoordinator, cloudCoordinatorKey == key { return existing }
             let coordinator = cloudCoordinators.participant(marker.zoneID, container)
-            coordinator.isCloudKitAllowed = { [weak self] in self?.canUseCloudKit ?? false }
-            coordinator.purgeScanStaging = { [weak self] in try self?.purgeScanStaging() }
+            wire(coordinator)
             cloudCoordinator = coordinator
             cloudCoordinatorKey = key
             return coordinator
@@ -710,8 +742,7 @@ public final class AppEnvironment {
         let key = HouseholdCloudCoordinator.ownerScopeID(householdID: household.id)
         if let existing = cloudCoordinator, cloudCoordinatorKey == key { return existing }
         let coordinator = cloudCoordinators.owner(household, container)
-        coordinator.isCloudKitAllowed = { [weak self] in self?.canUseCloudKit ?? false }
-        coordinator.purgeScanStaging = { [weak self] in try self?.purgeScanStaging() }
+        wire(coordinator)
         cloudCoordinator = coordinator
         cloudCoordinatorKey = key
         return coordinator
@@ -744,6 +775,18 @@ public final class AppEnvironment {
     /// Bumped whenever the participant marker is saved or cleared, so `activeGardenHouseholdID`'s
     /// observers (the Workbench scope reset, the Mac Settings window) see share adoption and leaving.
     private(set) var participantMarkerRevision = 0
+    /// N2-E: every binding change writes the guard's latest binding first. `participant` is the
+    /// shared garden about to be recorded (nil: leaving it). Throws when the guard can't be
+    /// written; the caller then writes no marker.
+    private func writeGuardBinding(participant: ParticipantMarker?) throws {
+        guard case .signedIn(let user, let household) = auth.state else { return }
+        let account = GardenGuardStore.accountKey(recordName: user.id)
+        let binding = GardenGuardBinding(
+            household: AuthController.bindingHousehold(household),
+            participant: participant.map { GardenGuardBinding.Participant(zoneName: $0.zoneName, ownerName: $0.ownerName) })
+        try gardenGuard.setBinding(account, binding)
+    }
+
     private func saveParticipantMarker(_ m: ParticipantMarker) {
         stateDefaults.set(m.zoneName, forKey: markerZoneKey)
         stateDefaults.set(m.ownerName, forKey: markerOwnerKey)
@@ -758,8 +801,13 @@ public final class AppEnvironment {
     /// OWNER: create (or fetch) the household's zone-wide CKShare for `UICloudSharingController`.
     /// Returns nil if not signed in, already a participant, or on error (surfaced to the banner).
     func prepareOwnerShare() async -> (share: CKShare, container: CKContainer)? {
-        guard canUseCloudKit, case .signedIn(_, let household) = auth.state,
+        guard canUseCloudKit, case .signedIn(let user, let household) = auth.state,
               !isViewingSharedHousehold else { return nil }
+        // N2-E: sharing needs a garden this device has seen exist. It never creates the zone.
+        guard gardenGuard.isSeen(GardenGuardStore.accountKey(recordName: user.id), household.id) else {
+            presentBanner("Your garden isn't in iCloud yet, so it can't be shared. Sync first, then try again.")
+            return nil
+        }
         do {
             let flow = SeedkeepShareFlow()
             let share = try await flow.makeOrFetchZoneWideShare(householdID: household.id, title: household.name)
@@ -910,7 +958,9 @@ public final class AppEnvironment {
             try HouseholdCloudCoordinator.resetStateToken(
                 at: HouseholdCloudCoordinator.participantStateTokenURL(ownerZoneID: zoneID)
             )
-            saveParticipantMarker(ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
+            let marker = ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName)
+            try writeGuardBinding(participant: marker)   // the guard first, then the marker
+            saveParticipantMarker(marker)
             cloudCoordinator = nil; cloudCoordinatorKey = nil   // force rebuild as participant
             return true
         } catch {
@@ -963,7 +1013,9 @@ public final class AppEnvironment {
         try HouseholdCloudCoordinator.resetStateToken(
             at: HouseholdCloudCoordinator.participantStateTokenURL(ownerZoneID: zoneID)
         )
-        saveParticipantMarker(ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
+        let marker = ParticipantMarker(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName)
+        try writeGuardBinding(participant: marker)   // the guard first, then the marker
+        saveParticipantMarker(marker)
         cloudCoordinator = nil; cloudCoordinatorKey = nil
         return true
     }
@@ -997,6 +1049,7 @@ public final class AppEnvironment {
             try HouseholdCloudCoordinator.resetStateToken(
                 at: HouseholdCloudCoordinator.ownerStateTokenURL(householdID: household.id))
         }
+        try writeGuardBinding(participant: nil)   // the guard first, then the marker
         clearParticipantMarker()
         cloudCoordinator = nil; cloudCoordinatorKey = nil
         await syncIfPossible()

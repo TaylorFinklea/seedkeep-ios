@@ -14,8 +14,14 @@ import SeedkeepCloudKit
 ///     throws on failure, and a failed wipe binds nothing.
 ///   - A legacy server identity is rebound in place to the iCloud user once its garden zone is
 ///     found: same household ID, rows, cursors, markers and pending writes. No wipe.
-///   - A fresh device lists its gardens, binds the only one, mints a deterministic household
-///     when there is none, and asks the user when there is more than one.
+///   - A fresh device lists its gardens, binds the only one, mints a fresh random household (with
+///     a creation grant) when there is none, and asks the user when there is more than one.
+///
+/// N2-E: the garden guard (`GardenGuardStore`) holds the account's latest binding. Every binding
+/// change writes the guard first, then the identity cache and participant marker. Resolution runs
+/// in this order: the iCloud account is verified, any different-account wipe finishes, the
+/// defaults are reconciled from the guard's latest binding, and only then may a selection commit
+/// a binding. A bound garden that does not exist yet is re-entered with its grant, never replaced.
 ///
 /// Stabilization B3 still holds: the cached identity records **who owns the local SwiftData
 /// store**. Transient iCloud failures enter from that cache with CloudKit paused
@@ -57,6 +63,14 @@ final class AuthController {
     private let identity: any CloudIdentityProviding
     private let tokenStore: any TokenStoring
     private let defaults: UserDefaults
+    /// N2-E: the account's latest binding, creation grants and discovery record.
+    let guardStore: GardenGuardStore
+    /// N2-E seam: where the silent re-home (G3) runs. G1 records the request in the guard.
+    @ObservationIgnored private let rehomer: any GardenRehoming
+    /// Fresh household IDs minted during the current resolution. A binding that commits one writes
+    /// its `pending` creation grant in the same guard write.
+    @ObservationIgnored private var mintedHouseholdIDs = Set<String>()
+    @ObservationIgnored private let makeHouseholdID: () -> String
 
     /// Wipes the local SwiftData store, pending-write queue, cursors, scheduled notifications and
     /// CloudKit engine state. Wired by `AppEnvironment` (the controller is constructed before the
@@ -95,16 +109,34 @@ final class AuthController {
         /// Fresh device: the shared zones still to resolve after an own-garden choice.
         let sharedZones: [GardenZoneSummary]
         let choice: GardenChoice
+        /// The owned gardens listed when the choice was made: all are acknowledged once it binds.
+        var listedOwnedIDs: [String] = []
+        /// The binding in force when discovery offered the choice; choosing to keep it re-enters it.
+        var currentBinding: GardenGuardBinding?
+        /// The device's own household whose zone the owned listing confirmed absent.
+        var absentOwnHouseholdID: String?
     }
 
     init(
         identity: any CloudIdentityProviding,
         tokenStore: any TokenStoring,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        guardStore: GardenGuardStore? = nil,
+        rehomer: (any GardenRehoming)? = nil,
+        makeHouseholdID: @escaping () -> String = { GardenHouseholdID.make() }
     ) {
         self.identity = identity
         self.tokenStore = tokenStore
         self.defaults = defaults
+        self.guardStore = guardStore ?? GardenGuardStore(directory: nil)
+        self.rehomer = rehomer ?? DeferredGardenRehomer()
+        self.makeHouseholdID = makeHouseholdID
+    }
+
+    /// The guard's key for the signed-in iCloud account, nil when none is resolved.
+    var currentAccountKey: String? {
+        if case .signedIn(let user, _) = state { return GardenGuardStore.accountKey(recordName: user.id) }
+        return nil
     }
 
     func wireLocalDataEraser(_ eraser: @escaping @MainActor () async throws -> Void) {
@@ -158,33 +190,54 @@ final class AuthController {
             guard await erase(gen, using: gardenSwitchEraser) else { return }
         }
 
+        if case .discoveredOwnGardens = choice.reason, garden == choice.ownGarden,
+           let current = pending.currentBinding {
+            // Discovery: the user keeps the garden this device has. Every garden shown is acknowledged.
+            bind(recordName: pending.recordName, household: Self.dto(current.household),
+                 participant: current.participant, replacingLegacy: false,
+                 acknowledging: pending.listedOwnedIDs, gen)
+            return
+        }
         if garden.scope == .owned {
             // An owned choice sets the own household and leaves any shared garden.
-            let own = ownHousehold(for: garden, pending: pending)
+            var own = ownHousehold(for: garden, pending: pending)
+            if pending.absentOwnHouseholdID == own.id {
+                // The device's own zone is confirmed absent and its data was discarded: a new
+                // garden, created through a grant.
+                own = Self.household(from: mintGarden(name: own.name))
+            }
             if case .multipleOwnGardens = choice.reason {
                 // Fresh device: the shared step still follows, with this own garden.
                 resolveParticipant(recordName: pending.recordName, ownGarden: garden, own: own,
-                                   ownsGarden: true, shared: pending.sharedZones, gen)
+                                   ownsGarden: true, shared: pending.sharedZones,
+                                   listedOwned: pending.listedOwnedIDs, gen)
                 return
             }
             bind(recordName: pending.recordName, household: own, participant: nil,
-                 replacingLegacy: pending.deviceHousehold != nil, gen)
+                 replacingLegacy: pending.deviceHousehold != nil,
+                 acknowledging: pending.listedOwnedIDs, gen)
         } else {
             // A shared choice keeps the own household and records the shared garden.
-            let own: HouseholdDTO
+            var own: HouseholdDTO
             if let deviceHousehold = pending.deviceHousehold {
                 own = deviceHousehold
             } else if let ownGarden = choice.ownGarden {
                 own = ownHousehold(for: ownGarden, pending: pending)
             } else {
-                own = Self.household(from: Self.deterministicGarden(recordName: pending.recordName))
+                own = Self.household(from: mintGarden())
             }
-            bind(recordName: pending.recordName, household: own, participant: garden,
-                 replacingLegacy: pending.deviceHousehold != nil, gen)
+            if pending.absentOwnHouseholdID == own.id {
+                own = Self.household(from: mintGarden(name: own.name))
+            }
+            bind(recordName: pending.recordName, household: own, participant: Self.participantRef(garden),
+                 replacingLegacy: pending.deviceHousehold != nil,
+                 acknowledging: pending.listedOwnedIDs, gen)
         }
     }
 
-    /// `.deviceGardenNotFound`: rebind to the household this device already holds. No wipe.
+    /// `.deviceGardenNotFound`: keep the household this device already holds. Its zone is absent
+    /// from iCloud, so the rows move to a fresh garden ID with a `pending` creation grant (the
+    /// silent re-home, G3). The device keeps the old household until that re-home runs.
     func keepDeviceGarden() async {
         guard case .choosingGarden(let choice) = state, choice.canKeepDeviceGarden else { return }
         guard let pending = pendingChoice, pending.choice == choice else {
@@ -193,8 +246,11 @@ final class AuthController {
         }
         guard let deviceHousehold = pending.deviceHousehold else { return }
         let gen = nextGeneration()
+        // Only a zone the listings confirmed absent is re-homed; otherwise the garden is kept as is.
+        let rehomeTo = pending.absentOwnHouseholdID == deviceHousehold.id ? mintHouseholdID() : nil
         bind(recordName: pending.recordName, household: deviceHousehold, participant: nil,
-             replacingLegacy: true, gen)
+             replacingLegacy: true, rehomeTo: rehomeTo,
+             acknowledging: pending.listedOwnedIDs, gen)
     }
 
     /// Called on `.CKAccountChanged`. The notification alone never wipes: only a confirmed
@@ -242,6 +298,8 @@ final class AuthController {
         switch choice.reason {
         case .deviceGardenNotFound, .sharedGardenUnavailable: return true
         case .multipleOwnGardens, .multipleSharedGardens, .sharedOrOwnGarden: return false
+        // Keeping the garden this device has discards nothing; picking another replaces it.
+        case .discoveredOwnGardens: return garden != choice.ownGarden
         }
     }
 
@@ -282,26 +340,29 @@ final class AuthController {
         await resolve(recordName: recordName, gen)
     }
 
+    /// Resolution order (N2-E): the iCloud account was verified by the caller. Then any
+    /// different-account wipe finishes (the identity cache still names the local store's owner), then
+    /// the defaults are reconciled from the guard's latest binding for this account, and only then may
+    /// a selection (the fast path, the legacy rebind, `resolveFresh`, the chooser) commit a binding.
     private func resolve(recordName: String, _ gen: Int) async {
+        let account = GardenGuardStore.accountKey(recordName: recordName)
         if let cached = loadIdentity(forKey: Self.identityCacheKey) {
             if defaults.object(forKey: Self.legacyIdentityCacheKey) != nil {
                 // A rebind was interrupted after writing the new cache: finish it.
                 defaults.removeObject(forKey: Self.legacyIdentityCacheKey)
                 tokenStore.clear()
             }
-            if cached.user.id == recordName {
-                pendingChoice = nil
-                isIdentityVerified = true
-                state = .signedIn(user: cached.user, household: cached.household)
-                return
+            if cached.user.id != recordName {
+                // A confirmed different iCloud user: wipe the previous user's store first.
+                isIdentityVerified = false
+                guard await erase(gen, using: localDataEraser) else { return }
+                clearCachedIdentities()
+                ActiveGardenContext.clearParticipant(in: defaults)
             }
-            // A confirmed different iCloud user: wipe the previous user's store, then resolve
-            // the new user as a fresh device.
-            isIdentityVerified = false
-            guard await erase(gen, using: localDataEraser) else { return }
-            clearCachedIdentities()
-            ActiveGardenContext.clearParticipant(in: defaults)
-            await resolveFresh(recordName: recordName, gen)
+        }
+        guard reconcileDefaults(recordName: recordName, account: account) else { return }
+        if let cached = loadIdentity(forKey: Self.identityCacheKey), cached.user.id == recordName {
+            enterCachedGarden(cached, recordName: recordName, account: account, gen)
             return
         }
         if let legacy = loadIdentity(forKey: Self.legacyIdentityCacheKey) {
@@ -309,6 +370,122 @@ final class AuthController {
             return
         }
         await resolveFresh(recordName: recordName, gen)
+    }
+
+    /// Brings the identity cache and participant marker in line with the guard's latest binding for
+    /// `account`. With no binding yet (an install from before N2-E), the guard is seeded from the
+    /// defaults instead. Returns false after a failure (the state is `.failed`).
+    private func reconcileDefaults(recordName: String, account: String) -> Bool {
+        let cached = loadIdentity(forKey: Self.identityCacheKey)
+        guard let binding = guardStore.latestBinding(account) else {
+            if guardStore.isBindingWritten(account) {
+                // An explicitly cleared binding (a discard): the defaults are cleared too, never
+                // re-seeded from a stale identity cache or marker.
+                if cached != nil || defaults.object(forKey: Self.legacyIdentityCacheKey) != nil
+                    || ActiveGardenContext.participant(in: defaults) != nil {
+                    ActiveGardenContext.clearParticipant(in: defaults)
+                    clearCachedIdentities()
+                }
+                return true
+            }
+            // Never written (an install from before N2-E): seed the guard from an existing
+            // same-account identity.
+            guard let cached, cached.user.id == recordName else { return true }
+            let seeded = GardenGuardBinding(
+                household: Self.bindingHousehold(cached.household),
+                participant: ActiveGardenContext.participant(in: defaults).map {
+                    GardenGuardBinding.Participant(zoneName: $0.zoneName, ownerName: $0.ownerName)
+                })
+            do { try guardStore.setBinding(account, seeded); return true } catch {
+                fail(error, fallback: "Seedkeep couldn't save its iCloud safety record. Try again.")
+                return false
+            }
+        }
+        let recorded = ActiveGardenContext.participant(in: defaults)
+        let markerMatches = recorded?.zoneName == binding.participant?.zoneName
+            && recorded?.ownerName == binding.participant?.ownerName
+        let cacheMatches = cached.map { $0.user.id == recordName && $0.household.id == binding.household.id } ?? false
+        if markerMatches && cacheMatches { return true }
+        if !markerMatches, let participant = binding.participant {
+            do { try participantGardenAdopted?(participant.zoneName, participant.ownerName) } catch {
+                fail(error, fallback: "The shared garden couldn't be opened on this device. Try again.")
+                return false
+            }
+        }
+        // The guard is the authority: rewrite the participant marker, then the cache.
+        if let participant = binding.participant {
+            ActiveGardenContext.recordParticipant(zoneName: participant.zoneName,
+                                                  ownerName: participant.ownerName, in: defaults)
+        } else {
+            ActiveGardenContext.clearParticipant(in: defaults)
+        }
+        if !cacheMatches {
+            saveIdentity(CachedIdentity(user: Self.user(recordName: recordName),
+                                        household: Self.dto(binding.household)),
+                         forKey: Self.identityCacheKey)
+            if defaults.object(forKey: Self.legacyIdentityCacheKey) != nil {
+                defaults.removeObject(forKey: Self.legacyIdentityCacheKey)
+                tokenStore.clear()
+            }
+        }
+        return true
+    }
+
+    /// The same-account fast path: enters at once from the reconciled cache, with no network call.
+    /// Discovery runs later, from the owner coordinator's start (`considerDiscovery`).
+    private func enterCachedGarden(
+        _ cached: CachedIdentity, recordName: String, account: String, _ gen: Int
+    ) {
+        pendingChoice = nil
+        isIdentityVerified = true
+        state = .signedIn(user: cached.user, household: cached.household)
+    }
+
+    /// Discovery after entry (N2-E §4). The owner coordinator's start passes the owned zones it
+    /// listed. Best effort and silent: nothing is wiped or rebound. Only when an eligible garden
+    /// is found does the existing chooser appear (`.discoveredOwnGardens`), once, in every window.
+    /// Dropped when the account, the garden or the verification changed since the listing began,
+    /// or when another pass or a chooser is in progress.
+    func considerDiscovery(owned: [GardenZoneSummary], accountKey: String, householdID: String) {
+        guard case .signedIn(let user, let household) = state, isIdentityVerified,
+              inFlight == nil, pendingChoice == nil,
+              GardenGuardStore.accountKey(recordName: user.id) == accountKey,
+              household.id == householdID else { return }
+        let cached = CachedIdentity(user: user, household: household)
+        guard let choice = discoveryChoice(owned: owned, cached: cached, account: accountKey) else { return }
+        _ = nextGeneration()   // withdraw anything keyed to the signed-in state
+        offer(choice, recordName: user.id, deviceHousehold: nil,
+              listedOwnedIDs: choice.candidates.map(\.householdID),   // everything shown is acknowledged on the answer
+              currentBinding: guardStore.latestBinding(accountKey))
+    }
+
+    /// Discovery (N2-E §4). The first N2-E resolution of an account acknowledges the gardens with
+    /// pre-N2-E IDs, so users who chose before are not asked again; random-format gardens are never
+    /// auto-acknowledged. Eligible: complete (has a root), not retired, not seen, not acknowledged,
+    /// and not the garden this device holds.
+    private func discoveryChoice(
+        owned: [GardenZoneSummary], cached: CachedIdentity, account: String
+    ) -> GardenChoice? {
+        let bound = cached.household.id
+        if owned.contains(where: { $0.householdID == bound }) {
+            try? guardStore.recordSeen(account, bound, generation: nil)
+        }
+        if !guardStore.account(account).discoveryInitialized {
+            let preN2E = owned.map(\.householdID).filter { !GardenHouseholdID.isRandomFormat($0) }
+            do {
+                try guardStore.markDiscoveryInitialized(account, acknowledging: preN2E + [bound])
+            } catch { return nil }
+        }
+        // The trigger is an eligible garden neither seen nor acknowledged; the chooser then offers
+        // every eligible garden (complete, not retired), acknowledged ones included.
+        let eligible = owned.filter {
+            $0.hasRoot && $0.householdID != bound && !guardStore.isRetired(account, $0.householdID)
+        }
+        guard eligible.contains(where: {
+            !guardStore.isSeen(account, $0.householdID) && !guardStore.isAcknowledged(account, $0.householdID)
+        }) else { return nil }
+        return GardenChoice(reason: .discoveredOwnGardens, candidates: eligible,
+                            ownGarden: Self.summary(for: cached.household))
     }
 
     private func revalidate(_ gen: Int, verifiedUser: String?) async {
@@ -347,6 +524,36 @@ final class AuthController {
         }
     }
 
+    /// The owned gardens resolution may select or offer: complete (a rootless zone is an interrupted
+    /// creation, never adopted, offered or trusted) and not retired.
+    ///
+    /// A zone whose root status is unknown (a timeout, a network or batch failure) is never read as
+    /// absent: the listing is treated as failed, so resolution takes its retry path and never mints,
+    /// re-homes, offers or drops a garden on that basis.
+    private func usable(_ owned: [GardenZoneSummary], recordName: String) throws -> [GardenZoneSummary] {
+        let account = GardenGuardStore.accountKey(recordName: recordName)
+        return try complete(owned).filter { !guardStore.isRetired(account, $0.householdID) }
+    }
+
+    /// The complete zones of a listing (owned or shared): root present. Confirmed-rootless zones
+    /// are dropped; an unknown root status fails the listing.
+    private func complete(_ zones: [GardenZoneSummary]) throws -> [GardenZoneSummary] {
+        if zones.contains(where: { $0.rootStatus == .unknown }) { throw RootStatusUnknown() }
+        return zones.filter { $0.rootStatus == .present }
+    }
+
+    private struct RootStatusUnknown: Error {}
+
+    /// What a binding or answered chooser acknowledges: on the account's first N2-E resolution the
+    /// listed gardens with pre-N2-E IDs, plus the gardens actually `shown` in a chooser. Never a
+    /// random-format garden the user was not shown (the bound garden is added by `bind`).
+    private func acknowledgements(recordName: String, listed: [GardenZoneSummary], shown: [String] = []) -> [String] {
+        let account = GardenGuardStore.accountKey(recordName: recordName)
+        let firstLaunch = guardStore.account(account).discoveryInitialized
+            ? [] : listed.map(\.householdID).filter { !GardenHouseholdID.isRandomFormat($0) }
+        return firstLaunch + shown
+    }
+
     /// Legacy server identity: find its garden in this iCloud account and rebind in place.
     private func resolveLegacy(_ legacy: CachedIdentity, recordName: String, _ gen: Int) async {
         let household = legacy.household
@@ -356,35 +563,53 @@ final class AuthController {
             }
             let shared: [GardenZoneSummary]
             do {
-                shared = try await identity.listGardenZones(.shared)
+                shared = try complete(try await identity.listGardenZones(.shared))
             } catch {
                 guard isCurrent(gen) else { return }
                 return enterLegacyUnconfirmed(legacy)
             }
             guard isCurrent(gen) else { return }
             if shared.contains(where: isMarkerZone) {
-                return rebind(recordName: recordName, household: household)
+                return bind(recordName: recordName, household: household,
+                            participant: GardenGuardBinding.Participant(zoneName: marker.zoneName, ownerName: marker.ownerName),
+                            replacingLegacy: true, gen)
             }
             // The shared garden is gone. Offer the own garden and any other shared gardens.
-            let owned = try? await identity.listGardenZones(.owned)
+            let rawOwned = try? await identity.listGardenZones(.owned)
             guard isCurrent(gen) else { return }
+            // A listing whose own root couldn't be read verifies nothing: enter unconfirmed rather
+            // than offer (and possibly bind) a garden whose root wasn't confirmed.
+            let owned: [GardenZoneSummary]?
+            do { owned = try rawOwned.map { try usable($0, recordName: recordName) } } catch {
+                return enterLegacyUnconfirmed(legacy)
+            }
             let ownGarden = owned?.first { $0.householdID == household.id } ?? Self.summary(for: household)
             let choice = GardenChoice(reason: .sharedGardenUnavailable(zoneName: marker.zoneName),
                                       candidates: shared.filter { !isMarkerZone($0) },
                                       ownGarden: ownGarden)
-            return offer(choice, recordName: recordName, deviceHousehold: household)
+            // A confirmed listing without the device's own zone: choosing the own garden makes a
+            // new one through a grant instead of recreating that zone.
+            let absentOwn = owned.flatMap { list in
+                list.contains(where: { $0.householdID == household.id }) ? nil : household.id
+            }
+            return offer(choice, recordName: recordName, deviceHousehold: household,
+                         listedOwnedIDs: owned.map { acknowledgements(recordName: recordName, listed: $0,
+                                                                      shown: [household.id]) } ?? [],
+                         absentOwnHouseholdID: absentOwn)
         }
 
         let ownZoneName = SeedkeepRecordNames.zoneName(householdID: household.id)
         let owned: [GardenZoneSummary]
         let shared: [GardenZoneSummary]
         do {
-            owned = try await identity.listGardenZones(.owned)
+            owned = try usable(try await identity.listGardenZones(.owned), recordName: recordName)
             guard isCurrent(gen) else { return }
             if owned.contains(where: { $0.zoneName == ownZoneName }) {
-                return rebind(recordName: recordName, household: household)
+                return bind(recordName: recordName, household: household, participant: nil,
+                            replacingLegacy: true,
+                            acknowledging: acknowledgements(recordName: recordName, listed: owned), gen)
             }
-            shared = try await identity.listGardenZones(.shared)
+            shared = try complete(try await identity.listGardenZones(.shared))
         } catch {
             guard isCurrent(gen) else { return }
             return enterLegacyUnconfirmed(legacy)
@@ -392,13 +617,19 @@ final class AuthController {
         guard isCurrent(gen) else { return }
         let candidates = (owned + shared).filter { $0.householdID != household.id }
         if candidates.isEmpty {
-            // Nothing else in this account: keep the device's garden. The owner coordinator
-            // provisions its zone at first sync, as before.
-            return rebind(recordName: recordName, household: household)
+            // Nothing else in this account, and the device's own zone is absent from iCloud: the
+            // rows move to a fresh garden ID with a `pending` creation grant (the silent re-home,
+            // G3). The device's zone is never recreated.
+            return bind(recordName: recordName, household: household, participant: nil,
+                        replacingLegacy: true, rehomeTo: mintHouseholdID(),
+                        acknowledging: acknowledgements(recordName: recordName, listed: owned), gen)
         }
         offer(GardenChoice(reason: .deviceGardenNotFound(householdID: household.id),
                            candidates: candidates, ownGarden: nil),
-              recordName: recordName, deviceHousehold: household)
+              recordName: recordName, deviceHousehold: household,
+              listedOwnedIDs: acknowledgements(recordName: recordName, listed: owned,
+                                               shown: candidates.filter { $0.scope == .owned }.map(\.householdID)),
+              absentOwnHouseholdID: household.id)
     }
 
     /// No cache: a fresh install or a new device. Never mints over a failed listing, and never
@@ -407,9 +638,9 @@ final class AuthController {
         let shared: [GardenZoneSummary]
         let owned: [GardenZoneSummary]
         do {
-            shared = try await identity.listGardenZones(.shared)
+            shared = try complete(try await identity.listGardenZones(.shared))
             guard isCurrent(gen) else { return }
-            owned = try await identity.listGardenZones(.owned)
+            owned = try usable(try await identity.listGardenZones(.owned), recordName: recordName)
         } catch {
             guard isCurrent(gen) else { return }
             return block(.couldNotVerify)
@@ -418,36 +649,41 @@ final class AuthController {
 
         let ownGarden: GardenZoneSummary
         switch owned.count {
-        case 0: ownGarden = Self.deterministicGarden(recordName: recordName)
+        case 0: ownGarden = mintGarden()   // a brand-new garden: fresh random ID, creation grant at bind
         case 1: ownGarden = owned[0]
         default:
             return offer(GardenChoice(reason: .multipleOwnGardens, candidates: owned, ownGarden: nil),
-                         recordName: recordName, deviceHousehold: nil, sharedZones: shared)
+                         recordName: recordName, deviceHousehold: nil, sharedZones: shared,
+                         listedOwnedIDs: acknowledgements(recordName: recordName, listed: owned,
+                                                          shown: owned.map(\.householdID)))
         }
         resolveParticipant(recordName: recordName, ownGarden: ownGarden,
                            own: Self.household(from: ownGarden), ownsGarden: !owned.isEmpty,
-                           shared: shared, gen)
+                           shared: shared,
+                           listedOwned: acknowledgements(recordName: recordName, listed: owned), gen)
     }
 
     /// The shared step of a fresh resolution, once the own garden is known. `ownsGarden` is true
-    /// when that garden is an existing owned zone (not the deterministic one): a lone shared
+    /// when that garden is an existing owned zone (not a newly minted one): a lone shared
     /// garden is then a choice, never joined automatically over the user's own.
     private func resolveParticipant(
         recordName: String, ownGarden: GardenZoneSummary, own: HouseholdDTO, ownsGarden: Bool,
-        shared: [GardenZoneSummary], _ gen: Int
+        shared: [GardenZoneSummary], listedOwned: [String], _ gen: Int
     ) {
         guard isCurrent(gen) else { return }
         switch shared.count {
         case 0:
-            bind(recordName: recordName, household: own, participant: nil, replacingLegacy: false, gen)
+            bind(recordName: recordName, household: own, participant: nil, replacingLegacy: false,
+                 acknowledging: listedOwned, gen)
         case 1 where !ownsGarden:
-            bind(recordName: recordName, household: own, participant: shared[0], replacingLegacy: false, gen)
+            bind(recordName: recordName, household: own, participant: Self.participantRef(shared[0]),
+                 replacingLegacy: false, acknowledging: listedOwned, gen)
         case 1:
             offer(GardenChoice(reason: .sharedOrOwnGarden, candidates: shared, ownGarden: ownGarden),
-                  recordName: recordName, deviceHousehold: nil)
+                  recordName: recordName, deviceHousehold: nil, listedOwnedIDs: listedOwned)
         default:
             offer(GardenChoice(reason: .multipleSharedGardens, candidates: shared, ownGarden: ownGarden),
-                  recordName: recordName, deviceHousehold: nil)
+                  recordName: recordName, deviceHousehold: nil, listedOwnedIDs: listedOwned)
         }
     }
 
@@ -461,10 +697,13 @@ final class AuthController {
 
     private func offer(
         _ choice: GardenChoice, recordName: String, deviceHousehold: HouseholdDTO?,
-        sharedZones: [GardenZoneSummary] = []
+        sharedZones: [GardenZoneSummary] = [], listedOwnedIDs: [String] = [],
+        currentBinding: GardenGuardBinding? = nil, absentOwnHouseholdID: String? = nil
     ) {
         pendingChoice = PendingChoice(recordName: recordName, deviceHousehold: deviceHousehold,
-                                      sharedZones: sharedZones, choice: choice)
+                                      sharedZones: sharedZones, choice: choice,
+                                      listedOwnedIDs: listedOwnedIDs, currentBinding: currentBinding,
+                                      absentOwnHouseholdID: absentOwnHouseholdID)
         state = .choosingGarden(choice)
     }
 
@@ -487,24 +726,16 @@ final class AuthController {
         state = .signedIn(user: legacy.user, household: legacy.household)
     }
 
-    /// Crash-safe rebind of a legacy identity to the iCloud user: the new cache is written
-    /// before the legacy key is removed, and the bearer token is cleared only after both. The
-    /// household ID, cursors, markers and pending writes are untouched; nothing is wiped.
-    private func rebind(recordName: String, household: HouseholdDTO) {
-        let user = Self.user(recordName: recordName)
-        saveIdentity(CachedIdentity(user: user, household: household), forKey: Self.identityCacheKey)
-        defaults.removeObject(forKey: Self.legacyIdentityCacheKey)
-        tokenStore.clear()
-        pendingChoice = nil
-        isIdentityVerified = true
-        state = .signedIn(user: user, household: household)
-    }
-
-    /// Binds a resolved or chosen garden: the participant marker first, then the cache, then
-    /// state. `replacingLegacy` finishes a legacy identity's rebind.
+    /// Binds a resolved or chosen garden. The guard's latest binding is written FIRST (with the
+    /// `pending` creation grant of a freshly minted garden, and the re-home journal when the device's
+    /// garden is kept under a fresh ID, in the same write). Then the participant marker, then the
+    /// identity cache, then state. `replacingLegacy` finishes a legacy identity's rebind: the new
+    /// cache is written before the legacy key is removed, and the bearer token is cleared only after
+    /// both. `acknowledging` (when the owned gardens were listed) marks them acknowledged.
     private func bind(
-        recordName: String, household: HouseholdDTO, participant: GardenZoneSummary?,
-        replacingLegacy: Bool, _ gen: Int
+        recordName: String, household: HouseholdDTO, participant: GardenGuardBinding.Participant?,
+        replacingLegacy: Bool, rehomeTo freshHouseholdID: String? = nil, acknowledging: [String]? = nil,
+        _ gen: Int
     ) {
         guard isCurrent(gen) else { return }
         if let participant {
@@ -518,19 +749,49 @@ final class AuthController {
                     return fail(error, fallback: "The shared garden couldn't be opened on this device. Try again.")
                 }
             }
+        }
+
+        // The guard first.
+        let account = GardenGuardStore.accountKey(recordName: recordName)
+        var grants: [String] = []
+        var journals: [String: GardenGoneRecord] = [:]
+        if mintedHouseholdIDs.contains(household.id) { grants.append(household.id) }
+        if let fresh = freshHouseholdID {
+            grants.append(fresh)
+            journals[household.id] = GardenGoneRecord(
+                reason: .absentZone, action: .rehome, phase: .journaled,
+                replacementID: fresh, createdAt: Date())
+        }
+        do {
+            try guardStore.setBinding(
+                account, GardenGuardBinding(household: Self.bindingHousehold(household), participant: participant),
+                newGrants: grants, journals: journals,
+                acknowledging: acknowledging ?? [], initializeDiscovery: acknowledging != nil)
+        } catch {
+            return fail(error, fallback: "Seedkeep couldn't save its iCloud safety record. Try again.")
+        }
+        mintedHouseholdIDs.subtract(grants)
+
+        // Then the defaults.
+        if let participant {
             ActiveGardenContext.recordParticipant(zoneName: participant.zoneName,
                                                   ownerName: participant.ownerName, in: defaults)
         } else {
             ActiveGardenContext.clearParticipant(in: defaults)
         }
-        if replacingLegacy {
-            return rebind(recordName: recordName, household: household)
-        }
         let user = Self.user(recordName: recordName)
         saveIdentity(CachedIdentity(user: user, household: household), forKey: Self.identityCacheKey)
+        if replacingLegacy {
+            defaults.removeObject(forKey: Self.legacyIdentityCacheKey)
+            tokenStore.clear()
+        }
         pendingChoice = nil
         isIdentityVerified = true
         state = .signedIn(user: user, household: household)
+        if let fresh = freshHouseholdID {
+            rehomer.rehomeRequested(GardenRehomeRequest(
+                accountKey: account, fromHouseholdID: household.id, toHouseholdID: fresh, reason: .absentZone))
+        }
     }
 
     /// Runs `eraser` (`localDataEraser` for a different user or sign-out, `gardenSwitchEraser`
@@ -589,13 +850,34 @@ final class AuthController {
 
     // MARK: - DTOs
 
-    /// The synthetic own garden of an account that has none: the deterministic household ID.
-    static func deterministicGarden(recordName: String) -> GardenZoneSummary {
-        let id = DeterministicHouseholdID.make(userRecordName: recordName)
-        let now = nowMillis()
+    /// A brand-new own garden: a fresh random household ID. Its `pending` creation grant is written
+    /// when a binding commits it (`bind`), never before.
+    private func mintGarden(name: String = "My garden") -> GardenZoneSummary {
+        let id = mintHouseholdID()
+        let now = Self.nowMillis()
         return GardenZoneSummary(householdID: id, zoneName: SeedkeepRecordNames.zoneName(householdID: id),
                                  ownerName: CKCurrentUserDefaultName, scope: .owned,
-                                 name: "My garden", createdAt: now, updatedAt: now)
+                                 name: name, createdAt: now, updatedAt: now)
+    }
+
+    private func mintHouseholdID() -> String {
+        let id = makeHouseholdID()
+        mintedHouseholdIDs.insert(id)
+        return id
+    }
+
+    static func participantRef(_ garden: GardenZoneSummary) -> GardenGuardBinding.Participant {
+        GardenGuardBinding.Participant(zoneName: garden.zoneName, ownerName: garden.ownerName)
+    }
+
+    static func bindingHousehold(_ household: HouseholdDTO) -> GardenGuardBinding.Household {
+        GardenGuardBinding.Household(id: household.id, name: household.name,
+                                     createdAt: household.created_at, updatedAt: household.updated_at)
+    }
+
+    static func dto(_ household: GardenGuardBinding.Household) -> HouseholdDTO {
+        makeDTO(DTOFields.Household(id: household.id, name: household.name,
+                                    created_at: household.createdAt, updated_at: household.updatedAt))
     }
 
     private static func summary(for household: HouseholdDTO) -> GardenZoneSummary {

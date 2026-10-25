@@ -56,23 +56,41 @@ struct LiveCloudIdentityProvider: CloudIdentityProviding {
                     SeedkeepRecordNames.householdID(fromZoneName: zoneID.zoneName)),
                 zoneID: zoneID)
         }
-        // The `Household` root only supplies display fields. A missing or unreadable root (or a
-        // failed batch) leaves them nil; it is not an error.
-        let roots: [CKRecord.ID: RootFields] = (try? await Self.bounded {
-            let results = try await database.records(for: rootIDs)
-            var fields: [CKRecord.ID: RootFields] = [:]
-            for (id, result) in results {
-                guard case .success(let record) = result else { continue }
-                fields[id] = RootFields(
-                    name: record["name"] as? String,
-                    createdAt: (record["createdAt"] as? NSNumber)?.int64Value,
-                    updatedAt: (record["updatedAt"] as? NSNumber)?.int64Value)
+        // The `Household` root supplies display fields and tells a complete zone from an
+        // interrupted creation. Only `unknownItem` for the root record confirms it absent; any
+        // other error, a timeout or a failed batch leaves the status `.unknown`, which resolution
+        // never reads as absent.
+        let roots: [CKRecord.ID: RootRead]
+        do {
+            roots = try await Self.bounded {
+                let results = try await database.records(for: rootIDs)
+                var reads: [CKRecord.ID: RootRead] = [:]
+                for (id, result) in results {
+                    switch result {
+                    case .success(let record):
+                        reads[id] = .present(RootFields(
+                            name: record["name"] as? String,
+                            createdAt: (record["createdAt"] as? NSNumber)?.int64Value,
+                            updatedAt: (record["updatedAt"] as? NSNumber)?.int64Value))
+                    case .failure(let error):
+                        reads[id] = Self.rootStatus(forReadError: error) == .absent ? .absent : .unknown
+                    }
+                }
+                return reads
             }
-            return fields
-        }) ?? [:]
+        } catch {
+            roots = [:]   // every root stays unknown
+        }
 
         return zip(zoneIDs, rootIDs).map { zoneID, rootID in
-            let root = roots[rootID]
+            let read = roots[rootID] ?? .unknown
+            var root: RootFields?
+            var status = GardenZoneSummary.RootStatus.unknown
+            switch read {
+            case .present(let fields): root = fields; status = .present
+            case .absent: status = .absent
+            case .unknown: break
+            }
             return GardenZoneSummary(
                 householdID: SeedkeepRecordNames.householdID(fromZoneName: zoneID.zoneName),
                 zoneName: zoneID.zoneName,
@@ -80,8 +98,20 @@ struct LiveCloudIdentityProvider: CloudIdentityProviding {
                 scope: scope,
                 name: root?.name,
                 createdAt: root?.createdAt,
-                updatedAt: root?.updatedAt)
+                updatedAt: root?.updatedAt,
+                rootStatus: status)
         }
+    }
+
+    /// A failed root read: only `unknownItem` confirms the root absent.
+    static func rootStatus(forReadError error: Error) -> GardenZoneSummary.RootStatus {
+        (error as? CKError)?.code == .unknownItem ? .absent : .unknown
+    }
+
+    private enum RootRead: Sendable {
+        case present(RootFields)
+        case absent
+        case unknown
     }
 
     private struct RootFields: Sendable {

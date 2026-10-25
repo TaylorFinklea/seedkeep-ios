@@ -111,6 +111,15 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
+        // N2-E: an unreadable guard file blocks every window until it is read again or reset.
+        if !appEnv.gardenGuard.isReadable {
+            GardenGuardBlockedView()
+        } else {
+            mainBody
+        }
+    }
+
+    private var mainBody: some View {
         ZStack {
             switch auth.state {
             case .signedOut:

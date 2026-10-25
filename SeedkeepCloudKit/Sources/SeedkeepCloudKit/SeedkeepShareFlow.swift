@@ -172,12 +172,13 @@ public struct SeedkeepShareFlow {
     /// owner adds one partner via the system share sheet). Hand the result to UICloudSharingController.
     public func makeOrFetchZoneWideShare(householdID: String, title: String) async throws -> CKShare {
         let db = container.privateCloudDatabase
-        let zone = try await SeedkeepZoneProvisioner(containerIdentifier: containerID)
-            .ensureZone(householdID: householdID)
-        if let existing = try await fetchZoneWideShare(zoneID: zone.zoneID, db: db) {
+        // N2-E: sharing never creates the zone. The caller requires a seen garden, and a missing
+        // zone fails here (`zoneNotFound`) instead of being recreated.
+        let zoneID = SeedkeepZoneProvisioner.zoneID(householdID: householdID)
+        if let existing = try await fetchZoneWideShare(zoneID: zoneID, db: db) {
             return existing
         }
-        let share = CKShare(recordZoneID: zone.zoneID)
+        let share = CKShare(recordZoneID: zoneID)
         share[CKShare.SystemFieldKey.title] = title as CKRecordValue
         _ = try await db.modifyRecords(saving: [share], deleting: [])
         return share

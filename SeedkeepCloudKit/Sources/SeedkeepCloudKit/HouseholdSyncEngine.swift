@@ -95,6 +95,14 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         set { callbackLock.lock(); _onAccountChange = newValue; callbackLock.unlock() }
     }
 
+    private var _onZoneUnavailable: (@Sendable (ZoneUnavailableReason) -> Void)?
+    /// N2-E seam (G2 fills it): fired when a record save fails because the garden's zone is
+    /// missing or was deleted. G1 only stops the save; it neither retries nor recreates the zone.
+    public var onZoneUnavailable: (@Sendable (ZoneUnavailableReason) -> Void)? {
+        get { callbackLock.withLock { _onZoneUnavailable } }
+        set { callbackLock.withLock { _onZoneUnavailable = newValue } }
+    }
+
     private let traceLock = NSLock()
     private var trace: [String] = []
     /// Diagnostic trace of sync events (used by deterministic tests).
@@ -124,7 +132,10 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             stateSerialization: Self.loadState(from: stateURL),
             delegate: self)
         configuration.automaticallySync = automaticSync
-        self.generation = EngineGeneration(CKSyncEngine(configuration))
+        let engine = CKSyncEngine(configuration)
+        // N2-E: restored state can hold a `.saveZone` staged by an older build.
+        PendingStateSanitizer.stripDatabaseChanges(from: engine.state)
+        self.generation = EngineGeneration(engine)
     }
 
     // MARK: - Public mutation API
@@ -142,19 +153,19 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             stateSerialization: stateSerialization,
             delegate: self)
         configuration.automaticallySync = automaticSync
-        return CKSyncEngine(configuration)
+        let engine = CKSyncEngine(configuration)
+        // N2-E: a rebuilt engine (rollback, retirement) reads the same durable state file.
+        PendingStateSanitizer.stripDatabaseChanges(from: engine.state)
+        return engine
     }
 
     /// Stage a record save: write it locally, then tell the engine it's pending.
-    /// The zone is created lazily on the first save.
+    /// N2-E: this never stages a zone save. A garden zone is created only through a creation
+    /// grant (`SeedkeepZoneProvisioner.createGarden`); a save into a missing zone is a gone signal.
     public func save(_ record: CKRecord) {
-        generation.withLive { engine, zoneStaged in
+        generation.withLive { engine, _ in
             store.setRecord(record)
-            if !zoneStaged {
-                engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-                zoneStaged = true
-            }
-            engine.state.add(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
+            PendingStateSanitizer.stageRecordSave(record.recordID, on: engine.state)
         }
     }
 
@@ -542,8 +553,13 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                 reEnqueue(recordID, after: failure.error, on: engine)
             }
         case .zoneNotFound, .userDeletedZone:
-            engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
-            reEnqueue(recordID, after: failure.error, on: engine)
+            // N2-E: never re-stage `.saveZone` and never retry: that silently recreated a deleted
+            // garden. The save stops, the pass reports an error, and the gone signal goes to the
+            // seam `onZoneUnavailable` (G2 turns it into the deleted-garden handling).
+            let reason = PendingStateSanitizer.dropSaveForMissingZone(recordID, error: failure.error, on: engine.state)
+            clearAttempts(recordID)
+            surface(failure.error)
+            onZoneUnavailable?(reason)
         case .unknownItem:
             store.removeRecord(recordID)
             clearAttempts(recordID)
@@ -609,6 +625,51 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     private static func saveState(_ serialization: CKSyncEngine.State.Serialization, to url: URL) {
         guard let data = try? JSONEncoder().encode(serialization) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+/// Why a record save reported its garden zone as unavailable.
+public enum ZoneUnavailableReason: Sendable, Equatable {
+    case zoneNotFound
+    case userDeletedZone
+}
+
+/// The slice of `CKSyncEngine.State` the N2-E guard touches. `CKSyncEngine.State` conforms, and a
+/// recording double lets the guard be tested without a live `CKSyncEngine` (which needs a real
+/// container).
+public protocol PendingChangeStaging: AnyObject {
+    var pendingDatabaseChanges: [CKSyncEngine.PendingDatabaseChange] { get }
+    func add(pendingDatabaseChanges: [CKSyncEngine.PendingDatabaseChange])
+    func remove(pendingDatabaseChanges: [CKSyncEngine.PendingDatabaseChange])
+    func add(pendingRecordZoneChanges: [CKSyncEngine.PendingRecordZoneChange])
+}
+
+extension CKSyncEngine.State: PendingChangeStaging {}
+
+/// N2-E: the only code that stages into, or strips, a sync engine's pending state. The engine never
+/// stages a database change (no `.saveZone`), and a restored one is removed.
+public enum PendingStateSanitizer {
+    /// Removes every pending database change from `state`. Restored state can carry a `.saveZone`
+    /// staged by an older build; sending it would recreate a deleted garden zone.
+    @discardableResult
+    public static func stripDatabaseChanges(from state: some PendingChangeStaging) -> Int {
+        let pending = state.pendingDatabaseChanges
+        guard !pending.isEmpty else { return 0 }
+        state.remove(pendingDatabaseChanges: pending)
+        return pending.count
+    }
+
+    /// Stages a record save. Never a zone save.
+    public static func stageRecordSave(_ recordID: CKRecord.ID, on state: some PendingChangeStaging) {
+        state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+    }
+
+    /// A record save failed with `zoneNotFound` / `userDeletedZone`: stage nothing (no `.saveZone`,
+    /// no retry) and report the reason.
+    public static func dropSaveForMissingZone(
+        _ recordID: CKRecord.ID, error: CKError, on state: some PendingChangeStaging
+    ) -> ZoneUnavailableReason {
+        error.code == .userDeletedZone ? .userDeletedZone : .zoneNotFound
     }
 }
 #endif

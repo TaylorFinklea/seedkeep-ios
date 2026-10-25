@@ -38,7 +38,14 @@ final class HouseholdCloudCoordinator {
     private let wipeOperation: (ModelContainer) throws -> Void
     /// Live provisioner — nil in tests AND for a participant (the owner owns the zone; a participant
     /// never provisions or runs the iCloud-availability gate against its own private DB).
-    private let provisioner: SeedkeepZoneProvisioner?
+    private let provisioner: (any GardenProvisioning)?
+    /// N2-E: the guard (grants, retired and journaled gardens) the owner start checks consult.
+    /// `AppEnvironment` sets it on every coordinator it builds. A coordinator with a provisioner and
+    /// no context sends nothing.
+    @ObservationIgnored var guardContext: GardenGuardContext?
+    /// N2-E discovery: receives the owned zones listed after the owner start (account key, this
+    /// household). `AppEnvironment` routes it to `AuthController.considerDiscovery`.
+    @ObservationIgnored var onOwnedGardensListed: (@MainActor ([GardenZoneSummary], String, String) -> Void)?
     /// Durable engine-state token URL (Application Support); deleted on account-change. nil in tests.
     private let stateURL: URL?
     /// Write-ahead latch for account cleanup. If the process dies after an account event or during a
@@ -125,7 +132,7 @@ final class HouseholdCloudCoordinator {
         householdCreatedAt: Int64,
         householdUpdatedAt: Int64,
         container: ModelContainer,
-        provisioner: SeedkeepZoneProvisioner?,
+        provisioner: (any GardenProvisioning)?,
         stateURL: URL?,
         isParticipant: Bool = false,
         wipeOperation: ((ModelContainer) throws -> Void)? = nil
@@ -170,7 +177,7 @@ final class HouseholdCloudCoordinator {
         householdUpdatedAt: Int64,
         container: ModelContainer
     ) -> HouseholdCloudCoordinator {
-        let provisioner = SeedkeepZoneProvisioner()
+        let provisioner = LiveGardenProvisioner()
         let database = provisioner.container.privateCloudDatabase
         let zoneID = CKRecordZone.ID(
             zoneName: SeedkeepZoneProvisioner.zoneName(householdID: householdID),
@@ -325,16 +332,11 @@ final class HouseholdCloudCoordinator {
     private func ensureStarted(_ passEpoch: Int) async throws {
         guard !started else { return }
         if let provisioner {
-            let status = await accountStatus(provisioner.container)
+            let status = await provisioner.accountStatus()
             guard canContinue(passEpoch) else { return }
             accountStatusText = Self.describe(status)
             guard status == .available else { throw CoordinatorError.iCloudUnavailable(status ?? .couldNotDetermine) }
-            try await provisioner.ensureZone(householdID: householdID)
-            guard canContinue(passEpoch) else { return }
-            let root = try await provisioner.ensureHousehold(householdID: householdID, name: householdName)
-            guard canContinue(passEpoch) else { return }
-            _ = try await provisioner.ensureShare(for: root, title: householdName)
-            guard canContinue(passEpoch) else { return }
+            guard try await startOwnerGarden(provisioner, passEpoch) else { return }
         }
         guard canContinue(passEpoch) else { return }
         engine.activateForCurrentAccount()
@@ -379,7 +381,97 @@ final class HouseholdCloudCoordinator {
         }
         guard canContinue(passEpoch) else { return }
         started = true
+        startDiscovery(passEpoch)
     }
+
+    /// Best-effort, non-blocking discovery: one owned listing after the garden has started. The
+    /// pass never waits for it, and its result is dropped if the account or epoch moved on.
+    private func startDiscovery(_ passEpoch: Int) {
+        guard let provisioner, let context = guardContext, let account = context.accountKey(),
+              onOwnedGardensListed != nil else { return }
+        let householdID = householdID
+        Task { @MainActor [weak self] in
+            guard let owned = try? await provisioner.listOwnedGardens() else { return }
+            guard let self, self.canContinue(passEpoch), context.accountKey() == account else { return }
+            self.onOwnedGardensListed?(owned, account, householdID)
+        }
+    }
+
+    // MARK: - Owner start checks (N2-E)
+
+    /// The owner's start checks, in order. Returns false when the pass was superseded.
+    ///
+    /// 1. A `pending` grant: this device is creating a brand-new garden. It is created through the
+    ///    grant and none of the checks below apply.
+    /// 2. An `attempting` grant: a creation was cut short (a crash, or a lost result). The ID is
+    ///    abandoned and re-homed. The zone is never inspected or completed.
+    /// 3. Otherwise an established garden. G2 adds the zone and generation checks here; until then
+    ///    it proceeds as before minus the zone save: a missing zone fails the root fetch and sends nothing.
+    ///
+    /// A retired garden, or one with an open re-home journal, sends nothing.
+    private func startOwnerGarden(_ provisioner: any GardenProvisioning, _ passEpoch: Int) async throws -> Bool {
+        guard let context = guardContext, context.store.isReadable, let account = context.accountKey() else {
+            throw CoordinatorError.guardUnavailable
+        }
+        let store = context.store
+        if store.isRetired(account, householdID) || store.hasOpenJournal(account, householdID) {
+            throw CoordinatorError.gardenRehoming
+        }
+        switch store.grant(account, householdID)?.state {
+        case .pending:
+            return try await createThroughGrant(provisioner, context, account, passEpoch)
+        case .attempting:
+            try abandon(context, account)
+            throw CoordinatorError.creationAbandoned
+        case nil:
+            let root = try await provisioner.ensureHousehold(householdID: householdID, name: householdName)
+            guard canContinue(passEpoch) else { return false }
+            // A garden that predates N2-E is recorded as seen once its root is read (trust on first
+            // use, G2), which is what lets it be shared.
+            try? store.recordSeen(account, householdID, generation: root.creationDate.map(Self.generation(of:)))
+            _ = try await provisioner.ensureShare(for: root.record, title: householdName)
+            return canContinue(passEpoch)
+        }
+    }
+
+    /// `pending` → `attempting` (durable) → one creation request → consumed with the generation,
+    /// kept `pending` (never dispatched), or abandoned.
+    private func createThroughGrant(
+        _ provisioner: any GardenProvisioning, _ context: GardenGuardContext, _ account: String,
+        _ passEpoch: Int
+    ) async throws -> Bool {
+        let store = context.store
+        guard !store.isCreationPaused(account) else { throw CoordinatorError.creationPaused }
+        guard !store.isCreationHeld(account) else { throw CoordinatorError.creationWaiting }
+        try store.markAttempting(account, householdID)
+        let outcome = await provisioner.createGarden(householdID: householdID, name: householdName)
+        // The outcome is recorded for the account that held the grant, even if the pass was
+        // superseded while the request was in flight.
+        switch outcome {
+        case .created(let root, let creationDate):
+            try store.consumeGrant(account, householdID, generation: Self.generation(of: creationDate))
+            guard canContinue(passEpoch) else { return false }
+            _ = try await provisioner.ensureShare(for: root, title: householdName)
+            return canContinue(passEpoch)
+        case .notDispatched(let error):
+            try? store.restorePending(account, householdID)
+            throw error
+        case .abandoned:
+            try abandon(context, account)
+            throw CoordinatorError.creationAbandoned
+        }
+    }
+
+    /// Retires this household's ID, writes the fresh ID with a `pending` grant and the re-home
+    /// journal in one guard write, and hands the request to the re-home seam (G3).
+    private func abandon(_ context: GardenGuardContext, _ account: String) throws {
+        let result = try context.store.abandonGrant(account, householdID, freshID: context.makeFreshID())
+        context.rehomer.rehomeRequested(GardenRehomeRequest(
+            accountKey: account, fromHouseholdID: result.abandonedID,
+            toHouseholdID: result.replacementID, reason: .abandonedGrant))
+    }
+
+    private static func generation(of date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
 
     /// Serialize asset materialization and its durable recovery roster with account cleanup. There
     /// is deliberately no suspension point inside this MainActor routine: either it runs before a
@@ -926,6 +1018,16 @@ final class HouseholdCloudCoordinator {
     enum CoordinatorError: Error {
         case iCloudUnavailable(CKAccountStatus)
         case accountCleanupPending
+        /// N2-E: the guard is unreadable, or no iCloud account is resolved. Nothing is sent.
+        case guardUnavailable
+        /// N2-E: this garden was retired or is being re-homed. Nothing is sent to it.
+        case gardenRehoming
+        /// N2-E: a creation was abandoned this pass. The next launch or "Sync now" tries again.
+        case creationAbandoned
+        /// N2-E: three abandonments in 24 hours paused creation until "Try again" in Settings.
+        case creationPaused
+        /// N2-E: creation waits for the next launch or "Sync now" after an abandonment.
+        case creationWaiting
     }
 
     /// MUST match `com.apple.developer.icloud-container-environment` in project.yml. All durable
@@ -1075,6 +1177,20 @@ final class HouseholdCloudCoordinator {
         if case CoordinatorError.accountCleanupPending = error {
             return "CloudKit account cleanup is incomplete — tap Sync now to retry."
         }
+        if let coordinatorError = error as? CoordinatorError {
+            switch coordinatorError {
+            case .guardUnavailable:
+                return "Seedkeep can't confirm its iCloud safety record yet. Your garden stays on this device."
+            case .gardenRehoming:
+                return "This garden is being moved to a new iCloud garden. It stays on this device until then."
+            case .creationAbandoned, .creationWaiting:
+                return "Seedkeep couldn't create your garden in iCloud yet. It will try again at the next launch or Sync now."
+            case .creationPaused:
+                return "Seedkeep couldn't create your garden in iCloud. Try again in Settings."
+            case .iCloudUnavailable, .accountCleanupPending:
+                break
+            }
+        }
         if let ck = error as? CKError {
             switch ck.code {
             case .networkUnavailable, .networkFailure:
@@ -1116,22 +1232,6 @@ final class HouseholdCloudCoordinator {
             Task.detached { try? await Task.sleep(nanoseconds: 10 * 1_000_000_000); box.resume(cont, nil) }
         }
         return describe(status)
-    }
-
-    /// Bounded `accountStatus()` returning nil on timeout. A broken cloudd auth token can hang the
-    /// call indefinitely AND ignore cancellation (spike gotcha), so we must NOT depend on structured
-    /// task-group teardown (which awaits the hung child). Race two detached tasks into a resume-once
-    /// continuation; if accountStatus wedges, the sleep still resolves us and the hung task is
-    /// abandoned (leaked) rather than blocking the caller.
-    private func accountStatus(_ container: CKContainer, seconds: UInt64 = 10) async -> CKAccountStatus? {
-        let box = ResumeOnce()
-        return await withCheckedContinuation { (cont: CheckedContinuation<CKAccountStatus?, Never>) in
-            Task.detached { box.resume(cont, (try? await container.accountStatus())) }
-            Task.detached {
-                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                box.resume(cont, nil)
-            }
-        }
     }
 }
 

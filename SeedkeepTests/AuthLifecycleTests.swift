@@ -478,8 +478,8 @@ struct AuthLifecycleTests {
         let marker = ActiveGardenContext.participant(in: defaults)
         #expect(marker?.zoneName == shared.zoneName)
         #expect(marker?.ownerName == shared.ownerName)
-        #expect(Self.signedIn(auth)?.household == DeterministicHouseholdID.make(userRecordName: Self.userA),
-                "the own household is still the user's own")
+        #expect(Self.signedIn(auth)?.household.hasPrefix("hhr_") == true,
+                "the own household is still the user's own, a fresh random garden")
     }
 
     @Test("adopting a different shared garden resets its sync state; keeping the recorded one does not")
@@ -527,7 +527,7 @@ struct AuthLifecycleTests {
         #expect(Self.cached(defaults, AuthController.identityCacheKey)?.household.id == "hh_o")
     }
 
-    @Test("no cache, no gardens: the deterministic household, the same for the same user")
+    @Test("no cache, no gardens: a fresh random household with a pending creation grant")
     func freshNoZones() async throws {
         let provider = FakeCloudIdentityProvider(owned: [], shared: [])
         let first = Self.makeAuth(provider, defaults: Self.makeDefaults("freshNoZones.1"))
@@ -540,10 +540,14 @@ struct AuthLifecycleTests {
             Issue.record("expected signedIn, got \(first.state)")
             return
         }
-        #expect(household.id == DeterministicHouseholdID.make(userRecordName: Self.userA))
+        #expect(GardenHouseholdID.isRandomFormat(household.id))
+        #expect(household.id != DeterministicHouseholdID.make(userRecordName: Self.userA))
         #expect(household.name == "My garden")
-        #expect(Self.signedIn(second)?.household == household.id,
-                "two devices bootstrapping at once must converge on one zone")
+        // N2-E: no more convergence by name; two devices make two gardens and discovery asks.
+        #expect(Self.signedIn(second)?.household != household.id)
+        let key = GardenGuardStore.accountKey(recordName: Self.userA)
+        #expect(first.guardStore.grant(key, household.id)?.state == .pending)
+        #expect(first.guardStore.latestBinding(key)?.household.id == household.id)
     }
 
     @Test("no cache, several owned gardens: the user chooses, then the shared step runs")
@@ -587,7 +591,7 @@ struct AuthLifecycleTests {
         #expect(choice.reason == .multipleSharedGardens)
         #expect(choice.candidates == [s1, s2])
         let own = try #require(choice.ownGarden)
-        #expect(own.householdID == DeterministicHouseholdID.make(userRecordName: Self.userA))
+        #expect(GardenHouseholdID.isRandomFormat(own.householdID))
 
         await auth.chooseGarden(own, discardingDeviceData: false)
         #expect(Self.signedIn(auth)?.household == own.householdID)
@@ -702,8 +706,8 @@ struct AuthLifecycleTests {
 
         provider.recordName = Self.userB
         await auth.revalidateAfterAccountChange()
-        let bHousehold = DeterministicHouseholdID.make(userRecordName: Self.userB)
-        #expect(Self.signedIn(auth)?.household == bHousehold)
+        let bHousehold = try #require(Self.signedIn(auth)?.household)
+        #expect(GardenHouseholdID.isRandomFormat(bHousehold))
 
         provider.releaseListing()
         await stale.value
@@ -933,7 +937,11 @@ struct AuthLifecycleTests {
         #expect(eraser.switchCount == 1)
         #expect(eraser.count == 0)
         #expect(Self.signedIn(auth)?.user == Self.userA)
-        #expect(Self.signedIn(auth)?.household == "hh_h", "the own household stays the device's")
+        // The device's own zone was confirmed absent and its rows discarded: the own household is a
+        // fresh random garden under a creation grant, not a zone to recreate.
+        let ownHousehold = try #require(Self.signedIn(auth)?.household)
+        #expect(ownHousehold.hasPrefix("hhr_"))
+        #expect(auth.guardStore.grant(GardenGuardStore.accountKey(recordName: Self.userA), ownHousehold)?.state == .pending)
         #expect(ActiveGardenContext.participant(in: defaults)?.zoneName == shared.zoneName)
         #expect(defaults.data(forKey: AuthController.legacyIdentityCacheKey) == nil)
     }

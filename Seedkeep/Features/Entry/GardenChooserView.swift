@@ -140,11 +140,14 @@ struct GardenChooserView: View {
     private var offersRetry: Bool {
         switch choice.reason {
         case .deviceGardenNotFound, .sharedGardenUnavailable: return true
-        case .multipleOwnGardens, .multipleSharedGardens, .sharedOrOwnGarden: return false
+        case .multipleOwnGardens, .multipleSharedGardens, .sharedOrOwnGarden, .discoveredOwnGardens: return false
         }
     }
 
     private func subtitle(for garden: GardenZoneSummary) -> String {
+        if case .discoveredOwnGardens = choice.reason {
+            return garden == choice.ownGarden ? "This device's garden" : "Found in iCloud"
+        }
         if case .sharedOrOwnGarden = choice.reason {
             return garden.scope == .owned ? "Your own garden" : "Shared with you"
         }
@@ -158,6 +161,7 @@ struct GardenChooserView: View {
         case .deviceGardenNotFound: return "This device's garden isn't in iCloud"
         case .sharedGardenUnavailable: return "This shared garden is no longer available"
         case .sharedOrOwnGarden: return "Which garden do you want to open?"
+        case .discoveredOwnGardens: return "Another garden is in your iCloud"
         }
     }
 
@@ -173,6 +177,8 @@ struct GardenChooserView: View {
             return "It isn't shared with you anymore. Use your own garden, or another garden shared with you."
         case .sharedOrOwnGarden:
             return "A garden is shared with you, and you also have your own. Choose the one to open on this device."
+        case .discoveredOwnGardens:
+            return "Your iCloud account has a Seedkeep garden this device hasn't used. Keep using this device's garden, or switch to the other one."
         }
     }
 
