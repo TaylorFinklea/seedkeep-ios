@@ -209,11 +209,13 @@ public final class AppPreferences {
 
     /// Fills the frost dates of a saved ZIP that predates them. The ZIP is unchanged, so the cached
     /// coordinates stay as they are. The table lookup runs off the main actor.
-    func backfillFrostDates() async {
+    func backfillFrostDates(isWritable: @MainActor () -> Bool = { true }) async {
+        guard isWritable() else { return }
         guard let zip = homeZip, avgLastFrost == nil || avgFirstFrost == nil else { return }
         let climate = await Task.detached { ClimateLookup.climate(forZip: zip) }.value
-        // The ZIP may have changed while the lookup ran; only fill the ZIP that was asked for.
-        guard let climate, homeZip == zip else { return }
+        // The ZIP may have changed while the lookup ran; only fill the ZIP that was asked for. N2-E:
+        // and the garden scope must be the one the backfill started in.
+        guard let climate, homeZip == zip, isWritable() else { return }
         avgLastFrost = climate.avgLastFrost
         avgFirstFrost = climate.avgFirstFrost
     }

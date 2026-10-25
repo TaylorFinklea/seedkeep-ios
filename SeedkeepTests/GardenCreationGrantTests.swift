@@ -56,7 +56,7 @@ struct GardenCreationGrantTests {
         await rig.coordinator.sync()
         #expect(rig.provisioner.zoneSaves == [id])
         #expect(rig.provisioner.rootSaves == [id])
-        #expect(rig.provisioner.ensureHouseholdCalls.isEmpty)   // none of the established checks apply
+        #expect(rig.provisioner.inspectCalls.isEmpty)   // none of the established checks apply
         #expect(rig.store.grant(Self.account, id) == nil)       // consumed...
         #expect(rig.store.seen(Self.account, id)?.generation == 1_234_500)   // ...with the generation, together
         #expect(rig.coordinator.lastHumanizedError == nil)
@@ -139,7 +139,7 @@ struct GardenCreationGrantTests {
         rig.store.releaseCreationHolds()
         await rig.coordinator.sync()
         #expect(rig.provisioner.zoneSaves == [id])
-        #expect(rig.provisioner.ensureHouseholdCalls.isEmpty)
+        #expect(rig.provisioner.inspectCalls.isEmpty)
     }
 
     @Test("three abandonments in 24 hours pause creation until Try again")
@@ -181,7 +181,7 @@ struct GardenCreationGrantTests {
         try rig.store.markAttempting(Self.account, id)
         await rig.coordinator.sync()
         #expect(rig.provisioner.totalCreations == 0)
-        #expect(rig.provisioner.ensureHouseholdCalls.isEmpty)
+        #expect(rig.provisioner.inspectCalls.isEmpty)
         #expect(rig.store.isRetired(Self.account, id))
         #expect(rig.store.grant(Self.account, "hhr_replacement")?.state == .pending)
         #expect(rig.rehomer.requests.count == 1)
@@ -193,10 +193,10 @@ struct GardenCreationGrantTests {
         let rig = try Self.rig(householdID: id, grant: false)
         rig.provisioner.setExistingRoot(householdID: id)
         await rig.coordinator.sync()
-        #expect(rig.provisioner.ensureHouseholdCalls == [id])
+        #expect(rig.provisioner.inspectCalls == [id])
         #expect(rig.provisioner.totalCreations == 0)
         #expect(rig.store.isSeen(Self.account, id))   // recorded, so it can be shared
-        #expect(rig.store.seen(Self.account, id)?.generation == nil)
+        #expect(rig.store.seen(Self.account, id)?.generation == 1_000_000)   // trust on first use
         #expect(rig.coordinator.lastHumanizedError == nil)
     }
 
@@ -205,9 +205,11 @@ struct GardenCreationGrantTests {
     @Test("an existing garden whose zone is missing creates nothing, at startup or on a later save")
     func missingZoneIsNeverRecreated() async throws {
         let id = "legacy-\(UUID().uuidString)"
-        let rig = try Self.rig(householdID: id, grant: false)   // no root: ensureHousehold throws zoneNotFound
+        let rig = try Self.rig(householdID: id, grant: false)   // no root: inspect finds the zone missing
         await rig.coordinator.sync()
-        #expect(rig.coordinator.lastHumanizedError != nil)
+        // G2: a zone that is missing without a grant is gone, not an error and never a creation.
+        #expect(rig.coordinator.isGone)
+        #expect(rig.store.isGone(Self.account, id))
         await rig.coordinator.sync()
         #expect(rig.provisioner.totalCreations == 0)
         #expect(rig.engine.savedRecords.isEmpty)   // nothing is sent into a zone that isn't there
@@ -233,7 +235,7 @@ struct GardenCreationGrantTests {
         #expect(!rig.store.isReadable)
         await rig.coordinator.sync()
         #expect(rig.provisioner.totalCreations == 0)
-        #expect(rig.provisioner.ensureHouseholdCalls.isEmpty)
+        #expect(rig.provisioner.inspectCalls.isEmpty)
         #expect(rig.engine.savedRecords.isEmpty)
     }
 

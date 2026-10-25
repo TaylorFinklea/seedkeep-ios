@@ -130,6 +130,11 @@ actor WeatherWarningsService {
     /// they read `@AppStorage` / preferences directly; the service hops
     /// to MainActor once per refresh to call them.
     private let householdIDProvider: @MainActor () -> String?
+    /// N2-E: the garden scope notifications are scheduled for (the active garden plus the scope
+    /// epoch, as an opaque token), nil while the garden is gone. A refresh that starts with no scope
+    /// schedules nothing and clears what is pending; a notification added after the scope went stale
+    /// is removed again. nil provider (tests, sample garden): unfenced.
+    private let scopeProvider: (@MainActor () -> String?)?
     private let preferencesProvider: @MainActor () -> (lat: Double?, lon: Double?)
     private let togglesProvider: @MainActor () -> (frost: Bool, heat: Bool, water: Bool)
 
@@ -169,9 +174,11 @@ actor WeatherWarningsService {
         clock: any Clock = SystemClock(),
         thresholds: WarningThresholds = .kc,
         householdIDProvider: @escaping @MainActor () -> String?,
+        scopeProvider: (@MainActor () -> String?)? = nil,
         preferencesProvider: @escaping @MainActor () -> (lat: Double?, lon: Double?),
         togglesProvider: @escaping @MainActor () -> (frost: Bool, heat: Bool, water: Bool)
     ) {
+        self.scopeProvider = scopeProvider
         self.container = container
         self.provider = provider
         self.scheduler = scheduler
@@ -368,13 +375,21 @@ actor WeatherWarningsService {
             let coords: (lat: Double?, lon: Double?)
             let toggles: (frost: Bool, heat: Bool, water: Bool)
             let householdID: String?
+            /// N2-E: the garden scope the refresh started in; nil with no provider (unfenced).
+            let scope: String??
         }
         let prereqs = await MainActor.run {
             Prereqs(
                 coords: preferencesProvider(),
                 toggles: togglesProvider(),
-                householdID: householdIDProvider()
+                householdID: householdIDProvider(),
+                scope: scopeProvider.map { $0() }
             )
+        }
+        // N2-E: no writable garden (it is gone): nothing is scheduled and what is pending is cleared.
+        if case .some(.none) = prereqs.scope {
+            await clearAllOurPrefixes()
+            return .successNoWarnings(perKindEmpty: [:])
         }
         // Capture the coord generation alongside the prereq snapshot —
         // reading the live actor value at fetch time let a mid-flight
@@ -739,14 +754,29 @@ actor WeatherWarningsService {
         }
 
         var scheduledIDs: Set<String> = []
+        var scopeWentStale = false
         for warning in toAdd {
+            // N2-E: a scope that went stale (the garden is gone, or the binding or account changed)
+            // schedules nothing more.
+            if await scopeIsStale(prereqs.scope) { scopeWentStale = true; break }
             let request = makeRequest(from: warning, in: homeTimeZone, calendar: calendar)
             do {
                 try await scheduler.add(request)
                 scheduledIDs.insert(warning.identifier)
+                // ...and a notification added just as it went stale is removed again.
+                if await scopeIsStale(prereqs.scope) {
+                    await scheduler.removePendingNotificationRequests(withIdentifiers: [warning.identifier])
+                    scheduledIDs.remove(warning.identifier)
+                    scopeWentStale = true
+                    break
+                }
             } catch {
                 // Per-id failure — other ids continue.
             }
+        }
+        if scopeWentStale {
+            let outcome = RefreshOutcome.successNoWarnings(perKindEmpty: [:])
+            return outcome
         }
 
         // q. Post-schedule verification.
@@ -1077,6 +1107,14 @@ actor WeatherWarningsService {
     }
 
     // MARK: - Helpers
+
+    /// N2-E: whether the scope this refresh started in is no longer the current one. Always false
+    /// with no provider.
+    private func scopeIsStale(_ started: String??) async -> Bool {
+        guard let provider = scopeProvider, case .some(let startedScope) = started else { return false }
+        let now = await MainActor.run { provider() }
+        return now != startedScope
+    }
 
     private func clearAllOurPrefixes() async {
         let pending = await scheduler.pendingNotificationRequests()

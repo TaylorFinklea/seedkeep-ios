@@ -48,28 +48,45 @@ struct GardenSeenRecord: Codable, Equatable, Sendable {
     var generation: Int64?
 }
 
-/// A garden that is gone, or being re-homed. G1 writes only `.abandonedGrant` and
-/// `.absentZone` entries, journaled for the silent re-home (G3 resumes them). G2 adds the gone
-/// signals and G3 the keep and discard actions.
+/// A garden that is gone, or being re-homed. G1 writes `.abandonedGrant` and `.absentZone` entries,
+/// journaled for the silent re-home (G3 resumes them). G2 writes the `gone` entries the deletion
+/// signals and checks produce, in phase `awaitingChoice` (the commit point of the gone handling);
+/// G3 adds the keep and discard actions that move them on.
 struct GardenGoneRecord: Codable, Equatable, Sendable {
     enum Reason: String, Codable, Sendable {
         /// A creation grant was dispatched and not confirmed, or lost while `attempting`.
         case abandonedGrant
         /// The device's garden has no zone in iCloud, and the device keeps its rows.
         case absentZone
+        /// `.fetchedDatabaseChanges` deleted the garden's zone (deleted, purged or encrypted data reset).
+        case zoneDeleted
+        /// A zone listing, a fetch or a save found the zone missing (`zoneNotFound`/`userDeletedZone`).
+        case zoneMissing
+        /// The zone exists and its `Household` root is confirmed missing.
+        case rootMissing
+        /// The root's `creationDate` differs from the recorded generation: the garden was recreated.
+        case recreated
+        /// A participant's seen shared zone is gone from the shared database (the owner stopped
+        /// sharing, or removed this participant).
+        case accessLost
     }
     enum Action: String, Codable, Sendable { case rehome }
     enum Phase: String, Codable, Sendable {
         case journaled, done
         /// A newer binding replaced this journal's target in the same guard write. Never replayed.
         case superseded
+        /// G2: the garden is gone and the device waits for the user's choice (G3). Nothing is written
+        /// into it, and the window shows the placeholder.
+        case awaitingChoice
     }
 
     var reason: Reason
-    var action: Action
+    /// nil while `awaitingChoice`: the action is fixed with the user's choice (G3).
+    var action: Action?
     var phase: Phase
-    /// The fresh household ID the rows move to, with its `pending` grant written in the same guard write.
-    var replacementID: String
+    /// The fresh household ID the rows move to, with its `pending` grant written in the same guard
+    /// write. nil while `awaitingChoice`.
+    var replacementID: String?
     var createdAt: Date
 }
 
@@ -248,6 +265,18 @@ final class GardenGuardStore {
     func hasOpenJournal(_ key: String, _ householdID: String) -> Bool {
         account(key).gone[householdID].map { $0.phase == .journaled } ?? false
     }
+    /// N2-E G2: the garden is gone and waits for the user's choice. It is never written into, never
+    /// synced, and never chosen by resolution.
+    func isGone(_ key: String, _ householdID: String) -> Bool {
+        account(key).gone[householdID].map { $0.phase == .awaitingChoice } ?? false
+    }
+    /// True when any account holds a gone entry or an open journal. Launch defers its background
+    /// services until the runner has resumed these (contract §6).
+    var hasUnresolvedEntries: Bool {
+        file.accounts.values.contains { account in
+            account.gone.values.contains { $0.phase == .awaitingChoice || $0.phase == .journaled }
+        }
+    }
     func isBindingWritten(_ key: String) -> Bool { account(key).bindingWritten }
     func isCreationPaused(_ key: String) -> Bool { account(key).creationPaused }
     func isCreationHeld(_ key: String) -> Bool { heldAccounts.contains(key) }
@@ -333,6 +362,19 @@ final class GardenGuardStore {
         }
         heldAccounts.insert(key)
         return GardenAbandonment(abandonedID: householdID, replacementID: freshID, pausedCreation: paused)
+    }
+
+    /// The gone commit point (contract §6): writes the `gone` entry for `householdID`, phase
+    /// `awaitingChoice`. Idempotent: an entry that is already open (awaiting a choice, or a journal in
+    /// progress) is kept as it is. Throws when the guard can't be written; the caller then leaves the
+    /// coordinator stopped and detection repeats at the next start.
+    func markGone(_ key: String, _ householdID: String, reason: GardenGoneRecord.Reason) throws {
+        if let existing = account(key).gone[householdID],
+           existing.phase == .awaitingChoice || existing.phase == .journaled { return }
+        try mutate(key) { account in
+            account.gone[householdID] = GardenGoneRecord(
+                reason: reason, action: nil, phase: .awaitingChoice, replacementID: nil, createdAt: self.now())
+        }
     }
 
     /// Records a garden known to exist. A recorded generation is never overwritten; a missing one

@@ -70,6 +70,10 @@ struct SeedkeepApp: App {
                 #endif
                 appDelegate.environment = environment   // let the scene delegate drive participant adopt
                 await environment.auth.restoreSession()
+                // N2-E: the guard was loaded first. With a journal or gone entry, nothing mutated until
+                // `restoreSession` verified the owning account; now the runner resumes, the deferred
+                // background services start, and windows may show a garden.
+                environment.resumeGuardAfterLaunch()
                 #if os(macOS)
                 if case .signedIn = environment.auth.state {
                     await appDelegate.processPendingShares()
@@ -138,6 +142,13 @@ struct RootView: View {
                 GardenChooserView(choice: choice)
             case .failed(let message):
                 CloudEntryView(reason: .failed(message: message))
+            case .signedIn where appEnv.isLaunchGuardPending:
+                // N2-E: a launch with a journal or gone entry shows no garden, and starts no task,
+                // until the guard has resumed after `restoreSession`.
+                EntryProgressView()
+            case .signedIn where appEnv.isActiveGardenGone:
+                // N2-E: the garden is gone. The placeholder stands in until G3's choice replaces it.
+                GardenGonePlaceholderView()
             case .signedIn:
                 signedInRoot
                     .task(id: snapshotID(auth.state)) {
@@ -180,6 +191,12 @@ struct RootView: View {
                         WhatsNewSheet(initialRelease: release)
                     }
             }
+        }
+        // N2-E: the launch gate opens once the account is verified, whenever that happens (an offline
+        // launch verifies later). Idempotent.
+        .task(id: "\(auth.isIdentityVerified)|\(snapshotID(auth.state))|\(appEnv.gardenGuard.isReadable)") {
+            guard FeatureFlags.canRunLiveAppStartup else { return }
+            appEnv.resumeGuardAfterLaunch()
         }
         .onChange(of: isSignedIn) { _, signedIn in
             if !signedIn {

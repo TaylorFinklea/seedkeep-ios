@@ -18,7 +18,7 @@ import OSLog
 /// (`HouseholdCloudCoordinator.live` / `.participant`): the coordinator drives `fetchChanges()` and
 /// `sendUntilDrained(maxPasses:)` explicitly, so no delegate event can fire before it has wired the
 /// merger and callbacks. Pass `true` only for a driver that wants CloudKit's own scheduling.
-public enum SyncEngineError: Error {
+public enum SyncEngineError: Error, Equatable {
     /// `sendUntilDrained` ran its full budget with record changes still pending (a conflict storm or
     /// a persistent failure). Thrown so the caller treats the pass as incomplete, not a false success.
     case drainIncomplete
@@ -26,6 +26,14 @@ public enum SyncEngineError: Error {
     case accountInvalidated
     /// SwiftData rejected a fetched/sent projection; durable CKSyncEngine state was not advanced.
     case projectionFailed
+    /// N2-E: the garden is gone (a deletion signal or a batch-check mismatch). Nothing more is sent;
+    /// the coordinator handles it through `onGardenSignal`, which fired first.
+    case gardenGone(GardenGoneCause)
+    /// N2-E: a batch check could not confirm the garden (timeout, network, account, changed epoch).
+    /// No batch was built and pending changes stay queued; the pass ends with today's backoff.
+    case batchCheckFailed(GardenCheckFailure)
+    /// N2-E: an ambiguous or permission signal stopped sends for this pass. Nothing is retired.
+    case sendsHeld
 }
 
 public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyncing, @unchecked Sendable {
@@ -95,13 +103,35 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         set { callbackLock.lock(); _onAccountChange = newValue; callbackLock.unlock() }
     }
 
-    private var _onZoneUnavailable: (@Sendable (ZoneUnavailableReason) -> Void)?
-    /// N2-E seam (G2 fills it): fired when a record save fails because the garden's zone is
-    /// missing or was deleted. G1 only stops the save; it neither retries nor recreates the zone.
-    public var onZoneUnavailable: (@Sendable (ZoneUnavailableReason) -> Void)? {
-        get { callbackLock.withLock { _onZoneUnavailable } }
-        set { callbackLock.withLock { _onZoneUnavailable = newValue } }
+    private var _onGardenSignal: (@Sendable (GardenSignal) -> Void)?
+    /// N2-E: fired when the engine's events say something about the garden's zone (contract §5). The
+    /// gate has already latched (a gone signal fences every later batch) before this runs; the
+    /// coordinator turns it into the deleted-garden handling. A save that fails with `zoneNotFound`
+    /// or `userDeletedZone` is a gone signal, never a retry and never a recreate.
+    public var onGardenSignal: (@Sendable (GardenSignal) -> Void)? {
+        get { callbackLock.withLock { _onGardenSignal } }
+        set { callbackLock.withLock { _onGardenSignal = newValue } }
     }
+
+    private var _batchCheck: (@Sendable () async -> GardenCheckOutcome)?
+    /// N2-E batch check: the coordinator reads the garden's root directly from the database (not
+    /// through the engine) and reports whether it is still the same garden. It runs for every batch
+    /// `nextRecordZoneChangeBatch` is asked for.
+    public var batchCheck: (@Sendable () async -> GardenCheckOutcome)? {
+        get { callbackLock.withLock { _batchCheck } }
+        set { callbackLock.withLock { _batchCheck = newValue } }
+    }
+
+    /// The fence, hold and batch-check admission (see `GardenSendGate`).
+    public let sendGate = GardenSendGate()
+
+    /// Start of a coordinator pass: lifts a hold left by an ambiguous or permission signal. A fence
+    /// (gone) stays until the coordinator retires this engine.
+    public func releaseSendHold() { sendGate.release() }
+
+    public func clearGardenFence() { sendGate.clearFence() }
+
+    private func emit(_ signal: GardenSignal) { onGardenSignal?(signal) }
 
     private let traceLock = NSLock()
     private var trace: [String] = []
@@ -270,6 +300,8 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             surfacedFailure = nil
             permanentlyFailedSaveRecordIDs.removeAll()
         }
+        // N2-E: a fenced or held engine sends nothing, and says why.
+        try throwIfSendsBlocked()
         var lastError: Error?
         for pass in 0..<maxPasses {
             // A SENT batch's SwiftData projection is the LAST place a merged serverRecordChanged
@@ -278,6 +310,10 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             // synced, whether or not the send itself also failed.
             let passError = try await runCheckpointedPass(on: engine, { try await engine.sendChanges() })
             if let passError { lastError = passError }
+            // N2-E: a batch check that failed built no batch. The drain loop stops here, instead of
+            // sending again, and returns the typed failure; pending changes stay queued. A gone or
+            // held engine stops the same way.
+            try throwIfSendsBlocked()
             // A permanent per-record failure is reported via the .sentRecordZoneChanges event
             // (processed during sendChanges, NOT thrown) — surface it instead of a false success.
             if let surfaced = takeSurfacedFailure() { throw surfaced }
@@ -305,6 +341,12 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         generation.withCurrent(engine) { !$0.state.pendingRecordZoneChanges.isEmpty } ?? false
     }
 
+    private func throwIfSendsBlocked() throws {
+        if let failure = sendGate.takeCheckFailure() { throw SyncEngineError.batchCheckFailed(failure) }
+        if let cause = sendGate.cause { throw SyncEngineError.gardenGone(cause) }
+        if sendGate.isHeld { throw SyncEngineError.sendsHeld }
+    }
+
     // MARK: - CKSyncEngineDelegate
 
     public func nextRecordZoneChangeBatch(
@@ -312,12 +354,49 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
         guard let pending = generation.withCurrent(syncEngine, { engine in
-            engine.state.pendingRecordZoneChanges.filter { context.options.scope.contains($0) }
+            Self.pendingChanges(engine.state.pendingRecordZoneChanges, inScope: { context.options.scope.contains($0) })
         }), !pending.isEmpty else { return nil }
-        let batch = await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { recordID in
-            self.store.record(for: recordID)
-        }
-        guard generation.isCurrent(syncEngine) else { return nil }
+        return await produceBatch(pending: pending, isCurrent: { self.generation.isCurrent(syncEngine) })
+    }
+
+    /// The pending changes the engine may send in this request's scope (the delegate's filter).
+    /// (`SendChangesOptions.Scope` has no public initializer, so the delegate hands in its `contains`.)
+    static func pendingChanges(
+        _ all: [CKSyncEngine.PendingRecordZoneChange], inScope contains: (CKSyncEngine.PendingRecordZoneChange) -> Bool
+    ) -> [CKSyncEngine.PendingRecordZoneChange] {
+        all.filter(contains)
+    }
+
+    /// The body of the delegate's batch hook, apart from the framework's `SendChangesContext` and
+    /// `CKSyncEngine` (neither can be built off-device). N2-E: every batch the engine asks for goes
+    /// through the garden check first, including the repeated calls within one `sendUntilDrained`.
+    /// A fenced or held engine, a mismatch, a missing root and a failed check all return no batch.
+    func produceBatch(
+        pending: [CKSyncEngine.PendingRecordZoneChange],
+        isCurrent: @escaping () -> Bool
+    ) async -> CKSyncEngine.RecordZoneChangeBatch? {
+        await Self.produceBatch(
+            pending: pending, gate: sendGate, check: batchCheck, emit: { [weak self] in self?.emit($0) },
+            isCurrent: isCurrent, record: { self.store.record(for: $0) })
+    }
+
+    /// The whole batch hook as a function of its inputs, so the tests run the same code the delegate
+    /// runs: admission through the gate (the per-batch check), then the engine-generation check on
+    /// both sides of the batch build.
+    static func produceBatch(
+        pending: [CKSyncEngine.PendingRecordZoneChange],
+        gate: GardenSendGate,
+        check: (@Sendable () async -> GardenCheckOutcome)?,
+        emit: (GardenSignal) -> Void,
+        isCurrent: @escaping () -> Bool,
+        record: @escaping (CKRecord.ID) -> CKRecord?
+    ) async -> CKSyncEngine.RecordZoneChangeBatch? {
+        guard await gate.admit(check: check, emit: emit) else { return nil }
+        guard isCurrent() else { return nil }
+        let batch = await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { record($0) }
+        // Building the batch awaits: a gone or ambiguous signal that arrived meanwhile (the fence or
+        // the hold changed) stops it, as does an engine generation that is no longer current.
+        guard isCurrent(), !gate.blocksSends else { return nil }
         return batch
     }
 
@@ -337,7 +416,26 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             // refused would strand that batch forever.
             checkpoint.persistCheckpoint { Self.saveState(update.stateSerialization, to: stateURL) }
 
+        case .fetchedDatabaseChanges(let changes):
+            // N2-E: a deletion of THIS garden's zone is a gone signal for any reason (.deleted,
+            // .purged, .encryptedDataReset). It outranks every other change in the batch: the fence
+            // is latched here, before the record changes that may follow in the same fetch.
+            GardenEventHandling.zoneDeletions(
+                changes.deletions.map { ($0.zoneID, ZoneDeletionReason($0.reason)) },
+                garden: zoneID, gate: sendGate, emit: emit)
+
+        case .didFetchRecordZoneChanges(let result):
+            // A zone-level fetch error: zoneNotFound/userDeletedZone is gone; permissionFailure,
+            // network, account and partial errors hold sends for the pass (ambiguous).
+            if let error = result.error {
+                GardenEventHandling.zoneFetchError(
+                    zoneID: result.zoneID, code: error.code, garden: zoneID, gate: sendGate, emit: emit)
+            }
+
         case .fetchedRecordZoneChanges(let changes):
+            // N2-E: once the garden is gone, nothing fetched for it lands (a delete-then-modify batch
+            // coalesced by CloudKit must not repopulate a gone garden).
+            guard GardenEventHandling.mayProcessRecordChanges(gate: sendGate) else { note("fenced: ignored fetched changes"); return }
             let pendingSaves = pendingSaveIDs(on: syncEngine)
             // Collect the records ACTUALLY applied this batch (post-merge; local-pending skips
             // excluded) + the deletion IDs, then hand them to the coordinator for SwiftData
@@ -376,6 +474,14 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
             await checkpoint.project(applied, deletedIDs, via: onFetchedChanges)
 
         case .sentRecordZoneChanges(let sent):
+            // N2-E: failed saves are classified FIRST, so a deletion outranks anything else in the same
+            // sent batch; a fenced engine then handles none of it. Ambiguous failures hold the pass.
+            GardenEventHandling.saveFailures(
+                sent.failedRecordSaves.map {
+                    ($0.record.recordID.zoneID, Self.effectiveSaveError($0.error, for: $0.record.recordID).code)
+                },
+                garden: zoneID, gate: sendGate, emit: emit)
+            guard GardenEventHandling.mayProcessRecordChanges(gate: sendGate) else { note("fenced: ignored sent changes"); return }
             var saved: [CKRecord] = []
             for record in sent.savedRecords {
                 store.setRecord(record)
@@ -407,8 +513,7 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
 
         case .willFetchChanges, .didFetchChanges,
              .willSendChanges, .didSendChanges,
-             .fetchedDatabaseChanges, .sentDatabaseChanges,
-             .willFetchRecordZoneChanges, .didFetchRecordZoneChanges:
+             .sentDatabaseChanges, .willFetchRecordZoneChanges:
             break
 
         @unknown default:
@@ -468,12 +573,19 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
     }
     /// Re-enqueue a save, but give up + surface (as permanent) after `maxReEnqueues` attempts, so a
     /// record that keeps failing for the same reason can't loop the drain across every sync forever.
+    /// Whether a failed save is re-enqueued again after `n` attempts. An ambiguous failure (network,
+    /// account, partial, permission) is re-enqueued however often it repeats: it never gives up, so it
+    /// never reaches the durable permanent-failure roster. The per-pass hold stops the hammering.
+    static func shouldReEnqueue(attempt n: Int, code: CKError.Code) -> Bool {
+        GardenSignalClassifier.classify(code: code).isAmbiguousFailure || n <= maxReEnqueues
+    }
+
     private func reEnqueue(_ recordID: CKRecord.ID, after error: CKError, on engine: CKSyncEngine) {
         failLock.lock()
         let n = (attemptCounts[recordID.recordName] ?? 0) + 1
         attemptCounts[recordID.recordName] = n
         failLock.unlock()
-        if n <= Self.maxReEnqueues {
+        if Self.shouldReEnqueue(attempt: n, code: error.code) {
             engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         } else {
             log.error("giving up on \(recordID.recordName, privacy: .public) after \(n, privacy: .public) re-enqueues: \(error, privacy: .public)")
@@ -516,13 +628,46 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
         failLock.unlock()
     }
 
+    /// What happens to a failed save, by the code that decides it (see `effectiveSaveError`).
+    enum SaveFailureDisposition: Equatable {
+        case merge          // serverRecordChanged
+        case zoneGone       // zoneNotFound / userDeletedZone
+        case dropMissing    // unknownItem
+        case retry          // re-enqueued, never recorded as a permanent failure
+        case permanent
+    }
+
+    static func saveFailureDisposition(for code: CKError.Code) -> SaveFailureDisposition {
+        switch code {
+        case .serverRecordChanged: return .merge
+        case .zoneNotFound, .userDeletedZone: return .zoneGone
+        case .unknownItem: return .dropMissing
+        case .batchRequestFailed, .zoneBusy, .serviceUnavailable, .requestRateLimited, .networkFailure,
+             .networkUnavailable, .serverResponseLost,
+             // N2-E: ambiguous codes (account, partial, and a permission failure until the share's
+             // permission is confirmed read-only) hold the pass and stay retriable, never permanent.
+             .notAuthenticated, .accountTemporarilyUnavailable, .partialFailure, .permissionFailure:
+            return .retry
+        default: return .permanent
+        }
+    }
+
+    /// A `partialFailure` carries the real error per item: the one for `recordID` decides. Without one,
+    /// the partial failure itself stays (retriable).
+    static func effectiveSaveError(_ error: CKError, for recordID: CKRecord.ID) -> CKError {
+        guard error.code == .partialFailure,
+              let nested = error.partialErrorsByItemID?[recordID] as? CKError else { return error }
+        return nested
+    }
+
     private func handleFailedSave(
         _ failure: CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave,
         on engine: CKSyncEngine
     ) {
         let recordID = failure.record.recordID
-        switch failure.error.code {
-        case .serverRecordChanged:
+        let failure = (record: failure.record, error: Self.effectiveSaveError(failure.error, for: recordID))
+        switch Self.saveFailureDisposition(for: failure.error.code) {
+        case .merge:
             if let serverRecord = failure.error.serverRecord {
                 var shouldResave = true
                 if let merger, merger.handles(serverRecord.recordType) {
@@ -552,25 +697,23 @@ public final class HouseholdSyncEngine: CKSyncEngineDelegate, HouseholdRecordSyn
                 // later pass re-attempts; the cap stops a persistent nil-serverRecord from poisoning sync.
                 reEnqueue(recordID, after: failure.error, on: engine)
             }
-        case .zoneNotFound, .userDeletedZone:
+        case .zoneGone:
             // N2-E: never re-stage `.saveZone` and never retry: that silently recreated a deleted
-            // garden. The save stops, the pass reports an error, and the gone signal goes to the
-            // seam `onZoneUnavailable` (G2 turns it into the deleted-garden handling).
-            let reason = PendingStateSanitizer.dropSaveForMissingZone(recordID, error: failure.error, on: engine.state)
+            // garden. The save stops and the pass reports an error. The gone signal itself was
+            // classified and latched when the sent batch began (`handleCurrentEvent`).
+            _ = PendingStateSanitizer.dropSaveForMissingZone(recordID, error: failure.error, on: engine.state)
             clearAttempts(recordID)
             surface(failure.error)
-            onZoneUnavailable?(reason)
-        case .unknownItem:
+        case .dropMissing:
             store.removeRecord(recordID)
             clearAttempts(recordID)
         // Retriable / collateral failures: CKSyncEngine reports a record ONCE in failedRecordSaves and
         // drops it from pending — so we MUST re-enqueue or the local edit never reaches CloudKit.
         // `.batchRequestFailed` is routine (a sibling in the same atomic batch conflicted). All clear on
         // a backed-off retry (sendUntilDrained); the cap stops a stuck one from looping forever.
-        case .batchRequestFailed, .zoneBusy, .serviceUnavailable,
-             .requestRateLimited, .networkFailure, .networkUnavailable, .serverResponseLost:
+        case .retry:
             reEnqueue(recordID, after: failure.error, on: engine)
-        default:
+        case .permanent:
             // Genuinely permanent (serverRejectedRequest / invalidArguments / permissionFailure /
             // quotaExceeded / …) — re-enqueueing would loop. Drop + SURFACE so the drain reports it as a
             // real error instead of a false success, and the watermark doesn't advance past it.

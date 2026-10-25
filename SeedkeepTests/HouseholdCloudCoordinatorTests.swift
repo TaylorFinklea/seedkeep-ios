@@ -66,22 +66,57 @@ struct HouseholdCloudCoordinatorTests {
         private(set) var sentDeliveryCount = 0
 
         var beforeDurableCheckpoint: (@Sendable () async -> Void)?
+
+        // MARK: N2-E guard seams (G2)
+        var batchCheck: (@Sendable () async -> GardenCheckOutcome)?
+        var onGardenSignal: (@Sendable (GardenSignal) -> Void)?
+        /// The production send gate: the fence, the hold and the batch-check admission the real
+        /// engine's delegate runs for every batch.
+        let sendGate = GardenSendGate()
+        /// How many batches one `sendUntilDrained` builds while changes are pending (CKSyncEngine asks
+        /// for batches until it gets nil). Each goes through the gate, so each is checked.
+        var batchesPerSend = 1
+        /// Batches that were actually built and sent.
+        private(set) var batchesSent = 0
+        /// Records and deletes staged since the last drain: what the real engine would batch.
+        private(set) var staged = 0
+        private(set) var releaseSendHoldCalls = 0
+        private(set) var clearFenceCalls = 0
+        func releaseSendHold() { releaseSendHoldCalls += 1; sendGate.release() }
+        func clearGardenFence() { clearFenceCalls += 1; sendGate.clearFence() }
+        /// An engine event that says something about the garden's zone (a deletion, a zone fetch
+        /// error, a failed save): applied to the production gate, then reported, as the real engine does.
+        func fire(_ signal: GardenSignal) {
+            sendGate.apply(signal, emit: { self.onGardenSignal?($0) })
+        }
+        /// Delivered fetched changes are ignored once the garden is fenced (a delete-then-modify batch).
+        private(set) var ignoredFetchesWhileFenced = 0
+
         func save(_ record: CKRecord) {
             guard acceptsChanges else { return }
             store.setRecord(record)
             savedRecords.append(record)
+            staged += 1
         }
         func delete(_ recordID: CKRecord.ID) {
             guard acceptsChanges else { return }
             store.removeRecord(recordID)
             deletedIDs.append(recordID)
             hasPendingRecordChanges = true
+            staged += 1
         }
         func discardPendingChanges() {
             acceptsChanges = false
             hasPendingRecordChanges = false
+            staged = 0
         }
         func activateForCurrentAccount() { acceptsChanges = true }
+
+        private func throwIfSendsBlocked() throws {
+            if let failure = sendGate.takeCheckFailure() { throw SyncEngineError.batchCheckFailed(failure) }
+            if let cause = sendGate.cause { throw SyncEngineError.gardenGone(cause) }
+            if sendGate.isHeld { throw SyncEngineError.sendsHeld }
+        }
 
         /// Durable cursor as last persisted — read fresh, so a replacement engine picks up exactly
         /// what its predecessor was allowed to check point.
@@ -96,6 +131,8 @@ struct HouseholdCloudCoordinatorTests {
             fetchChangesCallCount += 1
             if fetchFailuresRemaining > 0 { fetchFailuresRemaining -= 1; throw fetchError }
             guard let batch = nextFetchBatch() else { return }
+            // N2-E: nothing fetched for a gone garden lands.
+            if sendGate.isFenced { ignoredFetchesWhileFenced += 1; return }
             if let fetchGate { await fetchGate.waitForFetch() }
             let operationError = try await checkpoint.runPass(
                 operation: {
@@ -128,6 +165,16 @@ struct HouseholdCloudCoordinatorTests {
 
         func sendUntilDrained(maxPasses: Int) async throws {
             sendUntilDrainedCallCount += 1
+            // N2-E: what the real engine's drain loop does around its batch hook.
+            try throwIfSendsBlocked()
+            if staged > 0 || hasPendingRecordChanges {
+                for _ in 0..<max(1, batchesPerSend) {
+                    let admitted = await sendGate.admit(check: batchCheck, emit: { self.onGardenSignal?($0) })
+                    if admitted { batchesSent += 1 }
+                    try throwIfSendsBlocked()
+                }
+                staged = 0
+            }
             if !permanentlyFailedSaveRecordIDsOnNextDrain.isEmpty {
                 permanentlyFailedSaveRecordIDs = permanentlyFailedSaveRecordIDsOnNextDrain
                 permanentlyFailedSaveRecordIDsOnNextDrain = []

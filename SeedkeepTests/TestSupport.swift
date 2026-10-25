@@ -65,6 +65,11 @@ final class FakeCloudCoordinators {
         let householdID: String
     }
     private(set) var built: [Built] = []
+    /// N2-E: when set, every owner coordinator gets it as its provisioner (so the start and batch
+    /// checks run) and every participant coordinator as its inspector. nil keeps the plain sync path.
+    var provisioner: FakeGardenProvisioner?
+    /// How many batches each fake engine builds per `sendUntilDrained`.
+    var batchesPerSend = 1
 
     var factory: CloudCoordinatorFactory {
         CloudCoordinatorFactory(
@@ -77,7 +82,8 @@ final class FakeCloudCoordinators {
                         ownerName: CKCurrentUserDefaultName),
                     householdID: household.id, householdName: household.name,
                     householdCreatedAt: household.created_at, householdUpdatedAt: household.updated_at,
-                    container: container, provisioner: nil, stateURL: nil)
+                    container: container, provisioner: self.provisioner, stateURL: nil)
+                engine.batchesPerSend = self.batchesPerSend
                 self.built.append(Built(coordinator: coordinator, engine: engine,
                                         isParticipant: false, householdID: household.id))
                 return coordinator
@@ -88,7 +94,9 @@ final class FakeCloudCoordinators {
                 let coordinator = HouseholdCloudCoordinator(
                     engine: engine, zoneID: ownerZoneID, householdID: householdID, householdName: "",
                     householdCreatedAt: 0, householdUpdatedAt: 0,
-                    container: container, provisioner: nil, stateURL: nil, isParticipant: true)
+                    container: container, provisioner: nil, stateURL: nil, isParticipant: true,
+                    inspector: self.provisioner)
+                engine.batchesPerSend = self.batchesPerSend
                 self.built.append(Built(coordinator: coordinator, engine: engine,
                                         isParticipant: true, householdID: householdID))
                 return coordinator

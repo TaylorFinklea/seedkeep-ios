@@ -14,6 +14,13 @@ import SeedkeepCloudKit
 public final class SyncEngine {
     private let container: ModelContainer
     public var onLocalHouseholdMutation: (() -> Void)?
+    /// N2-E: the fence (contract §6). Every write is refused while the active garden is gone, awaiting
+    /// a choice or under a running journal, and a write that began in an earlier garden scope does
+    /// nothing. `AppEnvironment` sets it; nil (a bare engine in a unit test) is unfenced.
+    var writeFence: GardenWriteFence?
+    /// N2-E: where reminders are scheduled. A reminder scheduled after its garden scope went stale is
+    /// cancelled again.
+    var notifier: any GardenNotifying = LiveGardenNotifier()
     var cloudKitScopeIDProvider: (@MainActor () -> String?)?
     var onCloudKitPhotoCacheMiss: (@MainActor (String) async throws -> Data?)?
 
@@ -48,11 +55,24 @@ public final class SyncEngine {
 
     // MARK: - Local write entrypoints (called by views)
 
+    /// Refuses the write when the fence says no garden is writable. Every entry point below calls it
+    /// first; none awaits between this check and its save, so the scope cannot change in between.
+    /// The re-check at an async writer's final mutation boundary: garden and epoch must still be the
+    /// ones it began in.
+    private func confirmWritable(_ captured: WritableGarden?) throws {
+        if let captured { try writeFence?.confirm(captured) }
+    }
+
+    private func requireWritable() throws {
+        _ = try writeFence?.begin()
+    }
+
     private func noteLocalHouseholdMutation() {
         onLocalHouseholdMutation?()
     }
 
     public func enqueueCreateLocation(name: String, sortOrder: Int = 0, householdID: String) throws -> LocalLocation {
+        try requireWritable()
         let id = "loc_local_\(UUID().uuidString)"
         let now = Self.nowMs()
         let local = LocalLocation(id: id, householdID: householdID, name: name, sortOrder: sortOrder, createdAt: now, updatedAt: now)
@@ -64,6 +84,7 @@ public final class SyncEngine {
     }
 
     public func enqueueUpdateLocation(id: String, name: String?, sortOrder: Int?) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchLocation(id: id, in: context) {
@@ -76,6 +97,7 @@ public final class SyncEngine {
     }
 
     public func enqueueDeleteLocation(id: String) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchLocation(id: id, in: context) {
@@ -87,6 +109,7 @@ public final class SyncEngine {
     }
 
     public func enqueueCreateTag(name: String, color: String?, householdID: String) throws -> LocalTag {
+        try requireWritable()
         let id = "tag_local_\(UUID().uuidString)"
         let now = Self.nowMs()
         let local = LocalTag(id: id, householdID: householdID, name: name, color: color, createdAt: now, updatedAt: now)
@@ -98,6 +121,7 @@ public final class SyncEngine {
     }
 
     public func enqueueUpdateTag(id: String, name: String?, color: String??) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchTag(id: id, in: context) {
@@ -110,6 +134,7 @@ public final class SyncEngine {
     }
 
     public func enqueueDeleteTag(id: String) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchTag(id: id, in: context) {
@@ -121,6 +146,7 @@ public final class SyncEngine {
     }
 
     public func enqueueCreateSeed(_ input: CreateSeedInput, householdID: String) throws -> LocalSeed {
+        try requireWritable()
         // Use the caller-supplied id when present (a scan's stable id); otherwise generate one.
         let id = input.id ?? "seed_local_\(UUID().uuidString)"
         let now = Self.nowMs()
@@ -149,6 +175,7 @@ public final class SyncEngine {
     }
 
     public func enqueueUpdateSeed(id: String, _ patch: UpdateSeedInput) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchSeed(id: id, in: context) {
@@ -175,6 +202,7 @@ public final class SyncEngine {
     /// Updates the growing-info snapshot stored in the CloudKit household record.
     /// Successful edits set `updatedAt` to max(now, previous + 1), then schedule a coordinator save.
     public func setLocalGrowingInfo(seedID: String, snapshot: GrowingInfoSnapshot?) throws {
+        try requireWritable()
         let context = ModelContext(container)
         guard let local = try fetchSeed(id: seedID, in: context) else { return }
         local.growingInfo = snapshot
@@ -186,6 +214,7 @@ public final class SyncEngine {
     /// Updates the custom type stored in the CloudKit household record.
     /// Successful edits set `updatedAt` to max(now, previous + 1), then schedule a coordinator save.
     public func setLocalCustomType(seedID: String, type: String?) throws {
+        try requireWritable()
         let context = ModelContext(container)
         guard let local = try fetchSeed(id: seedID, in: context) else { return }
         let trimmed = type?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -196,6 +225,7 @@ public final class SyncEngine {
     }
 
     public func enqueueDeleteSeed(id: String) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchSeed(id: id, in: context) {
@@ -209,6 +239,7 @@ public final class SyncEngine {
     // MARK: - Beds (Phase 2)
 
     public func enqueueCreateBed(_ input: CreateBedInput, householdID: String) throws -> LocalBed {
+        try requireWritable()
         let id = input.id ?? "bed_local_\(UUID().uuidString)"
         let now = Self.nowMs()
         let local = LocalBed(
@@ -230,6 +261,7 @@ public final class SyncEngine {
     }
 
     public func enqueueUpdateBed(id: String, _ patch: UpdateBedInput) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchBed(id: id, in: context) {
@@ -245,6 +277,7 @@ public final class SyncEngine {
     }
 
     public func enqueueDeleteBed(id: String) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchBed(id: id, in: context) {
@@ -272,17 +305,26 @@ public final class SyncEngine {
             let descriptor = FetchDescriptor<LocalSeed>(predicate: #Predicate { $0.id == seedID })
             return (try? context.fetch(descriptor))?.first?.customName
         }()
+        let captured = try? writeFence?.begin()
+        let fence = writeFence
+        let notifier = notifier
         Task { @MainActor in
-            await NotificationsCenter.shared.schedulePlantingEventReminder(
+            await notifier.scheduleEventReminder(
                 eventID: eventID,
                 plannedFor: plannedFor,
                 kindLabel: kindLabel,
                 seedName: seedName
             )
+            // The garden went stale (gone, a binding or account change) while the reminder was being
+            // scheduled: take it back.
+            if let fence, let captured, !fence.isStillValid(captured) {
+                notifier.cancelEventReminder(eventID: eventID)
+            }
         }
     }
 
     public func enqueueCreatePlantingEvent(_ input: CreatePlantingEventInput, householdID: String) throws -> LocalPlantingEvent {
+        try requireWritable()
         // The "planned for today" reminder scheduled below is keyed by this id, so completing or
         // deleting the event can cancel it.
         let id = input.id ?? "pe_local_\(UUID().uuidString)"
@@ -316,6 +358,7 @@ public final class SyncEngine {
     }
 
     public func enqueueUpdatePlantingEvent(id: String, _ patch: UpdatePlantingEventInput) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchPlantingEvent(id: id, in: context) {
@@ -339,7 +382,7 @@ public final class SyncEngine {
         if let local = try fetchPlantingEvent(id: id, in: context) {
             if local.completedAt != nil {
                 Task { @MainActor in
-                    NotificationsCenter.shared.cancelPlantingEventReminder(eventID: id)
+                    notifier.cancelEventReminder(eventID: id)
                 }
             } else {
                 scheduleEventReminder(local)
@@ -351,6 +394,7 @@ public final class SyncEngine {
     }
 
     public func enqueueDeletePlantingEvent(id: String) throws {
+        try requireWritable()
         let now = Self.nowMs()
         let context = ModelContext(container)
         if let local = try fetchPlantingEvent(id: id, in: context) {
@@ -388,6 +432,7 @@ public final class SyncEngine {
         photoID: String? = nil,
         capturedAt: Int64? = nil
     ) async throws {
+        let captured = try writeFence?.begin()
         guard !householdID.isEmpty else {
             throw SeedkeepError(
                 code: "missing_active_garden",
@@ -422,6 +467,7 @@ public final class SyncEngine {
         )
         context.insert(photo)
         do {
+            try confirmWritable(captured)
             try context.save()
         } catch {
             pending.remove(recordName)
@@ -461,6 +507,7 @@ public final class SyncEngine {
     }
 
     func deleteSeedPhoto(_ photoID: String, householdID: String) async throws {
+        let captured = try writeFence?.begin()
         guard !householdID.isEmpty else {
             throw SeedkeepError(
                 code: "missing_active_garden",
@@ -498,6 +545,7 @@ public final class SyncEngine {
             ))
         }
         context.delete(photo)
+        try confirmWritable(captured)
         try context.save()
         PhotoByteStore.purgeRecord(recordName, householdID: householdID)
         onLocalHouseholdMutation?()
@@ -510,6 +558,7 @@ public final class SyncEngine {
         height: Int? = nil,
         householdID: String? = nil
     ) async throws -> LocalJournalEntryPhoto {
+        let captured = try writeFence?.begin()
         guard let householdID, !householdID.isEmpty else {
             throw SeedkeepError(
                 code: "missing_active_garden",
@@ -546,6 +595,7 @@ public final class SyncEngine {
         )
         context.insert(photo)
         do {
+            try confirmWritable(captured)
             try context.save()
         } catch {
             pending.remove(recordName)
@@ -556,6 +606,7 @@ public final class SyncEngine {
     }
 
     func deleteJournalPhoto(_ photoID: String, householdID: String? = nil) async throws {
+        let captured = try writeFence?.begin()
         guard let householdID, !householdID.isEmpty else {
             throw SeedkeepError(
                 code: "missing_active_garden",
@@ -596,6 +647,7 @@ public final class SyncEngine {
             ))
         }
         context.delete(photo)
+        try confirmWritable(captured)
         try context.save()
         PhotoByteStore.purgeRecord(recordName, householdID: householdID)
         onLocalHouseholdMutation?()

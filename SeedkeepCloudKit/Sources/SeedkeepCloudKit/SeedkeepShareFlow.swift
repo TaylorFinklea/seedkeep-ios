@@ -170,7 +170,14 @@ public struct SeedkeepShareFlow {
     /// Create — or return the already-existing — zone-wide CKShare for the household zone. Idempotent
     /// (a zone holds one zone-wide share). `publicPermission` stays `.none` (named-participant: the
     /// owner adds one partner via the system share sheet). Hand the result to UICloudSharingController.
-    public func makeOrFetchZoneWideShare(householdID: String, title: String) async throws -> CKShare {
+    ///
+    /// N2-E: `beforeSave` runs immediately before the share is saved (never when an existing share is
+    /// returned) and throws to refuse the save. The app uses it to read the root's generation and
+    /// re-check the account and epoch, so a gone or recreated garden is never shared.
+    public func makeOrFetchZoneWideShare(
+        householdID: String, title: String,
+        beforeSave: @Sendable () async throws -> Void = {}
+    ) async throws -> CKShare {
         let db = container.privateCloudDatabase
         // N2-E: sharing never creates the zone. The caller requires a seen garden, and a missing
         // zone fails here (`zoneNotFound`) instead of being recreated.
@@ -180,6 +187,7 @@ public struct SeedkeepShareFlow {
         }
         let share = CKShare(recordZoneID: zoneID)
         share[CKShare.SystemFieldKey.title] = title as CKRecordValue
+        try await beforeSave()
         _ = try await db.modifyRecords(saving: [share], deleting: [])
         return share
     }

@@ -183,9 +183,12 @@ enum ParticipantRowRecovery {
         container: ModelContainer,
         signedInHouseholdID: String,
         ownerZoneHouseholdID: String,
+        isWritable: @MainActor () -> Bool = { true },
         saveOperation: ((ModelContext) throws -> Void)? = nil
     ) -> Bool {
         guard ownerZoneHouseholdID != signedInHouseholdID else { return false }
+        // N2-E: a gone garden (or a scope that moved) is not written into.
+        guard isWritable() else { return false }
         let scope = scopeKey(ownerZoneHouseholdID: ownerZoneHouseholdID, signedInHouseholdID: signedInHouseholdID)
         let key = markerKey(scopeKey: scope)
         guard !UserDefaults.standard.bool(forKey: key) else { return false }
@@ -231,6 +234,8 @@ enum ParticipantRowRecovery {
                 id: entryID, scopeKey: scope, snapshotJSON: json, detectedAt: now, status: "pending"))
         }
 
+        // The final mutation boundary: nothing above reached the store (this context is unsaved).
+        guard isWritable() else { return false }
         do {
             try (saveOperation ?? { try $0.save() })(context)
         } catch {

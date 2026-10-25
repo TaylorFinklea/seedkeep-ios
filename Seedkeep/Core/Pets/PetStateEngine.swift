@@ -43,8 +43,11 @@ public enum PetStateEngine {
     public static func tickAll(
         householdID: String,
         container: ModelContainer,
-        now: Date = Date()
+        now: Date = Date(),
+        isWritable: @MainActor () -> Bool = { true }
     ) -> [Transition] {
+        // N2-E: a tick in a garden that is gone (or whose scope moved) writes no snapshot or streak.
+        guard isWritable() else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<LocalPlantingEvent>(
             predicate: #Predicate<LocalPlantingEvent> { event in
@@ -61,6 +64,9 @@ public enum PetStateEngine {
                 transitions.append(t)
             }
         }
+        // The final mutation boundary: re-checked right before the save, so a scope that went stale
+        // while the ticks ran drops them all (the context is discarded unsaved).
+        guard isWritable() else { return [] }
         try? context.save()
         return transitions
     }

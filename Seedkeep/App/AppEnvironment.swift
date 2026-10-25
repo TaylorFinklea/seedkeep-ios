@@ -16,6 +16,14 @@ public final class AppEnvironment {
     let gardenGuard: GardenGuardStore
     /// N2-E seam: where the silent re-home (G3) runs.
     @ObservationIgnored let gardenRehomer: any GardenRehoming
+    /// N2-E: the guard runner (one per app). It owns the guard transitions and the scope epoch;
+    /// every window shares it through this environment.
+    let gardenRunner: GardenGuardRunner
+    /// N2-E: where garden-scoped notifications are scheduled and removed.
+    @ObservationIgnored var ownerShares: any OwnerShareMaking = LiveOwnerShareMaker()
+    @ObservationIgnored var notifier: any GardenNotifying = LiveGardenNotifier() {
+        didSet { sync.notifier = notifier }
+    }
     public let container: ModelContainer
     public let sync: SyncEngine
     public let recommendations: RecommendationStore
@@ -99,6 +107,7 @@ public final class AppEnvironment {
         // rebind can clear the old Sign in with Apple bearer token.
         let gardenGuard = GardenGuardStore.live()
         let rehomer = DeferredGardenRehomer()
+        let gardenRunner = GardenGuardRunner(store: gardenGuard, rehomer: rehomer)
         let auth = AuthController(identity: LiveCloudIdentityProvider(), tokenStore: store,
                                   guardStore: gardenGuard, rehomer: rehomer)
         let container = Self.makeModelContainer()
@@ -113,6 +122,9 @@ public final class AppEnvironment {
         // `NotificationsCenter.refreshFrostWarnings` path with the
         // actor-orchestrated frost/heat/water flow. Providers are
         // wired here so tests can swap them out via a separate init.
+        // The scope token the weather service schedules under: the active garden and the scope epoch,
+        // nil while the garden is gone. It is wired to the environment once that exists (below).
+        let scopeBox = WritableScopeBox()
         let weatherWarnings = WeatherWarningsService(
             container: container,
             provider: WeatherKitProvider(container: container),
@@ -128,6 +140,7 @@ public final class AppEnvironment {
                     participantZoneName: ActiveGardenContext.participantZoneName()
                 )
             },
+            scopeProvider: { @MainActor in scopeBox.token() },
             preferencesProvider: { @MainActor [weak prefs] in
                 (lat: prefs?.cachedLatitude, lon: prefs?.cachedLongitude)
             },
@@ -139,14 +152,16 @@ public final class AppEnvironment {
                 )
             }
         )
-        return AppEnvironment(
+        let env = AppEnvironment(
             auth: auth, container: container,
             sync: sync, recommendations: recommendations,
             journal: journal,
             preferences: prefs, apiKeys: apiKeys,
             weatherWarnings: weatherWarnings,
-            gardenGuard: gardenGuard, gardenRehomer: rehomer
+            gardenGuard: gardenGuard, gardenRehomer: rehomer, gardenRunner: gardenRunner
         )
+        scopeBox.environment = env
+        return env
     }
 
     /// N1 test seam: an environment over `container` and a fake identity provider, with every
@@ -168,11 +183,17 @@ public final class AppEnvironment {
         cloudCoordinators: CloudCoordinatorFactory,
         gardenGuard: GardenGuardStore = GardenGuardStore(directory: nil),
         gardenRehomer: any GardenRehoming = DeferredGardenRehomer(),
+        gardenRunner: GardenGuardRunner? = nil,
+        notifier: (any GardenNotifying)? = nil,
+        ownerShares: (any OwnerShareMaking)? = nil,
+        deferringBackgroundServices: Bool = false,
+        backgroundServiceStarter: (() -> Void)? = nil,
         makeHouseholdID: @escaping () -> String = { GardenHouseholdID.make() },
         forecastSource: @escaping RecommendationStore.ForecastSource = WeatherKitRefiner.fetchForecast,
         apiKeys: APIKeyStore = APIKeyStore(service: "app.seedkeep.tests.\(UUID().uuidString)")
     ) -> AppEnvironment {
         let prefs = AppPreferences(defaults: defaults)
+        let runner = gardenRunner ?? GardenGuardRunner(store: gardenGuard, rehomer: gardenRehomer)
         let auth = AuthController(identity: identity, tokenStore: tokenStore, defaults: defaults,
                                   guardStore: gardenGuard, rehomer: gardenRehomer,
                                   makeHouseholdID: makeHouseholdID)
@@ -203,9 +224,13 @@ public final class AppEnvironment {
             startsBackgroundServices: false,
             cloudKitPermitted: cloudKitPermitted,
             cloudCoordinators: cloudCoordinators,
-            gardenGuard: gardenGuard, gardenRehomer: gardenRehomer
+            gardenGuard: gardenGuard, gardenRehomer: gardenRehomer, gardenRunner: runner
         )
         env.clearAppNotifications = {}
+        env.notifier = notifier ?? NoopGardenNotifier()
+        if let ownerShares { env.ownerShares = ownerShares }
+        env.backgroundServiceStarter = backgroundServiceStarter
+        if deferringBackgroundServices { env.deferringBackgroundServices = true }
         // N3 test seam: the live launch's legacy-file cleanup, over the caller's directories.
         if let legacyCheckpointDirectory {
             LegacyAccountDeletionCleanup.removeLegacyFiles(
@@ -288,10 +313,12 @@ public final class AppEnvironment {
         cloudKitPermitted: Bool = true,
         cloudCoordinators: CloudCoordinatorFactory = .live,
         gardenGuard: GardenGuardStore,
-        gardenRehomer: any GardenRehoming
+        gardenRehomer: any GardenRehoming,
+        gardenRunner: GardenGuardRunner
     ) {
         self.gardenGuard = gardenGuard
         self.gardenRehomer = gardenRehomer
+        self.gardenRunner = gardenRunner
         self.cloudKitPermitted = cloudKitPermitted
         self.cloudCoordinators = cloudCoordinators
         self.auth = auth
@@ -307,6 +334,12 @@ public final class AppEnvironment {
         self.scanStagingRoot = scanStagingRoot
         sync.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
         journal.onLocalHouseholdMutation = { [weak self] in self?.noteHouseholdMutation() }
+        // N2-E: the write fence (contract §6) and its epoch. Every identity transition and binding
+        // change bumps the scope epoch; the gone handling does too, and also cancels notifications.
+        sync.writeFence = GardenWriteFence(current: { [weak self] in self?.writableGarden })
+        journal.writeFence = GardenWriteFence(current: { [weak self] in self?.writableGarden })
+        auth.onScopeChange = { [weak gardenRunner] in gardenRunner?.bumpScopeEpoch() }
+        gardenRunner.onGardenLost = { [weak self] event in self?.gardenLost(event) }
         // N1: the scope ID is derived, never a coordinator, and not gated on `canUseCloudKit`, so a
         // local delete made while CloudKit is paused still records its deletion intent.
         sync.cloudKitScopeIDProvider = { [weak self] in
@@ -314,7 +347,7 @@ public final class AppEnvironment {
             return self.cloudKitScopeID(household: household)
         }
         sync.onCloudKitPhotoCacheMiss = { [weak self] recordName in
-            guard let self, self.canUseCloudKit,
+            guard let self, self.canUseCloudKit, self.writableGarden != nil,
                   case .signedIn(_, let household) = self.auth.state else { return nil }
             return try await self.ensureCloudCoordinator(household: household)
                 .recoverPhotoAssetData(recordName: recordName)
@@ -326,15 +359,10 @@ public final class AppEnvironment {
         // Phase 4C — wire `NotificationCenter.default` observers
         // (active-plantings debounce + system-timezone-change). The
         // service is idempotent so a second start() is a no-op.
+        // N2-E: a launch that found a journal or a gone entry mutates nothing until `restoreSession`
+        // has verified the owning account and the runner has resumed (`resumeGuardAfterLaunch`).
         if startsBackgroundServices {
-            Task { await weatherWarnings.start() }
-        }
-        // N2 — a home ZIP saved before frost dates were cached gets them from the bundled table.
-        // Live launches only: the unit-test host never writes the shared preferences.
-        if startsBackgroundServices, FeatureFlags.canRunLiveAppStartup {
-            Task { await preferences.backfillFrostDates() }
-            // N3 — catalog correction outcomes came from the retired server; clear any left behind.
-            Task { await NotificationsCenter.shared.clearRetiredCatalogNotifications() }
+            if gardenRunner.isLaunchResolved { startBackgroundServices() } else { deferringBackgroundServices = true }
         }
         // Stabilization B3 + R1 — sign-out / identity-switch wipe. Erases every model (generic over
         // SeedkeepSchema.all — includes legacy pending-write and sync-cursor rows), drops notifications,
@@ -409,13 +437,116 @@ public final class AppEnvironment {
     private(set) var scanSessionEpoch = 0
 
     /// What a scan or save sheet binds to when it starts: the signed-in user, the active garden and
-    /// the scan epoch. nil while signed out.
+    /// the scan epoch. nil while signed out, and nil while the garden is gone or awaiting a choice
+    /// (N2-E: a save that started before then fails its scope check at the attach and discards its
+    /// scan). The epoch combines the scan epoch with `gardenScopeEpoch`, so a binding change or a gone
+    /// garden under an open sheet stops it.
     var scanBinding: ScanPhotoStaging.ScanBinding? {
-        guard case .signedIn(let user, _) = auth.state, let householdID = activeGardenHouseholdID else { return nil }
+        guard case .signedIn(let user, _) = auth.state, let householdID = activeGardenHouseholdID,
+              let writable = writableGarden else { return nil }
         return ScanPhotoStaging.ScanBinding(
             scope: ScanPhotoStaging.Scope(userRecordName: user.id, householdID: householdID),
-            epoch: scanSessionEpoch
+            epoch: scanSessionEpoch &+ writable.epoch
         )
+    }
+
+    // MARK: - Write fence (N2-E §6)
+
+    /// `gardenScopeEpoch`: bumped on gone, on every binding change and on every account transition.
+    var gardenScopeEpoch: Int { gardenRunner.scopeEpoch }
+
+    /// The active garden plus the scope epoch; nil while the bound garden is gone, awaiting a choice
+    /// or under a running journal. Signed out, no garden is active and nothing is gone, so the value
+    /// carries no garden but the epoch still moves. Every writer captures it when it starts and
+    /// re-checks it at its final mutation boundary.
+    var writableGarden: WritableGarden? {
+        let epoch = gardenRunner.scopeEpoch
+        guard case .signedIn(let user, _) = auth.state else {
+            return WritableGarden(householdID: nil, epoch: epoch)
+        }
+        guard let householdID = activeGardenHouseholdID else { return nil }
+        let account = GardenGuardStore.accountKey(recordName: user.id)
+        if gardenRunner.isBlocked(account: account, householdID: householdID) { return nil }
+        return WritableGarden(householdID: householdID, epoch: epoch)
+    }
+
+    /// True while `captured` is still the current writable garden in the same epoch.
+    func gardenWriteStillValid(_ captured: WritableGarden?) -> Bool {
+        guard let captured else { return false }
+        return writableGarden == captured
+    }
+
+    /// The active garden is gone and waits for the user's choice. Every window shows the placeholder.
+    var isActiveGardenGone: Bool {
+        guard case .signedIn(let user, _) = auth.state, let householdID = activeGardenHouseholdID else { return false }
+        return gardenGuard.isGone(GardenGuardStore.accountKey(recordName: user.id), householdID)
+            || gardenRunner.isMemoryFenced(account: GardenGuardStore.accountKey(recordName: user.id), householdID: householdID)
+    }
+
+    /// The scope token the weather service schedules under: the garden and the epoch, nil while the
+    /// garden is gone.
+    func writableScopeToken() -> String? {
+        guard let writable = writableGarden else { return nil }
+        return "\(writable.householdID ?? "-")#\(writable.epoch)"
+    }
+
+    /// The gone step's last part (contract §6, step 3): the pending shares belong to a scope that
+    /// ended, and the garden's notifications are cancelled. The runner already bumped the scope epoch.
+    fileprivate func gardenLost(_ event: GardenGoneEvent) {
+        pendingShareEpoch += 1
+        notifier.removeAll()
+        scanSessionEpoch += 1   // an open scan or save sheet stops and discards its scan
+    }
+
+    // MARK: - Launch ordering (N2-E §6)
+
+    /// True while a launch that found a journal or gone entry waits for `restoreSession` and the
+    /// runner. Windows show progress instead of a garden, and no startup task runs.
+    var isLaunchGuardPending: Bool { !gardenRunner.isLaunchResolved }
+
+    @ObservationIgnored private var launchGuardResumed = false
+    @ObservationIgnored var deferringBackgroundServices = false
+    @ObservationIgnored var backgroundServiceStarter: (() -> Void)?
+    @ObservationIgnored private(set) var backgroundServicesStarted = false
+
+    /// Weather observers, the frost-date backfill and the retired-notification clean-up. Started at
+    /// launch, or after the guard has resumed when it held a journal or gone entry.
+    func startBackgroundServices() {
+        guard !backgroundServicesStarted else { return }
+        backgroundServicesStarted = true
+        if let backgroundServiceStarter { backgroundServiceStarter(); return }
+        Task { await weatherWarnings.start() }
+        // N2 — a home ZIP saved before frost dates were cached gets them from the bundled table.
+        // Live launches only: the unit-test host never writes the shared preferences.
+        if FeatureFlags.canRunLiveAppStartup {
+            Task { [weak self] in
+                guard let self else { return }
+                let captured = self.writableGarden
+                await self.preferences.backfillFrostDates(isWritable: { [weak self] in
+                    self?.gardenWriteStillValid(captured) ?? false
+                })
+            }
+            // N3 — catalog correction outcomes came from the retired server; clear any left behind.
+            Task { await NotificationsCenter.shared.clearRetiredCatalogNotifications() }
+        }
+    }
+
+    /// Launch step after `restoreSession` (contract §6): the runner resumes for the account that
+    /// resolution verified (another account's entries are left alone), then the background services
+    /// that waited start, and windows may show a garden.
+    func resumeGuardAfterLaunch() {
+        // Only with a verified account (and a readable guard): otherwise the gate stays closed and
+        // the deferred services wait, over a garden that may hold a journal. A later call, once
+        // verification succeeds, does the resume.
+        guard auth.isIdentityVerified, let account = auth.currentAccountKey, gardenGuard.isReadable else { return }
+        gardenRunner.resume(accountKey: account)
+        // A garden found gone in an earlier run has no notifications.
+        if !launchGuardResumed, isActiveGardenGone { notifier.removeAll() }
+        launchGuardResumed = true
+        if deferringBackgroundServices {
+            deferringBackgroundServices = false
+            startBackgroundServices()
+        }
     }
 
     /// Invalidates every open scan and save sheet, then deletes all staged scan photos. Throws when
@@ -521,6 +652,9 @@ public final class AppEnvironment {
         bannerError = message
     }
 
+    /// N2-E §5: shown to a participant whose `currentUserParticipant` permission is read-only.
+    static let viewOnlyNotice = "You can view this shared garden but not change it."
+
     /// Triggers a CloudKit sync if the user is signed in. Safe to call repeatedly —
     /// overlapping passes are counted in `cloudSyncPassesInFlight`.
     ///
@@ -540,6 +674,9 @@ public final class AppEnvironment {
             if !auth.isIdentityVerified { await auth.restoreSession() }
             guard case .signedIn(_, let current) = auth.state, current == household,
                   self.activeGardenHouseholdID == activeGardenHouseholdID else { return }
+            // N2-E: a gone garden (or one awaiting the user's choice) syncs nothing, runs no pet tick
+            // and schedules no notification. The captured scope is re-checked after every await.
+            guard let writable = writableGarden else { return }
             // N1: CloudKit paused (unconfirmed identity) or a share being adopted (its own sync
             // follows): skip only the CloudKit pass, with no banner. The local post-sync work below
             // still runs.
@@ -553,7 +690,8 @@ public final class AppEnvironment {
                     let recovered = ParticipantRowRecovery.runIfNeeded(
                         container: container,
                         signedInHouseholdID: household.id,
-                        ownerZoneHouseholdID: activeGardenHouseholdID
+                        ownerZoneHouseholdID: activeGardenHouseholdID,
+                        isWritable: { [weak self] in self?.gardenWriteStillValid(writable) ?? false }
                     )
                     if recovered { noteHouseholdMutation() }
                 }
@@ -562,7 +700,11 @@ public final class AppEnvironment {
                 guard ran else { return }
                 // Only CloudKit errors can reach the sync banner. A pass that stopped (paused,
                 // account changed) leaves an older error behind.
-                banner = coordinator.lastPassCompleted ? coordinator.lastHumanizedError : nil
+                // N2-E: a participant whose permission is confirmed read-only is told so once the pass
+                // has fetched; sends stopped, fetching went on.
+                banner = coordinator.isViewOnly
+                    ? Self.viewOnlyNotice
+                    : (coordinator.lastPassCompleted ? coordinator.lastHumanizedError : nil)
             } else {
                 banner = nil
             }
@@ -572,13 +714,14 @@ public final class AppEnvironment {
             if let banner { presentBanner(banner) }
             PetStateEngine.tickAll(
                 householdID: activeGardenHouseholdID,
-                container: container
+                container: container,
+                isWritable: { [weak self] in self?.gardenWriteStillValid(writable) ?? false }
             )
             // Phase 5.1.4: re-bake the weekly roundup body with the
             // current household snapshot. iOS preserves the next-fire
             // date when re-scheduling with the same identifier + same
             // DateComponents shape, so this is cheap to call every sync.
-            await rescheduleWeeklyPetRoundup(householdID: activeGardenHouseholdID)
+            await rescheduleWeeklyPetRoundup(householdID: activeGardenHouseholdID, captured: writable)
             // Phase 4C: refresh weather warnings if stale. Honors the
             // 2h staleness gate when called with `.foreground` so a
             // tab-back-in doesn't burn a WeatherKit fetch.
@@ -588,7 +731,7 @@ public final class AppEnvironment {
 
     private func noteHouseholdMutation() {
         // A share being adopted replaces this garden; its own sync pushes what remains.
-        guard canUseCloudKit, !isAdoptingShare,
+        guard canUseCloudKit, !isAdoptingShare, writableGarden != nil,
               case .signedIn(_, let household) = auth.state else { return }
         let coordinator = ensureCloudCoordinator(household: household)
         Task { await coordinator.save() }
@@ -725,7 +868,7 @@ public final class AppEnvironment {
             coordinator.guardContext = GardenGuardContext(
                 store: gardenGuard,
                 accountKey: { [weak self] in self?.auth.currentAccountKey },
-                rehomer: gardenRehomer)
+                rehomer: gardenRehomer, runner: gardenRunner)
             coordinator.onOwnedGardensListed = { [weak self] owned, account, householdID in
                 self?.auth.considerDiscovery(owned: owned, accountKey: account, householdID: householdID)
             }
@@ -791,27 +934,44 @@ public final class AppEnvironment {
         stateDefaults.set(m.zoneName, forKey: markerZoneKey)
         stateDefaults.set(m.ownerName, forKey: markerOwnerKey)
         participantMarkerRevision &+= 1
+        gardenRunner.bumpScopeEpoch()   // N2-E: a binding change ends the scope writers started in
     }
     private func clearParticipantMarker() {
         stateDefaults.removeObject(forKey: markerZoneKey)
         stateDefaults.removeObject(forKey: markerOwnerKey)
         participantMarkerRevision &+= 1
+        gardenRunner.bumpScopeEpoch()
     }
 
     /// OWNER: create (or fetch) the household's zone-wide CKShare for `UICloudSharingController`.
     /// Returns nil if not signed in, already a participant, or on error (surfaced to the banner).
     func prepareOwnerShare() async -> (share: CKShare, container: CKContainer)? {
-        guard canUseCloudKit, case .signedIn(let user, let household) = auth.state,
+        guard let share = await makeOwnerShare() else { return nil }
+        return (share, SeedkeepShareFlow().container)
+    }
+
+    /// The share itself. N2-E: sharing needs a garden this device has seen exist, never creates the
+    /// zone, and checks the garden right before a new share is saved: the root is read, its generation
+    /// compared, and the account and epoch re-checked after every await. A mismatch is gone, and
+    /// nothing is saved.
+    func makeOwnerShare() async -> CKShare? {
+        guard canUseCloudKit, let writable = writableGarden, case .signedIn(let user, let household) = auth.state,
               !isViewingSharedHousehold else { return nil }
-        // N2-E: sharing needs a garden this device has seen exist. It never creates the zone.
         guard gardenGuard.isSeen(GardenGuardStore.accountKey(recordName: user.id), household.id) else {
             presentBanner("Your garden isn't in iCloud yet, so it can't be shared. Sync first, then try again.")
             return nil
         }
+        let coordinator = ensureCloudCoordinator(household: household)
         do {
-            let flow = SeedkeepShareFlow()
-            let share = try await flow.makeOrFetchZoneWideShare(householdID: household.id, title: household.name)
-            return (share, flow.container)
+            return try await ownerShares.makeOrFetch(householdID: household.id, title: household.name) { [weak self] in
+                guard let self else { throw SyncEngineError.accountInvalidated }
+                try await coordinator.confirmGardenForShare()
+                try await MainActor.run {
+                    guard self.gardenWriteStillValid(writable) else { throw GardenWriteFence.refusal }
+                }
+            }
+        } catch SyncEngineError.gardenGone {
+            return nil   // gone: the placeholder takes over, no banner
         } catch {
             surfaceError(error)
             return nil
@@ -928,6 +1088,11 @@ public final class AppEnvironment {
             PendingShareInbox.shared.deposit(metadata, underResolvedIdentity: canDrainPendingShares)
             return false
         }
+        // N2-E: a gone garden awaits the user's choice; a share is not adopted over it. The share waits.
+        guard let writable = writableGarden else {
+            PendingShareInbox.shared.deposit(metadata, underResolvedIdentity: true)
+            return false
+        }
         let epoch = pendingShareEpoch
         do {
             let zoneID = try await acceptZoneWideShareBounded(metadata)
@@ -935,7 +1100,10 @@ public final class AppEnvironment {
             // user is back by now): this share is dropped and nothing is wiped.
             guard adoptionIsCurrent(epoch) else { return false }
             // The identity may have changed while CloudKit answered: wipe nothing, keep the share.
-            guard currentAdoptionIdentity == identity else {
+            // N2-E: so may the garden scope (a gone garden, a binding or account change): the rebind
+            // and the wipe below are the final mutation boundary, and the scope must still be the one
+            // the adoption started in.
+            guard currentAdoptionIdentity == identity, gardenWriteStillValid(writable) else {
                 PendingShareInbox.shared.deposit(metadata, underResolvedIdentity: true)
                 return false
             }
@@ -986,6 +1154,8 @@ public final class AppEnvironment {
         if metadata.participantRole == .owner { return false }
         guard metadata.containerIdentifier == "iCloud.app.seedkeep" else { return false }
         guard let identity = currentAdoptionIdentity else { throw PendingShareAuthChangedError() }
+        // N2-E: a gone garden awaits the user's choice; a share is not adopted over it. The share waits.
+        guard let writable = writableGarden else { throw PendingShareAuthChangedError() }
         let epoch = pendingShareEpoch
         let zoneID: CKRecordZone.ID
         do {
@@ -999,7 +1169,9 @@ public final class AppEnvironment {
         }
         // A different user's wipe cleared the queue meanwhile: returning drops this share too.
         guard adoptionIsCurrent(epoch) else { return false }
-        guard currentAdoptionIdentity == identity else { throw PendingShareAuthChangedError() }
+        guard currentAdoptionIdentity == identity, gardenWriteStillValid(writable) else {
+            throw PendingShareAuthChangedError()
+        }
         let coordinator = cloudCoordinator ?? {
             guard case .signedIn(_, let household) = auth.state else { return nil }
             return ensureCloudCoordinator(household: household)
@@ -1103,7 +1275,8 @@ public final class AppEnvironment {
     /// every call so a stale item captured across a garden switch is refused rather than acted on.
     func shareJournalRecoveryItem(_ item: LocalJournalRecoveryItem) async {
         guard case .signedIn(_, let household) = auth.state,
-              let ownerID = activeGardenHouseholdID, ownerID != household.id else { return }
+              let ownerID = activeGardenHouseholdID, ownerID != household.id,
+              writableGarden != nil else { return }
         let itemID = item.id
         let scope = ParticipantRowRecovery.scopeKey(
             ownerZoneHouseholdID: ownerID, signedInHouseholdID: household.id)
@@ -1127,7 +1300,8 @@ public final class AppEnvironment {
     /// refused rather than acted on.
     func keepJournalRecoveryItemPrivate(_ item: LocalJournalRecoveryItem) {
         guard case .signedIn(_, let household) = auth.state,
-              let ownerID = activeGardenHouseholdID, ownerID != household.id else { return }
+              let ownerID = activeGardenHouseholdID, ownerID != household.id,
+              writableGarden != nil else { return }
         let scope = ParticipantRowRecovery.scopeKey(
             ownerZoneHouseholdID: ownerID, signedInHouseholdID: household.id)
         do {
@@ -1140,7 +1314,7 @@ public final class AppEnvironment {
     /// Phase 5.1.4 — recompute the Sunday-8am pet roundup body from the
     /// current household snapshot. Gated server-side by the Settings
     /// toggle; this function is safe to call regardless.
-    private func rescheduleWeeklyPetRoundup(householdID: String) async {
+    private func rescheduleWeeklyPetRoundup(householdID: String, captured: WritableGarden?) async {
         let context = ModelContext(container)
         // 3-condition predicates trip the SwiftData macro type-checker;
         // gate the two cheap server-side flags here + filter petSeed in code.
@@ -1162,10 +1336,10 @@ public final class AppEnvironment {
                 }
             }
         }
-        await NotificationsCenter.shared.schedulePetWeeklyRoundup(
-            thrivingCount: thriving,
-            wiltingCount: wilting
-        )
+        await notifier.schedulePetRoundup(thriving: thriving, wilting: wilting)
+        // N2-E: scheduled just as the scope went stale (the garden is gone, or the binding or account
+        // changed): take the notification back.
+        if !gardenWriteStillValid(captured) { notifier.clearPetRoundup() }
     }
 
     /// The store the legacy rebind clears: exactly the retired bearer-token item in `service`.
@@ -1207,6 +1381,17 @@ public final class AppEnvironment {
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
+    }
+}
+
+/// Hands the weather service the environment's writable-garden scope once the environment exists
+/// (the service is built first). Before then the token is a fixed placeholder.
+@MainActor
+final class WritableScopeBox {
+    weak var environment: AppEnvironment?
+    func token() -> String? {
+        guard let environment else { return "unbound" }
+        return environment.writableScopeToken()
     }
 }
 

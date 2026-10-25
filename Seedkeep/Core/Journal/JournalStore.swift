@@ -12,6 +12,15 @@ final class JournalStore {
 
     @ObservationIgnored var onLocalHouseholdMutation: (() -> Void)?
     @ObservationIgnored var cloudKitScopeIDProvider: (@MainActor () -> String?)?
+    /// N2-E: the write fence. Every mutation captures the writable garden when it starts and
+    /// re-checks it right before its save; a gone garden, or a scope that changed meanwhile, writes
+    /// nothing. nil (a bare store in a unit test) is unfenced.
+    @ObservationIgnored var writeFence: GardenWriteFence?
+
+    private func beginWrite() throws -> WritableGarden? { try writeFence?.begin() }
+    private func confirmWrite(_ captured: WritableGarden?) throws {
+        if let captured { try writeFence?.confirm(captured) }
+    }
 
     init(container: ModelContainer) {
         self.container = container
@@ -35,6 +44,7 @@ final class JournalStore {
         plantingEventID: String? = nil,
         householdID: String? = nil
     ) async throws -> LocalJournalEntry {
+        let captured = try beginWrite()
         guard let householdID, !householdID.isEmpty else {
             throw SeedkeepError(
                 code: "missing_active_garden",
@@ -63,6 +73,7 @@ final class JournalStore {
             deletedAt: nil
         )
         context.insert(local)
+        try confirmWrite(captured)
         try context.save()
         onLocalHouseholdMutation?()
         return local
@@ -77,6 +88,7 @@ final class JournalStore {
         plantingEventID: String?,
         householdID: String? = nil
     ) async throws {
+        let captured = try beginWrite()
         guard let householdID, !householdID.isEmpty, entry.householdID == householdID else {
             throw SeedkeepError(
                 code: "inactive_garden_entry",
@@ -103,12 +115,14 @@ final class JournalStore {
         local.bedID = bedID
         local.plantingEventID = plantingEventID
         local.updatedAt = max(Self.nowMs(), local.updatedAt + 1)
+        try confirmWrite(captured)
         try context.save()
         onLocalHouseholdMutation?()
     }
 
     /// Soft-deletes by marking `deletedAt`.
     func softDelete(_ entry: LocalJournalEntry, householdID: String? = nil) async throws {
+        let captured = try beginWrite()
         guard let householdID, !householdID.isEmpty, entry.householdID == householdID else {
             throw SeedkeepError(
                 code: "inactive_garden_entry",
@@ -123,6 +137,7 @@ final class JournalStore {
         let now = max(Self.nowMs(), local.updatedAt + 1)
         local.deletedAt = now
         local.updatedAt = now
+        try confirmWrite(captured)
         try context.save()
         onLocalHouseholdMutation?()
     }
@@ -133,6 +148,7 @@ final class JournalStore {
         text: String,
         householdID: String? = nil
     ) async throws -> LocalJournalChecklistItem {
+        let captured = try beginWrite()
         let context = ModelContext(container)
         _ = try requireActiveEntry(entryID: entryID, householdID: householdID, context: context)
         let id = entryID
@@ -148,6 +164,7 @@ final class JournalStore {
             updatedAt: Self.nowMs()
         )
         context.insert(local)
+        try confirmWrite(captured)
         try context.save()
         onLocalHouseholdMutation?()
         return local
@@ -160,6 +177,7 @@ final class JournalStore {
         sortOrder: Int? = nil,
         householdID: String? = nil
     ) async throws {
+        let captured = try beginWrite()
         let context = ModelContext(container)
         _ = try requireActiveEntry(entryID: item.entryID, householdID: householdID, context: context)
         let id = item.id
@@ -172,6 +190,7 @@ final class JournalStore {
         if let completed { local.completed = completed }
         if let sortOrder { local.sortOrder = sortOrder }
         local.updatedAt = max(Self.nowMs(), local.updatedAt + 1)
+        try confirmWrite(captured)
         try context.save()
         onLocalHouseholdMutation?()
     }
@@ -180,6 +199,7 @@ final class JournalStore {
         _ item: LocalJournalChecklistItem,
         householdID: String? = nil
     ) async throws {
+        let captured = try beginWrite()
         let validationContext = ModelContext(container)
         let activeEntry = try requireActiveEntry(
             entryID: item.entryID,
@@ -211,6 +231,7 @@ final class JournalStore {
                 ))
             }
             context.delete(local)
+            try confirmWrite(captured)
             try context.save()
             onLocalHouseholdMutation?()
         }

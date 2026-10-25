@@ -35,6 +35,20 @@ public protocol HouseholdRecordSyncing: AnyObject, Sendable {
     /// Fired on an iCloud account transition so the coordinator can wipe SwiftData (AC5).
     var onAccountChange: ((HouseholdAccountChange) -> Void)? { get set }
 
+    /// N2-E batch check, run for every batch the engine is about to build (contract §3). The
+    /// coordinator reads the garden's root directly and reports the verdict.
+    var batchCheck: (@Sendable () async -> GardenCheckOutcome)? { get set }
+
+    /// N2-E gone signals (contract §5). The engine has already fenced itself before this fires.
+    var onGardenSignal: (@Sendable (GardenSignal) -> Void)? { get set }
+
+    /// Start of a coordinator pass: lifts the hold an ambiguous or permission signal left.
+    func releaseSendHold()
+
+    /// Lifts a gone fence. Only a participant coordinator calls it, when the shared listing shows
+    /// the zone is still there after an event said it was deleted (the event was wrong or stale).
+    func clearGardenFence()
+
     /// True while the engine still has staged record changes not yet confirmed by CloudKit — lets the
     /// coordinator drain leftover pending changes (e.g. a transient failure re-enqueued last pass) even
     /// when this pass staged nothing new.

@@ -451,7 +451,14 @@ struct MacSettingsWindow: View {
     @Environment(AppEnvironment.self) private var appEnv
 
     var body: some View {
-        if SettingsPolicy.showsContent(guardReadable: appEnv.gardenGuard.isReadable) {
+        if appEnv.isLaunchGuardPending {
+            // N2-E: nothing is shown or started until the launch's guard has resumed.
+            EntryProgressView()
+                .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 620)
+        } else if appEnv.isActiveGardenGone {
+            GardenGonePlaceholderView()
+                .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 620)
+        } else if SettingsPolicy.showsContent(guardReadable: appEnv.gardenGuard.isReadable) {
             content
         } else {
             GardenGuardBlockedView()

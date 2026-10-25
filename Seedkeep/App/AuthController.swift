@@ -91,6 +91,10 @@ final class AuthController {
     /// failed: the binding then stops in `.failed` with nothing written.
     @ObservationIgnored private var participantGardenAdopted: (@MainActor (_ zoneName: String, _ ownerName: String) throws -> Void)?
 
+    /// N2-E: fired at every identity transition and binding change. `AppEnvironment` bumps
+    /// `gardenScopeEpoch` here, so a writer that started before the transition does nothing after it.
+    @ObservationIgnored var onScopeChange: (@MainActor () -> Void)?
+
     /// Bumped by every transition. A pass compares its own number after each `await`.
     @ObservationIgnored private var generation = 0
     /// The resolution pass in flight, so concurrent `restoreSession` calls (several iPad and Mac
@@ -275,6 +279,7 @@ final class AuthController {
         }
         isIdentityVerified = false
         pendingChoice = nil
+        onScopeChange?()   // N2-E: every account transition ends the scope writers started in
     }
 
     /// No UI calls it since N1. Wipes BEFORE clearing the
@@ -314,6 +319,7 @@ final class AuthController {
 
     private func nextGeneration() -> Int {
         generation += 1
+        onScopeChange?()
         return generation
     }
 
@@ -439,6 +445,7 @@ final class AuthController {
         pendingChoice = nil
         isIdentityVerified = true
         state = .signedIn(user: cached.user, household: cached.household)
+        onScopeChange?()
     }
 
     /// Discovery after entry (N2-E §4). The owner coordinator's start passes the owned zones it
@@ -480,6 +487,7 @@ final class AuthController {
         // every eligible garden (complete, not retired), acknowledged ones included.
         let eligible = owned.filter {
             $0.hasRoot && $0.householdID != bound && !guardStore.isRetired(account, $0.householdID)
+                && !guardStore.isGone(account, $0.householdID)
         }
         guard eligible.contains(where: {
             !guardStore.isSeen(account, $0.householdID) && !guardStore.isAcknowledged(account, $0.householdID)
@@ -532,7 +540,16 @@ final class AuthController {
     /// re-homes, offers or drops a garden on that basis.
     private func usable(_ owned: [GardenZoneSummary], recordName: String) throws -> [GardenZoneSummary] {
         let account = GardenGuardStore.accountKey(recordName: recordName)
-        return try complete(owned).filter { !guardStore.isRetired(account, $0.householdID) }
+        return try complete(owned).filter {
+            !guardStore.isRetired(account, $0.householdID) && !guardStore.isGone(account, $0.householdID)
+        }
+    }
+
+    /// Shared gardens resolution may select or offer: a gone garden (access lost, or recreated) is
+    /// never chosen, even though the shared listing may still show a zone with that name.
+    private func available(_ shared: [GardenZoneSummary], recordName: String) -> [GardenZoneSummary] {
+        let account = GardenGuardStore.accountKey(recordName: recordName)
+        return shared.filter { !guardStore.isGone(account, $0.householdID) }
     }
 
     /// The complete zones of a listing (owned or shared): root present. Confirmed-rootless zones
@@ -563,7 +580,7 @@ final class AuthController {
             }
             let shared: [GardenZoneSummary]
             do {
-                shared = try complete(try await identity.listGardenZones(.shared))
+                shared = available(try complete(try await identity.listGardenZones(.shared)), recordName: recordName)
             } catch {
                 guard isCurrent(gen) else { return }
                 return enterLegacyUnconfirmed(legacy)
@@ -609,7 +626,7 @@ final class AuthController {
                             replacingLegacy: true,
                             acknowledging: acknowledgements(recordName: recordName, listed: owned), gen)
             }
-            shared = try complete(try await identity.listGardenZones(.shared))
+            shared = available(try complete(try await identity.listGardenZones(.shared)), recordName: recordName)
         } catch {
             guard isCurrent(gen) else { return }
             return enterLegacyUnconfirmed(legacy)
@@ -638,7 +655,7 @@ final class AuthController {
         let shared: [GardenZoneSummary]
         let owned: [GardenZoneSummary]
         do {
-            shared = try complete(try await identity.listGardenZones(.shared))
+            shared = available(try complete(try await identity.listGardenZones(.shared)), recordName: recordName)
             guard isCurrent(gen) else { return }
             owned = try usable(try await identity.listGardenZones(.owned), recordName: recordName)
         } catch {
@@ -788,6 +805,7 @@ final class AuthController {
         pendingChoice = nil
         isIdentityVerified = true
         state = .signedIn(user: user, household: household)
+        onScopeChange?()   // N2-E: a binding change ends the scope writers started in
         if let fresh = freshHouseholdID {
             rehomer.rehomeRequested(GardenRehomeRequest(
                 accountKey: account, fromHouseholdID: household.id, toHouseholdID: fresh, reason: .absentZone))

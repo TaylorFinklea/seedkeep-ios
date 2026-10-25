@@ -43,6 +43,9 @@ final class HouseholdCloudCoordinator {
     /// `AppEnvironment` sets it on every coordinator it builds. A coordinator with a provisioner and
     /// no context sends nothing.
     @ObservationIgnored var guardContext: GardenGuardContext?
+    /// N2-E: the reads a participant coordinator needs (zone listing, root, share permission). The owner
+    /// uses its provisioner for the same. nil in tests of the plain sync path: no start or batch checks.
+    @ObservationIgnored var inspector: (any GardenInspecting)?
     /// N2-E discovery: receives the owned zones listed after the owner start (account key, this
     /// household). `AppEnvironment` routes it to `AuthController.considerDiscovery`.
     @ObservationIgnored var onOwnedGardensListed: (@MainActor ([GardenZoneSummary], String, String) -> Void)?
@@ -66,6 +69,20 @@ final class HouseholdCloudCoordinator {
     /// success, and `lastHumanizedError` still belongs to an earlier pass.
     private(set) var lastPassCompleted = false
     private(set) var accountStatusText: String?
+    /// N2-E: the garden is gone. This coordinator sends and fetches nothing more; a later start
+    /// builds a new one (and the guard's `gone` entry keeps resolution away from it).
+    private(set) var isGone = false
+    /// N2-E: why it is gone, once it is.
+    private(set) var goneReason: GardenGoneRecord.Reason?
+    /// N2-E: the gone entry could not be written. The coordinator stays stopped and the detection
+    /// repeats at the next start.
+    private(set) var goneCommitFailed = false
+    /// N2-E: a shared garden whose `currentUserParticipant` permission is confirmed read-only. Sends
+    /// stop and fetching continues.
+    private(set) var isViewOnly = false
+    /// N2-E: an ambiguous signal (a permission failure without a confirmed read-only permission,
+    /// network, account or partial errors) stopped sends for this pass. Nothing is retired.
+    private(set) var sendsStoppedForPass = false
     /// Raw error detail (CKError code / description) for the diagnostics row — distinct from the
     /// humanized banner string, mirroring SyncEngine.lastError. nil when the last pass succeeded.
     private(set) var lastErrorDetail: String?
@@ -135,8 +152,10 @@ final class HouseholdCloudCoordinator {
         provisioner: (any GardenProvisioning)?,
         stateURL: URL?,
         isParticipant: Bool = false,
+        inspector: (any GardenInspecting)? = nil,
         wipeOperation: ((ModelContainer) throws -> Void)? = nil
     ) {
+        self.inspector = inspector
         self.engine = engine
         self.zoneID = zoneID
         self.householdID = householdID
@@ -221,7 +240,8 @@ final class HouseholdCloudCoordinator {
         return HouseholdCloudCoordinator(
             engine: engine, zoneID: ownerZoneID, householdID: householdID, householdName: "",
             householdCreatedAt: 0, householdUpdatedAt: 0,
-            container: container, provisioner: nil, stateURL: stateURL, isParticipant: true)
+            container: container, provisioner: nil, stateURL: stateURL, isParticipant: true,
+            inspector: LiveGardenProvisioner())
     }
 
     // MARK: - Sync entry point
@@ -262,13 +282,20 @@ final class HouseholdCloudCoordinator {
     @discardableResult
     func sync() async -> Bool {
         guard isCloudKitAllowed(), !isSyncing else { return false }
+        // N2-E: a gone garden sends and fetches nothing. A later start builds a new coordinator.
+        guard !isGone else { return false }
         if requiresWipeRetry {
             wipeAndClear()
             guard !requiresWipeRetry else { return false }
         }
         isSyncing = true
         lastPassCompleted = false
+        // N2-E: a new pass lifts the hold an ambiguous or permission signal left in the last one.
+        sendsStoppedForPass = false
+        engine.releaseSendHold()
         let passEpoch = epoch
+        // N2-E: the account this pass started under. Gone handling from this pass is bound to it.
+        let passAccount = guardContext?.accountKey()
         // Always reset the per-pass echo set, even if a stage throws before pushDirty clears it —
         // otherwise a stale recordName would suppress a later legitimate push of that record.
         defer { isSyncing = false; appliedSinceLastPush.removeAll() }
@@ -292,10 +319,19 @@ final class HouseholdCloudCoordinator {
                 lastPassCompleted = true
                 return true
             } catch {
+                // N2-E: the garden is gone. Handled in one main-actor step (idempotent with the
+                // signal the engine already fired); never a banner and never a retry.
+                if case SyncEngineError.gardenGone(let cause) = error {
+                    await resolveGoneFromDrain(cause, passEpoch: passEpoch, account: passAccount)
+                    return true
+                }
                 guard canContinue(passEpoch) else { return true }   // account changed or paused mid-pass → abandon quietly
                 // A cancelled operation is not a failure: no banner; the next pass picks it up. A
                 // migration that stopped for a pause is quiet too, even if CloudKit resumed since.
                 if Self.isCancellation(error) || error is HouseholdMigrationExecutor.Paused { return true }
+                // N2-E: sends were held for this pass (ambiguous signal). Nothing is wrong enough to
+                // show, and nothing is retired; the next pass tries again.
+                if case SyncEngineError.sendsHeld = error { return true }
                 if Self.isTransient(error), attempt < maxAttempts - 1 {
                     let delay = min(max(0, (error as? CKError)?.retryAfterSeconds ?? 0.5), 5)
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -313,8 +349,19 @@ final class HouseholdCloudCoordinator {
     /// One reconcile pass. Returns early (no throw) if the account changed mid-pass.
     private func runPass(_ passEpoch: Int) async throws {
         guard canContinue(passEpoch) else { return }
+        let wasStarted = started
         try await ensureStarted(passEpoch)
         guard canContinue(passEpoch) else { return }
+        // N2-E: a shared garden's permission is read again every pass (the start check read it on the
+        // first), so view only clears when read-write returns.
+        if wasStarted, isParticipant, let inspector = effectiveInspector {
+            let permission = await inspector.participantPermission(zoneID: zoneID)
+            guard canContinue(passEpoch), !isGone else { return }
+            if permission != .unknown { isViewOnly = permission == .readOnly }
+        }
+        // N2-E: a start that stopped early (the garden is gone, or the account moved during a check)
+        // fetches and sends nothing: its checks and hooks never ran.
+        guard started else { return }
         try await pullAndApply(passEpoch)
         guard canContinue(passEpoch) else { return }
         // Client-side soft-delete cascade (G5): a soft-deleted Seed/Bed/PE soft-deletes its
@@ -337,9 +384,12 @@ final class HouseholdCloudCoordinator {
             accountStatusText = Self.describe(status)
             guard status == .available else { throw CoordinatorError.iCloudUnavailable(status ?? .couldNotDetermine) }
             guard try await startOwnerGarden(provisioner, passEpoch) else { return }
+        } else if isParticipant, let inspector, guardContext != nil {
+            guard try await startParticipantGarden(inspector, passEpoch) else { return }
         }
         guard canContinue(passEpoch) else { return }
         engine.activateForCurrentAccount()
+        installGardenChecks(passEpoch)
         engine.merger = SeedkeepRecordMerger()
         engine.onFetchedChanges = { [weak self] mods, dels in
             guard let self else { throw SyncEngineError.accountInvalidated }
@@ -399,14 +449,18 @@ final class HouseholdCloudCoordinator {
 
     // MARK: - Owner start checks (N2-E)
 
-    /// The owner's start checks, in order. Returns false when the pass was superseded.
+    /// The owner's start checks, in order. Returns false when the pass was superseded or the garden
+    /// was found gone.
     ///
     /// 1. A `pending` grant: this device is creating a brand-new garden. It is created through the
     ///    grant and none of the checks below apply.
     /// 2. An `attempting` grant: a creation was cut short (a crash, or a lost result). The ID is
     ///    abandoned and re-homed. The zone is never inspected or completed.
-    /// 3. Otherwise an established garden. G2 adds the zone and generation checks here; until then
-    ///    it proceeds as before minus the zone save: a missing zone fails the root fetch and sends nothing.
+    /// 3. Otherwise an established garden: one zone listing of the private database and a read of the
+    ///    root. A missing zone, a confirmed-missing root, or a root whose `creationDate` differs from
+    ///    the recorded generation is **gone**; nothing is created or sent. No recorded generation is
+    ///    trust on first use. A network, account or unreadable-root error is not "gone": nothing is
+    ///    sent and the pass retries as today.
     ///
     /// A retired garden, or one with an open re-home journal, sends nothing.
     private func startOwnerGarden(_ provisioner: any GardenProvisioning, _ passEpoch: Int) async throws -> Bool {
@@ -414,6 +468,7 @@ final class HouseholdCloudCoordinator {
             throw CoordinatorError.guardUnavailable
         }
         let store = context.store
+        if store.isGone(account, householdID) { throw CoordinatorError.gardenGone }
         if store.isRetired(account, householdID) || store.hasOpenJournal(account, householdID) {
             throw CoordinatorError.gardenRehoming
         }
@@ -424,13 +479,124 @@ final class HouseholdCloudCoordinator {
             try abandon(context, account)
             throw CoordinatorError.creationAbandoned
         case nil:
-            let root = try await provisioner.ensureHousehold(householdID: householdID, name: householdName)
-            guard canContinue(passEpoch) else { return false }
-            // A garden that predates N2-E is recorded as seen once its root is read (trust on first
-            // use, G2), which is what lets it be shared.
-            try? store.recordSeen(account, householdID, generation: root.creationDate.map(Self.generation(of:)))
-            _ = try await provisioner.ensureShare(for: root.record, title: householdName)
+            let inspection = try await provisioner.inspect(scope: .owned, zoneID: zoneID)
+            guard canContinue(passEpoch), context.accountKey() == account else { return false }
+            guard let root = try recordInspection(inspection, context, account) else { return false }
+            guard try await confirmBeforeShare(passEpoch) else { return false }
+            _ = try await provisioner.ensureShare(for: root, title: householdName)
             return canContinue(passEpoch)
+        }
+    }
+
+    /// Reads an inspection: gone (stops, returns nil) or the root, with the generation recorded
+    /// (trust on first use) or compared to the recorded one.
+    private func recordInspection(
+        _ inspection: GardenInspection, _ context: GardenGuardContext, _ account: String
+    ) throws -> CKRecord? {
+        switch inspection {
+        case .zoneMissing:
+            handleGone(.zoneNotFound, account: account)
+            return nil
+        case .rootMissing:
+            handleGone(.rootMissing, account: account)
+            return nil
+        case .present(let snapshot):
+            // Trust on first use needs the server's `creationDate`; a root without one can't be
+            // trusted, recorded or compared (typed failure, nothing is sent).
+            guard snapshot.creationDate != nil else { throw SyncEngineError.batchCheckFailed(.missingMetadata) }
+            if matchesRecordedGeneration(snapshot.creationDate, context, account) == false {
+                handleGone(.recreated, account: account)
+                return nil
+            }
+            // A garden that predates N2-E (or follows a Reset) is recorded as seen once its root is
+            // read: trust on first use. It is also what lets it be shared. If the record can't be
+            // written the generation stays unrecorded and nothing is sent.
+            if let failure = recordFirstUse(snapshot, context, account) { throw SyncEngineError.batchCheckFailed(failure) }
+            return snapshot.record
+        }
+    }
+
+    /// Records the first-use generation when none is recorded. A failed guard write is a check failure.
+    private func recordFirstUse(
+        _ snapshot: GardenRootSnapshot, _ context: GardenGuardContext, _ account: String
+    ) -> GardenCheckFailure? {
+        guard context.store.seen(account, householdID)?.generation == nil else { return nil }
+        guard let creationDate = snapshot.creationDate else { return .missingMetadata }
+        do {
+            try context.store.recordSeen(account, householdID, generation: Self.generation(of: creationDate))
+            return nil
+        } catch {
+            return .guardWriteFailed
+        }
+    }
+
+    /// nil: no generation is recorded yet (or the root carries none), so nothing to compare.
+    private func matchesRecordedGeneration(
+        _ creationDate: Date?, _ context: GardenGuardContext, _ account: String
+    ) -> Bool? {
+        guard let recorded = context.store.seen(account, householdID)?.generation,
+              let creationDate else { return nil }
+        return Self.generation(of: creationDate) == recorded
+    }
+
+    /// The participant's start checks (contract §3 and §5): one listing of the shared database, then
+    /// the root and the share permission. A **seen** shared zone that is missing is access lost
+    /// (gone). A zone never seen is a just-accepted share not yet visible: not gone, and the pass
+    /// goes on with today's propagation-delay handling. View only comes from the share's
+    /// `currentUserParticipant` permission, never from a guess.
+    private func startParticipantGarden(_ inspector: any GardenInspecting, _ passEpoch: Int) async throws -> Bool {
+        guard let context = guardContext, context.store.isReadable, let account = context.accountKey() else {
+            throw CoordinatorError.guardUnavailable
+        }
+        let store = context.store
+        if store.isGone(account, householdID) { throw CoordinatorError.gardenGone }
+        let inspection = try await inspector.inspect(scope: .shared, zoneID: zoneID)
+        guard canContinue(passEpoch), context.accountKey() == account else { return false }
+        switch inspection {
+        case .zoneMissing, .rootMissing:
+            guard store.isSeen(account, householdID) else { return true }   // not yet available
+            if case .rootMissing = inspection { handleGone(.rootMissing, account: account) } else { handleGone(.zoneNotFound, account: account) }
+            return false
+        case .present:
+            guard try recordInspection(inspection, context, account) != nil else { return false }
+            let permission = await inspector.participantPermission(zoneID: zoneID)
+            guard canContinue(passEpoch), context.accountKey() == account else { return false }
+            isViewOnly = permission == .readOnly
+            return true
+        }
+    }
+
+    /// Sharing from the sheet (`AppEnvironment.prepareOwnerShare`): the same check, immediately
+    /// before the share is saved. Gone (mismatch, missing root or zone) is handled here and refuses
+    /// the save; a check that cannot confirm the garden refuses it too. The account and epoch are
+    /// re-checked after the root read.
+    func confirmGardenForShare() async throws {
+        let startEpoch = epoch
+        let account = guardContext?.accountKey()
+        switch await performBatchCheck(startEpoch) {
+        case .ok:
+            guard canContinue(startEpoch), !isGone, guardContext?.accountKey() == account else {
+                throw SyncEngineError.batchCheckFailed(.superseded)
+            }
+        case .gone(let cause):
+            handleGone(cause, account: account)
+            throw SyncEngineError.gardenGone(cause)
+        case .failed(let failure):
+            throw SyncEngineError.batchCheckFailed(failure)
+        }
+    }
+
+    /// The batch check run before the share save: false when the garden turned out gone.
+    private func confirmBeforeShare(_ passEpoch: Int) async throws -> Bool {
+        switch await performBatchCheck(passEpoch) {
+        case .ok:
+            return canContinue(passEpoch)
+        case .gone(let cause):
+            handleGone(cause)
+            return false
+        case .failed(let failure):
+            guard canContinue(passEpoch) else { return false }
+            throw SyncEngineError.batchCheckFailed(failure)
         }
     }
 
@@ -451,6 +617,7 @@ final class HouseholdCloudCoordinator {
         case .created(let root, let creationDate):
             try store.consumeGrant(account, householdID, generation: Self.generation(of: creationDate))
             guard canContinue(passEpoch) else { return false }
+            guard try await confirmBeforeShare(passEpoch) else { return false }
             _ = try await provisioner.ensureShare(for: root, title: householdName)
             return canContinue(passEpoch)
         case .notDispatched(let error):
@@ -594,6 +761,9 @@ final class HouseholdCloudCoordinator {
     /// genuine local edit at a lower clock (the clock-skew-poisoning fix, expressed per-record).
     private func pushDirty(_ passEpoch: Int) async throws {
         guard canContinue(passEpoch) else { return }
+        // N2-E: a view-only participant, or a pass whose sends an ambiguous signal stopped, sends
+        // nothing. Fetching went on. Local rows stay unconfirmed and push when sends are allowed.
+        guard !isViewOnly, !sendsStoppedForPass, !isGone else { return }
         let context = ModelContext(container)
         let activeScopeID = scopeID
         let deletionIntents = try context.fetch(
@@ -729,6 +899,206 @@ final class HouseholdCloudCoordinator {
             }
             try photoAssets.confirmUploaded(recordNames: photoNames)
             seedSyncedState(from: input)
+        }
+    }
+
+    // MARK: - Garden checks and gone handling (N2-E)
+
+    /// Wires the engine's signals and the per-batch root check. The batch check needs a way to read
+    /// the root (a provisioner or an inspector); the signals are wired whenever the engine has any.
+    private func installGardenChecks(_ passEpoch: Int) {
+        let account = guardContext?.accountKey()
+        engine.onGardenSignal = { [weak self] signal in
+            // The engine has already fenced itself. The main-actor hop turns the signal into the
+            // gone handling, bound to the account the pass started under; nothing is sent in between.
+            Task { @MainActor [weak self] in self?.receive(signal, passEpoch: passEpoch, account: account) }
+        }
+        if effectiveInspector != nil, guardContext != nil {
+            engine.batchCheck = { [weak self] in
+                guard let self else { return .failed(.superseded) }
+                return await self.performBatchCheck(passEpoch)
+            }
+        }
+    }
+
+    private var effectiveInspector: (any GardenInspecting)? { provisioner ?? inspector }
+
+    /// The batch check (contract §3): the root is read directly from the database, not through the
+    /// engine, with a 10-second timeout inside the inspector. Then the account and the epoch are
+    /// checked again, because the await may have outlived them.
+    func performBatchCheck(_ passEpoch: Int) async -> GardenCheckOutcome {
+        guard let inspector = effectiveInspector, let context = guardContext,
+              let account = context.accountKey() else { return .failed(.unavailable) }
+        guard canContinue(passEpoch), !isGone else { return .failed(.superseded) }
+        // A pass an ambiguous or refuted signal stopped builds no more batches, whatever the root says.
+        guard !sendsStoppedForPass else { return .failed(.unavailable) }
+        let read = await inspector.readRoot(scope: isParticipant ? .shared : .owned, zoneID: zoneID)
+        guard canContinue(passEpoch), !isGone, context.accountKey() == account else {
+            return .failed(.superseded)
+        }
+        switch read {
+        case .failed(let failure):
+            return .failed(failure)
+        case .zoneMissing, .rootMissing:
+            // A shared garden never seen is a just-accepted share not yet visible: not gone.
+            if isParticipant, !context.store.isSeen(account, householdID) { return .failed(.notAvailableYet) }
+            if case .rootMissing = read { return .gone(.rootMissing) }
+            return .gone(.zoneNotFound)
+        case .present(let snapshot):
+            // A root without the server's creationDate can be neither compared nor trusted on first
+            // use: no batch is sent.
+            guard snapshot.creationDate != nil else { return .failed(.missingMetadata) }
+            switch matchesRecordedGeneration(snapshot.creationDate, context, account) {
+            case false?:
+                return .gone(.recreated)
+            case true?:
+                return .ok
+            case nil:
+                // Nothing recorded: trust on first use. If it can't be recorded nothing is sent.
+                if let failure = recordFirstUse(snapshot, context, account) { return .failed(failure) }
+                return .ok
+            }
+        }
+    }
+
+    /// An engine signal, on the main actor. A superseded one (the epoch moved, or the account is no
+    /// longer the one the pass started under) is dropped.
+    func receive(_ signal: GardenSignal, passEpoch: Int, account: String?) {
+        guard !isGone, isCurrent(passEpoch), guardContext?.accountKey() == account else { return }
+        switch signal {
+        case .none:
+            break
+        case .gone(let cause):
+            // A participant is told it lost access only after the shared listing confirms it. The
+            // owner's zone deletion, error or batch mismatch is final.
+            if isParticipant, effectiveInspector != nil {
+                Task { @MainActor [weak self] in
+                    await self?.confirmSharedGone(cause, passEpoch: passEpoch, account: account)
+                }
+            } else {
+                handleGone(cause, account: account)
+            }
+        case .permissionDenied:
+            sendsStoppedForPass = true
+            Task { @MainActor [weak self] in await self?.resolvePermission(passEpoch: passEpoch) }
+        case .ambiguous:
+            sendsStoppedForPass = true
+        }
+    }
+
+    /// A drain that threw `gardenGone`: dropped when the pass is no longer current or the account
+    /// moved on; a participant's is confirmed by the shared listing first, like its signal.
+    private func resolveGoneFromDrain(_ cause: GardenGoneCause, passEpoch: Int, account: String?) async {
+        guard !isGone, canContinue(passEpoch), guardContext?.accountKey() == account else { return }
+        if isParticipant, effectiveInspector != nil {
+            await confirmSharedGone(cause, passEpoch: passEpoch, account: account)
+        } else {
+            handleGone(cause, account: account)
+        }
+    }
+
+    /// One confirmation at a time: a participant's signal and its drain error would otherwise list twice.
+    private var confirmingShared = false
+
+    private func confirmSharedGone(_ cause: GardenGoneCause, passEpoch: Int, account: String?) async {
+        guard !confirmingShared, let inspector = effectiveInspector, let context = guardContext else { return }
+        confirmingShared = true
+        defer { confirmingShared = false }
+        do {
+            let inspection = try await inspector.inspect(scope: .shared, zoneID: zoneID)
+            guard canContinue(passEpoch), !isGone, context.accountKey() == account else { return }
+            switch inspection {
+            case .zoneMissing, .rootMissing:
+                // Access lost only for a zone this device has seen. A just-accepted share that has
+                // not appeared yet keeps the existing propagation-delay handling.
+                if let account, context.store.isSeen(account, householdID) {
+                    handleGone(inspection.isRootMissing ? .rootMissing : cause, account: account)
+                } else {
+                    engine.clearGardenFence()
+                    sendsStoppedForPass = true
+                }
+            case .present(let snapshot):
+                // The zone is listed. A recreated one (same name, new root) is still gone; only a zone
+                // whose generation matches (or has none recorded) refutes the signal.
+                if matchesRecordedGeneration(snapshot.creationDate, context, account ?? "") == false {
+                    handleGone(.recreated, account: account)
+                    return
+                }
+                // The signal was wrong or stale. Sends resume next pass.
+                engine.clearGardenFence()
+                sendsStoppedForPass = true
+            }
+        } catch {
+            // The listing could not confirm it: ambiguous. Sends stop for the pass, nothing is retired.
+            guard !isGone else { return }
+            engine.clearGardenFence()
+            sendsStoppedForPass = true
+        }
+    }
+
+    private func resolvePermission(passEpoch: Int) async {
+        guard isParticipant, let inspector = effectiveInspector else { return }
+        let permission = await inspector.participantPermission(zoneID: zoneID)
+        guard canContinue(passEpoch), !isGone else { return }
+        if permission == .readOnly { isViewOnly = true }
+    }
+
+    /// The gone handling (contract §6): one main-actor step, no `await`.
+    ///  1. the runner writes the `gone` entry (the commit point; if it fails the coordinator stays
+    ///     stopped and detection repeats at the next start);
+    ///  2. the coordinator epoch is bumped and the engine generation is retired with its pending
+    ///     changes discarded;
+    ///  3. the runner bumps `gardenScopeEpoch`, which clears `writableGarden` for every writer, and
+    ///     the environment bumps `pendingShareEpoch` and cancels the garden's notifications.
+    /// Idempotent: a second signal for the same garden does nothing.
+    func handleGone(_ cause: GardenGoneCause, account: String? = nil) {
+        guard !isGone else { return }
+        // Bound to the account the detecting pass started under: never write a gone entry under another.
+        if let account, guardContext?.accountKey() != account { return }
+        let reason = Self.goneReason(for: cause, isParticipant: isParticipant)
+        guard let context = guardContext else {
+            // No guard at all (a coordinator outside the app's wiring): stop all the same.
+            stopAfterGone(reason)
+            return
+        }
+        let current = context.accountKey()
+        let event = GardenGoneEvent(accountKey: current ?? "", householdID: householdID, reason: reason)
+        let committed: Bool
+        if current != nil {
+            committed = context.runner.commitGone(event)       // 1 (fences in memory if it fails)
+        } else {
+            // No account to write the entry under: no commit, but the garden is fenced in memory.
+            context.runner.fenceInMemory(account: "", householdID: householdID)
+            committed = false
+        }
+        stopAfterGone(reason)                                  // 2
+        context.runner.finishGone(event)                       // 3 (always: epochs, notifications)
+        if !committed {
+            goneCommitFailed = true
+            lastHumanizedError = "Seedkeep couldn't save its iCloud safety record. Try again after restarting."
+            lastErrorDetail = "The gone entry could not be written."
+        }
+    }
+
+    private func stopAfterGone(_ reason: GardenGoneRecord.Reason) {
+        isGone = true
+        isViewOnly = false   // no view-only notice for a gone garden
+        goneReason = reason
+        epoch += 1   // every in-flight CloudKit boundary of this coordinator now bails
+        engine.discardPendingChanges()
+        buffer.discardAll()
+        appliedSinceLastPush.removeAll()
+        pushDebounceTask?.cancel()
+        pushDebounceTask = nil
+        started = false
+    }
+
+    nonisolated static func goneReason(for cause: GardenGoneCause, isParticipant: Bool) -> GardenGoneRecord.Reason {
+        switch cause {
+        case .recreated: return .recreated
+        case .rootMissing: return isParticipant ? .accessLost : .rootMissing
+        case .zoneDeleted: return isParticipant ? .accessLost : .zoneDeleted
+        case .zoneNotFound, .userDeletedZone: return isParticipant ? .accessLost : .zoneMissing
         }
     }
 
@@ -1028,6 +1398,8 @@ final class HouseholdCloudCoordinator {
         case creationPaused
         /// N2-E: creation waits for the next launch or "Sync now" after an abandonment.
         case creationWaiting
+        /// N2-E: the garden is gone and waits for the user's choice. Nothing is sent to it.
+        case gardenGone
     }
 
     /// MUST match `com.apple.developer.icloud-container-environment` in project.yml. All durable
@@ -1187,6 +1559,8 @@ final class HouseholdCloudCoordinator {
                 return "Seedkeep couldn't create your garden in iCloud yet. It will try again at the next launch or Sync now."
             case .creationPaused:
                 return "Seedkeep couldn't create your garden in iCloud. Try again in Settings."
+            case .gardenGone:
+                return "This garden is no longer in iCloud."
             case .iCloudUnavailable, .accountCleanupPending:
                 break
             }

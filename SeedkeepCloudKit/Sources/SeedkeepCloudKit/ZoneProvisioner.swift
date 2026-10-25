@@ -32,7 +32,7 @@ public struct SeedkeepZoneProvisioner: Sendable {
     ///
     /// N2-E: a garden zone is created only through a creation grant (`createGarden`). This stays
     /// for the DEBUG spike checks (`seedkeep-spike-*` zones, which are not gardens). No garden path
-    /// calls it: `ensureHousehold`, share preparation and the sync engine all leave the zone alone.
+    /// calls it: `fetchHousehold`, share preparation and the sync engine all leave the zone alone.
     @discardableResult
     public func ensureZone(householdID: String) async throws -> CKRecordZone {
         let zone = CKRecordZone(zoneID: Self.zoneID(householdID: householdID))
@@ -40,28 +40,40 @@ public struct SeedkeepZoneProvisioner: Sendable {
         return zone
     }
 
-    /// Fetch-or-create the `Household` root record (recordName = `household:<householdID>`).
-    /// This is also the CKShare root.
+    /// Fetches the `Household` root record (recordName = `household:<householdID>`), which is also
+    /// the CKShare root.
     ///
-    /// N2-E: this never creates the zone. A missing zone throws (`zoneNotFound`), so a deleted
-    /// garden is not brought back by a start-up that merely wants its root.
-    public func ensureHousehold(householdID: String, name: String) async throws -> CKRecord {
-        let db   = container.privateCloudDatabase
+    /// N2-E: this never creates anything. A root that is confirmed missing in an existing zone means
+    /// the garden is gone (or was never completed), and a missing zone throws `zoneNotFound`: neither
+    /// is brought back by a start-up that merely wants its root. Only a creation candidate with a
+    /// grant saves a root, through `createGarden`.
+    public func fetchHousehold(householdID: String) async throws -> CKRecord {
         let recordID = CKRecord.ID(
             recordName: SeedkeepRecordNames.household(householdID),
             zoneID: Self.zoneID(householdID: householdID))
+        return try await Self.fetchRoot(recordID) { try await container.privateCloudDatabase.record(for: $0) }
+    }
+
+    /// The fetch-only read behind `fetchHousehold`. There is no save parameter: a missing root
+    /// surfaces as the error it is, and nothing is written.
+    public static func fetchRoot(
+        _ recordID: CKRecord.ID,
+        fetch: (CKRecord.ID) async throws -> CKRecord
+    ) async throws -> CKRecord {
+        try await fetch(recordID)
+    }
+
+    /// Reads the root straight from `database` and reports what it found (the batch check's read,
+    /// and the start check's). Never creates anything.
+    public static func readRoot(
+        _ recordID: CKRecord.ID,
+        fetch: (CKRecord.ID) async throws -> CKRecord
+    ) async -> GardenRootRead {
         do {
-            return try await db.record(for: recordID)
-        } catch let error as CKError where error.code == .unknownItem {
-            let record = Self.makeRoot(recordID: recordID, name: name)
-            do {
-                _ = try await db.modifyRecords(saving: [record], deleting: [])
-                return record
-            } catch let saveError as CKError where saveError.code == .serverRecordChanged {
-                // First-launch race: another of the owner's devices created the same Household root
-                // concurrently. Adopt the server copy instead of surfacing a spurious error banner.
-                return try await db.record(for: recordID)
-            }
+            let record = try await fetchRoot(recordID, fetch: fetch)
+            return .present(GardenRootSnapshot(record: record))
+        } catch {
+            return GardenRootRead.classify(error)
         }
     }
 
@@ -150,6 +162,41 @@ public enum GardenCreationOutcome: @unchecked Sendable {
     case notDispatched(Error)
     /// Dispatched, and not confirmed: the ID is abandoned and its rows move to a fresh ID.
     case abandoned(reason: String)
+}
+
+/// A garden's root as read: the record and its server `creationDate` (the generation).
+public struct GardenRootSnapshot: @unchecked Sendable {
+    public let record: CKRecord
+    public let creationDate: Date?
+    public init(record: CKRecord) {
+        self.record = record
+        self.creationDate = record.creationDate
+    }
+    /// For a double of the server: a `CKRecord` built off-device has no `creationDate` to read.
+    public init(record: CKRecord, creationDate: Date?) {
+        self.record = record
+        self.creationDate = creationDate
+    }
+}
+
+/// What a direct read of a garden's root found. Only `unknownItem` confirms the root absent and
+/// only `zoneNotFound`/`userDeletedZone` confirm the zone absent; everything else (timeouts,
+/// network, account, service errors) is a failure, never "gone".
+public enum GardenRootRead: Sendable {
+    case present(GardenRootSnapshot)
+    case zoneMissing
+    case rootMissing
+    case failed(GardenCheckFailure)
+
+    public static func classify(_ error: Error) -> GardenRootRead {
+        if error is CancellationError { return .failed(.timedOut) }
+        guard let ck = error as? CKError else { return .failed(.unavailable) }
+        switch ck.code {
+        case .unknownItem: return .rootMissing
+        case .zoneNotFound, .userDeletedZone: return .zoneMissing
+        default: return .failed(.cloudKit(ck.code.rawValue))
+        }
+    }
 }
 
 public enum GardenCreation {
