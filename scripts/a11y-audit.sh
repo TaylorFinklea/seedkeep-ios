@@ -71,6 +71,7 @@ xcodebuild \
     -resultBundlePath "$RESULT_BUNDLE" \
     -skip-testing:SeedkeepUITests/R3ScreenshotTests \
     -skip-testing:SeedkeepUITests/R4ScreenshotTests \
+    -skip-testing:SeedkeepUITests/GardenGoneScreenshotTests \
     -parallel-testing-enabled NO \
     -disable-concurrent-destination-testing \
     -collect-test-diagnostics never \

@@ -51,6 +51,10 @@ Code survey at `afc1a5a`:
     scope);
   - `grants`, `seen` (each with its generation), `gone` (each with its
     journal), `retired` and `acknowledged`.
+  - A retired ID stays retired for this account for as long as the safety
+    record is retained. A later invitation to the same shared garden ID does
+    not revive it; shared listings, stale chooser answers and direct share
+    adoption both exclude it before local data is wiped or rebound.
 - **Local-store ownership stays where it is.** The identity cache in
   UserDefaults keeps recording which account owns the local store, and
   `resolve(recordName:)` keeps its different-account wipe.
@@ -307,8 +311,11 @@ paths are covered too (§Slices).
      dropped parent.
    - Tombstoned rows upload as tombstoned records (`deletedAt` set), as
      `pushDirty` does today for rows with no confirmed state.
-   - Photo rows whose bytes were missing lose only their bytes, and show
-     "photo not on this device".
+   - Photo rows whose bytes are not on the device (none, or failing their
+     own hash) are **dropped** from the copy, in the same save, judged
+     while the old bytes are still in place so a retry decides the same.
+     The choice screen's count of photos that can't be kept equals what is
+     dropped, and the first sync raises no notice for them.
 4. **Recovery items.** Pending journal recovery snapshots for the old scope
    are restored as journal entries of the new garden, and then removed.
    - This uses `ParticipantRowRecovery`'s low-level restore helpers with the
@@ -347,6 +354,12 @@ paths are covered too (§Slices).
 When `restoreSession()` binds a successor garden, that binding supersedes
 the discard journal's cleared target (§1). The journal is removed after a
 later launch confirms the defaults against the successor.
+
+Journal execution is scoped to the verified account, garden and scope epoch.
+It revalidates those after suspension points. Before an account or garden-switch
+wipe, running journal work is cancelled and awaited; cancellation leaves the
+durable journal open and fenced for retry or launch resumption. A completed or
+superseded journal does not fence its successor.
 
 **Disposition by model:**
 
@@ -387,7 +400,8 @@ per-household keys and the recovery restore path, and records any change.
    Settings. Repeated failures pause creation (§2).
 5. **Concurrent first launch** can make two gardens. Discovery (§4) shows the
    chooser.
-6. **Photos missing from a device** are not in a kept copy.
+6. **Photos missing from a device** are not in a kept copy: their rows
+   are dropped.
 7. **After Reset** (the safety record unreadable), a keep that was
    interrupted between re-homing and binding leaves its rows on the device
    under an unbound household: never synced, not shown. A creation

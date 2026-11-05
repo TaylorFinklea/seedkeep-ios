@@ -448,7 +448,7 @@ struct GardenWriteFenceTests {
         let onlyGone = AuthController(
             identity: FakeCloudIdentityProvider(owned: [gone], shared: []), tokenStore: InMemoryTokenStore(),
             defaults: defaults, guardStore: store, rehomer: RecordingRehomer(), makeHouseholdID: { "hhr_minted" })
-        onlyGone.wireLocalDataEraser {}
+        onlyGone.wireLocalDataEraser { _ in }
         await onlyGone.restoreSession()
         guard case .signedIn(_, let household) = onlyGone.state else { Issue.record("expected signed in"); return }
         #expect(household.id == "hhr_minted")   // a new garden, not the gone one
@@ -457,7 +457,7 @@ struct GardenWriteFenceTests {
         let both = AuthController(
             identity: FakeCloudIdentityProvider(owned: [gone, other], shared: []), tokenStore: InMemoryTokenStore(),
             defaults: defaults2, guardStore: GardenGuardStore(directory: nil), rehomer: RecordingRehomer())
-        both.wireLocalDataEraser {}
+        both.wireLocalDataEraser { _ in }
         let store2 = both.guardStore
         try store2.markGone(Self.keyA, "hhr_gone", reason: .recreated)
         await both.restoreSession()
@@ -527,8 +527,8 @@ struct GardenWriteFenceTests {
         rig.env.resumeGuardAfterLaunch()
         #expect(rig.rehomer.requests == [GardenRehomeRequest(
             accountKey: Self.keyA, fromHouseholdID: "hhr_g", toHouseholdID: "hhr_new", reason: .absentZone)])
-        // The garden stays usable on the device while only a journal waits for G3.
-        #expect(rig.env.writableGarden != nil)
+        // The durable open journal stays fenced until it completes or is superseded.
+        #expect(rig.env.writableGarden == nil)
     }
 
     @Test("a running journal stops writes to its garden, and only its garden (the G3 seam)")
@@ -584,11 +584,18 @@ struct GardenWriteFenceTests {
         #expect(!GardenGuardRunner(store: store, rehomer: RecordingRehomer()).isLaunchResolved)
     }
 
-    // MARK: - The placeholder
+    // MARK: - The choice screen
 
-    @Test("the placeholder says the garden is no longer in iCloud")
-    func placeholderWording() {
-        #expect(GardenGonePlaceholderView.title == "This garden is no longer in iCloud")
-        #expect(!GardenGonePlaceholderView.message.isEmpty)
+    @Test("a gone garden shows the choice screen with the contract's words")
+    func choiceScreenWording() async throws {
+        let rig = try Self.makeEnv("choiceWording", prepare: { try Self.markGone($0, Self.keyA, "hhr_g") })
+        await rig.env.auth.restoreSession()
+        let screen = try #require(rig.env.gardenGoneScreen)
+        #expect(screen.phase == .choice)
+        #expect(!screen.isParticipant)
+        #expect(GardenGoneView.title(isParticipant: false) + " " + GardenGoneView.message(isParticipant: false)
+            == "This garden was deleted from iCloud. It may have been deleted on another device or in iCloud Settings.")
+        #expect(GardenGoneView.title(isParticipant: true) + " " + GardenGoneView.message(isParticipant: true)
+            == "You no longer have access to this shared garden. The owner stopped sharing it or removed you.")
     }
 }

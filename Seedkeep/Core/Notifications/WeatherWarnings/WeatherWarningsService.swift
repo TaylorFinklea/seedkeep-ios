@@ -239,6 +239,17 @@ actor WeatherWarningsService {
         observerTokens.append(tzToken)
     }
 
+    /// N2-E (G3): stops the refresh work before a garden journal mutates anything. The pending debounce
+    /// is cancelled, and a refresh in flight is cancelled and awaited, so none runs across the journal.
+    func quiesce() async {
+        debounceTask?.cancel()
+        debounceTask = nil
+        if let running = inFlight {
+            running.cancel()
+            _ = await running.value
+        }
+    }
+
     /// Internal — cancel any in-flight debounce Task and schedule a new
     /// one 300ms out. Must run on the actor so the cancel-then-replace
     /// is atomic.

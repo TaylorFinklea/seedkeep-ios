@@ -21,6 +21,38 @@ enum FixtureMode {
         !isRunningUnitTests && arguments.contains(launchArgument)
     }
 
+    /// `-SeedkeepGardenGone owner|participant` (with `-SeedkeepFixture`): the sample garden launches as a
+    /// garden that is gone, so the choice screen shows (N2-E G3 screenshots). Nothing is sent anywhere:
+    /// CloudKit is off in sample-garden mode, and the guard is in memory.
+    static let gardenGoneArgument = "-SeedkeepGardenGone"
+
+    enum GoneWording: String {
+        case owner, participant
+    }
+
+    static func gardenGone(arguments: [String]) -> GoneWording? {
+        guard arguments.contains(launchArgument), let index = arguments.firstIndex(of: gardenGoneArgument),
+              arguments.indices.contains(index + 1) else { return nil }
+        return GoneWording(rawValue: arguments[index + 1])
+    }
+
+    /// A guard that already holds the sample garden as gone, awaiting a choice.
+    @MainActor
+    static func goneGuard(_ wording: GoneWording) -> GardenGuardStore {
+        let store = GardenGuardStore(directory: nil)
+        let account = GardenGuardStore.accountKey(recordName: FixtureCloudIdentityProvider.userRecordName)
+        let id = FixtureCloudIdentityProvider.householdID
+        let participant = wording == .participant
+            ? GardenGuardBinding.Participant(zoneName: SeedkeepRecordNames.zoneName(householdID: id), ownerName: "_fixtureOwner")
+            : nil
+        let binding = GardenGuardBinding(
+            household: .init(id: id, name: "Sample garden", createdAt: 1_760_000_000_000, updatedAt: 1_760_000_000_000),
+            participant: participant)
+        try? store.setBinding(account, binding)
+        try? store.markGone(account, id, reason: wording == .participant ? .accessLost : .zoneDeleted)
+        return store
+    }
+
     /// Scratch-directory names the fixture owns: `seedkeep-fixture` and `seedkeep-fixture-<UUID>`.
     static let rootNamePrefix = "seedkeep-fixture"
 

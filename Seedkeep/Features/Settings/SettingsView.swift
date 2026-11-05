@@ -455,8 +455,8 @@ struct MacSettingsWindow: View {
             // N2-E: nothing is shown or started until the launch's guard has resumed.
             EntryProgressView()
                 .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 620)
-        } else if appEnv.isActiveGardenGone {
-            GardenGonePlaceholderView()
+        } else if appEnv.gardenGoneScreen != nil {
+            GardenGoneView()
                 .frame(minWidth: 480, idealWidth: 520, minHeight: 420, idealHeight: 620)
         } else if SettingsPolicy.showsContent(guardReadable: appEnv.gardenGuard.isReadable) {
             content

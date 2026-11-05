@@ -76,13 +76,13 @@ final class AuthController {
     /// CloudKit engine state. Wired by `AppEnvironment` (the controller is constructed before the
     /// `ModelContainer` exists). THROWS when the wipe did not complete: nothing binds over a
     /// store that still holds another account's data.
-    @ObservationIgnored private var localDataEraser: (@MainActor () async throws -> Void)?
+    @ObservationIgnored private var localDataEraser: (@MainActor (_ requireCurrent: @escaping @MainActor () throws -> Void) async throws -> Void)?
 
     /// Removes only this device's garden (household rows and their CloudKit sync state) for an
     /// explicit chooser discard. Unlike `localDataEraser` it keeps device-only data such as
     /// journal recovery items, forecasts and notifications: the iCloud user has not changed.
     /// THROWS when the wipe did not complete; the choice then binds nothing.
-    @ObservationIgnored private var gardenSwitchEraser: (@MainActor () async throws -> Void)?
+    @ObservationIgnored private var gardenSwitchEraser: (@MainActor (_ requireCurrent: @escaping @MainActor () throws -> Void) async throws -> Void)?
 
     /// Called before the participant marker is set to a DIFFERENT shared garden than the one
     /// recorded, with that garden's zone. `AppEnvironment` resets the zone's engine state so the
@@ -143,11 +143,11 @@ final class AuthController {
         return nil
     }
 
-    func wireLocalDataEraser(_ eraser: @escaping @MainActor () async throws -> Void) {
+    func wireLocalDataEraser(_ eraser: @escaping @MainActor (_ requireCurrent: @escaping @MainActor () throws -> Void) async throws -> Void) {
         localDataEraser = eraser
     }
 
-    func wireGardenSwitchEraser(_ eraser: @escaping @MainActor () async throws -> Void) {
+    func wireGardenSwitchEraser(_ eraser: @escaping @MainActor (_ requireCurrent: @escaping @MainActor () throws -> Void) async throws -> Void) {
         gardenSwitchEraser = eraser
     }
 
@@ -185,6 +185,12 @@ final class AuthController {
               choice.candidates.contains(garden) || choice.ownGarden == garden else { return }
         guard let pending = pendingChoice, pending.choice == choice else {
             // An account change withdrew this choice: resolve again rather than ignore the tap.
+            return await restoreSession()
+        }
+        // A chooser can outlive the invitation state that produced it. In particular, an ID
+        // retired by a completed keep/discard must not become writable again if it is re-shared.
+        let account = GardenGuardStore.accountKey(recordName: pending.recordName)
+        guard !guardStore.isRetired(account, garden.householdID) else {
             return await restoreSession()
         }
         // A choice that removes this device's garden needs the user's confirmation.
@@ -262,8 +268,8 @@ final class AuthController {
     /// before any await) and resumes only once the same user is confirmed or a resolution binds;
     /// any pending chooser choice is withdrawn.
     func revalidateAfterAccountChange() async {
-        let gen = nextGeneration()
         pauseForAccountChange()
+        let gen = nextGeneration()
         let verifiedUser = verifiedBeforeAccountChange
         verifiedBeforeAccountChange = nil
         await run(gen) { await self.revalidate(gen, verifiedUser: verifiedUser) }
@@ -279,7 +285,7 @@ final class AuthController {
         }
         isIdentityVerified = false
         pendingChoice = nil
-        onScopeChange?()   // N2-E: every account transition ends the scope writers started in
+        _ = nextGeneration()   // A paused account also withdraws any suspended eraser.
     }
 
     /// No UI calls it since N1. Wipes BEFORE clearing the
@@ -306,6 +312,59 @@ final class AuthController {
         // Keeping the garden this device has discards nothing; picking another replaces it.
         case .discoveredOwnGardens: return garden != choice.ownGarden
         }
+    }
+
+    // MARK: - Journals (N2-E G3)
+
+    /// True once this process had to rewrite the identity cache or participant marker from the guard's
+    /// latest binding. A journal is then not confirmed by this launch: the next one confirms it.
+    @ObservationIgnored private(set) var defaultsRepairedThisProcess = false
+
+    /// Whether the identity cache and participant marker match the guard's latest binding for the
+    /// signed-in account, and this launch did not have to repair them. A journal is removed only after
+    /// a later launch has confirmed this (contract §1).
+    func launchDefaultsConfirmed(accountKey: String) -> Bool {
+        guard case .signedIn(let user, _) = state, currentAccountKey == accountKey,
+              !defaultsRepairedThisProcess else { return false }
+        let cached = loadIdentity(forKey: Self.identityCacheKey)
+        let marker = ActiveGardenContext.participant(in: defaults)
+        guard let binding = guardStore.latestBinding(accountKey) else {
+            return cached == nil && marker == nil && defaults.object(forKey: Self.legacyIdentityCacheKey) == nil
+        }
+        guard cached?.user.id == user.id, cached?.household.id == binding.household.id else { return false }
+        return marker?.zoneName == binding.participant?.zoneName && marker?.ownerName == binding.participant?.ownerName
+    }
+
+    /// A keep or silent re-home wrote its new owned binding to the guard: derives the participant
+    /// marker and identity cache from it, and publishes the new garden. Returns false when the
+    /// signed-in account is not the journal's. Idempotent.
+    @discardableResult
+    func adoptLatestBinding(accountKey: String) -> Bool {
+        guard case .signedIn(let user, _) = state, currentAccountKey == accountKey,
+              let binding = guardStore.latestBinding(accountKey), binding.participant == nil else { return false }
+        let household = Self.dto(binding.household)
+        ActiveGardenContext.clearParticipant(in: defaults)
+        saveIdentity(CachedIdentity(user: user, household: household), forKey: Self.identityCacheKey)
+        state = .signedIn(user: user, household: household)
+        onScopeChange?()
+        return true
+    }
+
+    /// A discard cleared the binding in the guard: drops the discarded garden from
+    /// view, and resolves the session again, which leads to another garden, the chooser, or a new
+    /// garden (fresh ID, grant). Resolution only reads the guard's latest binding, so a successor it
+    /// binds supersedes the discard journal and the journal is never replayed over it.
+    @discardableResult
+    func resolveAfterDiscard(accountKey: String) async -> Bool {
+        guard case .signedIn = state, isIdentityVerified, currentAccountKey == accountKey,
+              guardStore.latestBinding(accountKey) == nil else { return false }
+        // Keep the previous cache as proof of local-store ownership until restoreSession verifies
+        // the current iCloud recordName. It replaces this cache only at successor bind, or clears it after a complete account wipe.
+        pendingChoice = nil
+        state = .authenticating
+        onScopeChange?()
+        await restoreSession()
+        return isIdentityVerified
     }
 
     // MARK: - Resolution
@@ -367,6 +426,11 @@ final class AuthController {
             }
         }
         guard reconcileDefaults(recordName: recordName, account: account) else { return }
+        if guardStore.isBindingWritten(account), guardStore.latestBinding(account) == nil {
+            // The cache still proves who owns retained rows; it is not a garden binding.
+            await resolveFresh(recordName: recordName, gen)
+            return
+        }
         if let cached = loadIdentity(forKey: Self.identityCacheKey), cached.user.id == recordName {
             enterCachedGarden(cached, recordName: recordName, account: account, gen)
             return
@@ -385,12 +449,12 @@ final class AuthController {
         let cached = loadIdentity(forKey: Self.identityCacheKey)
         guard let binding = guardStore.latestBinding(account) else {
             if guardStore.isBindingWritten(account) {
-                // An explicitly cleared binding (a discard): the defaults are cleared too, never
-                // re-seeded from a stale identity cache or marker.
+                // The cleared guard is authoritative, but retained device-only/other-household rows
+                // still belong to the cached user until a successor bind or complete wipe commits.
                 if cached != nil || defaults.object(forKey: Self.legacyIdentityCacheKey) != nil
                     || ActiveGardenContext.participant(in: defaults) != nil {
                     ActiveGardenContext.clearParticipant(in: defaults)
-                    clearCachedIdentities()
+                    defaultsRepairedThisProcess = true
                 }
                 return true
             }
@@ -412,6 +476,7 @@ final class AuthController {
             && recorded?.ownerName == binding.participant?.ownerName
         let cacheMatches = cached.map { $0.user.id == recordName && $0.household.id == binding.household.id } ?? false
         if markerMatches && cacheMatches { return true }
+        defaultsRepairedThisProcess = true
         if !markerMatches, let participant = binding.participant {
             do { try participantGardenAdopted?(participant.zoneName, participant.ownerName) } catch {
                 fail(error, fallback: "The shared garden couldn't be opened on this device. Try again.")
@@ -549,7 +614,9 @@ final class AuthController {
     /// never chosen, even though the shared listing may still show a zone with that name.
     private func available(_ shared: [GardenZoneSummary], recordName: String) -> [GardenZoneSummary] {
         let account = GardenGuardStore.accountKey(recordName: recordName)
-        return shared.filter { !guardStore.isGone(account, $0.householdID) }
+        return shared.filter {
+            !guardStore.isGone(account, $0.householdID) && !guardStore.isRetired(account, $0.householdID)
+        }
     }
 
     /// The complete zones of a listing (owned or shared): root present. Confirmed-rootless zones
@@ -727,7 +794,9 @@ final class AuthController {
     /// Transient failure: enter from the cache as-is with CloudKit paused, or ask to retry.
     private func enterUnverified() {
         pendingChoice = nil
-        if let cached = loadCachedIdentity() {
+        if let cached = loadCachedIdentity(),
+           !(guardStore.isBindingWritten(GardenGuardStore.accountKey(recordName: cached.user.id))
+             && guardStore.latestBinding(GardenGuardStore.accountKey(recordName: cached.user.id)) == nil) {
             isIdentityVerified = false
             state = .signedIn(user: cached.user, household: cached.household)
         } else {
@@ -816,10 +885,13 @@ final class AuthController {
     /// for a chooser discard). On failure enters `.failed` (with Retry) and returns false, keeping
     /// the caches so the next attempt still knows whose data is on disk. A stale pass returns
     /// false and publishes nothing.
-    private func erase(_ gen: Int, using eraser: (@MainActor () async throws -> Void)?) async -> Bool {
+    private func erase(_ gen: Int, using eraser: (@MainActor (_ requireCurrent: @escaping @MainActor () throws -> Void) async throws -> Void)?) async -> Bool {
         guard isCurrent(gen) else { return false }
         do {
-            try await eraser?()
+            try await eraser? { [weak self] in
+                guard self?.isCurrent(gen) == true else { throw CancellationError() }
+                try Task.checkCancellation()
+            }
         } catch {
             guard isCurrent(gen) else { return false }
             fail(error)

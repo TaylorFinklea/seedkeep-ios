@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import SeedkeepKit
+import SeedkeepCloudKit
 
 // R1 27d.18 — one-time recovery for participant garden rows stranded under the signed-in server
 // household ID by pre-fix builds 47–49 (see `.docs/ai/decisions.md` 2026-07-16 "Ambiguous pre-fix
@@ -162,7 +163,14 @@ enum ParticipantRowRecovery {
 
     @MainActor
     private static func markerKey(scopeKey: String) -> String {
-        "seedkeep.ck.recovery27d18.\(HouseholdCloudCoordinator.cloudKitEnvironmentTag).\(scopeKey)"
+        "\(markerKeyPrefix)\(scopeKey)"
+    }
+
+    /// The prefix of every per-scope recovery marker. A scope key is `<owner-zone garden>|<signed-in
+    /// household>`, so N2-E (G3) removes a gone garden's markers by `markerKeyPrefix + "<garden>|"`.
+    @MainActor
+    static var markerKeyPrefix: String {
+        "seedkeep.ck.recovery27d18.\(HouseholdCloudCoordinator.cloudKitEnvironmentTag)."
     }
 
     // MARK: - Runner
@@ -256,14 +264,14 @@ enum ParticipantRowRecovery {
     // up FIRST so the guard runs before any mutation is attempted.
 
     /// Share to garden, live-row path: if the stranded/quarantined entry still exists locally,
-    /// re-home it in place (checklist items + journal photos need no mutation — they carry no
-    /// `householdID`; they are scoped by `entryID` membership and already follow the parent) and
-    /// mark the registry item `shared`. Returns `false` when no live row remains (post-wipe), so the
-    /// caller recreates via `recreateFromSnapshotAtomically` instead.
+    /// re-home it in place and mark the registry item `shared`. A caller moving a parked entry may
+    /// identify unavailable photo rows to delete in this same save. Returns `false` when no live row
+    /// remains (post-wipe), so the caller recreates via `recreateFromSnapshotAtomically` instead.
     @discardableResult
     @MainActor
     static func shareLiveEntryIfPresent(
-        itemID: String, ownerZoneHouseholdID: String, currentScopeKey: String, container: ModelContainer
+        itemID: String, ownerZoneHouseholdID: String, currentScopeKey: String, container: ModelContainer,
+        photoRecordNamesToDrop: Set<String> = [], save: @MainActor (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> Bool {
         let context = ModelContext(container)
         guard let registryItem = try context.fetch(
@@ -277,9 +285,15 @@ enum ParticipantRowRecovery {
         guard let entry = try context.fetch(
             FetchDescriptor<LocalJournalEntry>(predicate: #Predicate { $0.id == itemID })
         ).first else { return false }
+        if !photoRecordNamesToDrop.isEmpty {
+            for photo in try context.fetch(FetchDescriptor<LocalJournalEntryPhoto>(predicate: #Predicate { $0.entryID == itemID }))
+            where photoRecordNamesToDrop.contains(SeedkeepRecordNames.journalEntryPhoto(photo.id)) {
+                context.delete(photo)
+            }
+        }
         entry.householdID = ownerZoneHouseholdID
         registryItem.status = "shared"
-        try context.save()
+        try save(context)
         return true
     }
 

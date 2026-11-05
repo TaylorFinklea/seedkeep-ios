@@ -49,11 +49,12 @@ struct AuthLifecycleTests {
         func waitUntilSwitchIsHeld() async { while heldSwitch == nil { await Task.yield() } }
 
         @MainActor
-        func runSwitch() async throws {
+        func runSwitch(requireCurrent: @MainActor () throws -> Void) async throws {
             if holdSwitch {
                 holdSwitch = false
                 await withCheckedContinuation { heldSwitch = $0 }
             }
+            try requireCurrent()
             if switchFailing { throw Failed() }
             switchCount += 1
         }
@@ -66,11 +67,12 @@ struct AuthLifecycleTests {
         eraser: EraserSpy = EraserSpy()
     ) -> AuthController {
         let auth = AuthController(identity: provider, tokenStore: tokenStore, defaults: defaults)
-        auth.wireLocalDataEraser {
+        auth.wireLocalDataEraser { requireCurrent in
+            try requireCurrent()
             if eraser.failing { throw EraserSpy.Failed() }
             eraser.count += 1
         }
-        auth.wireGardenSwitchEraser { try await eraser.runSwitch() }
+        auth.wireGardenSwitchEraser { requireCurrent in try await eraser.runSwitch(requireCurrent: requireCurrent) }
         return auth
     }
 

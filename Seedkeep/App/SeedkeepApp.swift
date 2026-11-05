@@ -146,9 +146,10 @@ struct RootView: View {
                 // N2-E: a launch with a journal or gone entry shows no garden, and starts no task,
                 // until the guard has resumed after `restoreSession`.
                 EntryProgressView()
-            case .signedIn where appEnv.isActiveGardenGone:
-                // N2-E: the garden is gone. The placeholder stands in until G3's choice replaces it.
-                GardenGonePlaceholderView()
+            case .signedIn where appEnv.gardenGoneScreen != nil:
+                // N2-E: the garden is gone, or its keep, discard or re-home runs. Every window shows the
+                // same screen: the choice, the progress, or the failure with Try again.
+                GardenGoneView()
             case .signedIn:
                 signedInRoot
                     .task(id: snapshotID(auth.state)) {

@@ -238,6 +238,26 @@ enum ScanPhotoStaging {
         try FileManager.default.removeItem(at: root)
     }
 
+    /// N2-E (G3), keep: points every staged scan of garden `old` at garden `new`, in its manifest, so
+    /// the launch resume (which deletes manifests of other gardens) keeps them. Idempotent. Throws when
+    /// a manifest can't be rewritten, so the journal step is retried rather than checkpointed.
+    static func retarget(from old: String, to new: String, root: URL = rootURL()) throws {
+        for dir in scanDirectories(root: root) {
+            guard var manifest = readManifest(in: dir), let scope = manifest.scope,
+                  scope.householdID == old else { continue }
+            manifest.scope = Scope(userRecordName: scope.userRecordName, householdID: new)
+            try writeManifest(manifest, in: dir)
+        }
+    }
+
+    /// N2-E (G3), discard: removes the staged scans of garden `householdID`. Other gardens' scans stay.
+    /// Idempotent. Throws when a directory can't be removed.
+    static func purge(householdID: String, root: URL = rootURL()) throws {
+        for dir in scanDirectories(root: root) where readManifest(in: dir)?.scope?.householdID == householdID {
+            try FileManager.default.removeItem(at: dir)
+        }
+    }
+
     /// Removes staging for scans that never reached a saved seed and are older than `retention`.
     /// A scan linked to a seed stays until its photos are attached.
     static func removeStaleUnsaved(now: Date = Date(), root: URL = rootDirectory()) {

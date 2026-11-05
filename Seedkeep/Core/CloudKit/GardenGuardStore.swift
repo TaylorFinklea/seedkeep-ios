@@ -70,7 +70,9 @@ struct GardenGoneRecord: Codable, Equatable, Sendable {
         /// sharing, or removed this participant).
         case accessLost
     }
-    enum Action: String, Codable, Sendable { case rehome }
+    /// `rehome` is the silent re-home (G1's abandoned grants and absent zones); `keep` and `discard` are
+    /// the user's two answers on the choice screen (G3). `rehome` and `keep` run the same steps.
+    enum Action: String, Codable, Sendable { case rehome, keep, discard }
     enum Phase: String, Codable, Sendable {
         case journaled, done
         /// A newer binding replaced this journal's target in the same guard write. Never replayed.
@@ -88,6 +90,11 @@ struct GardenGoneRecord: Codable, Equatable, Sendable {
     /// write. nil while `awaitingChoice`.
     var replacementID: String?
     var createdAt: Date
+    /// G3: the steps whose effect is done, in order. A checkpoint is written after its effect, so a
+    /// crash between the two repeats the step (every step is idempotent). nil until the first one.
+    var steps: [String]? = nil
+
+    func hasCompleted(_ step: String) -> Bool { steps?.contains(step) ?? false }
 }
 
 struct GardenGuardAccount: Codable, Equatable, Sendable {
@@ -119,12 +126,14 @@ enum GardenGuardError: Error, Equatable, LocalizedError {
     case unreadable
     case writeFailed
     case missingGrant
+    case missingJournal
 
     var errorDescription: String? {
         switch self {
         case .unreadable: return "Seedkeep can't read its iCloud safety record."
         case .writeFailed: return "Seedkeep couldn't save its iCloud safety record."
         case .missingGrant: return "This garden has no permission to be created."
+        case .missingJournal: return "This garden's safety record changed while it was being moved."
         }
     }
 }
@@ -151,11 +160,21 @@ protocol GardenRehoming: AnyObject {
     func rehomeRequested(_ request: GardenRehomeRequest)
 }
 
-/// G1's stand-in: the request is already durable in the guard's `gone` journal, which the G3 runner
-/// will resume at launch. Until then the garden keeps working on the device and sends nothing.
+/// A stand-in that does nothing: the request is already durable in the guard's `gone` journal, which
+/// the runner resumes at launch. Tests that only record requests use their own rehomer.
 @MainActor
 final class DeferredGardenRehomer: GardenRehoming {
     func rehomeRequested(_ request: GardenRehomeRequest) {}
+}
+
+/// The shipping seam (G3): hands each re-home request to the runner, which runs the journal (single
+/// flight, after quiescing writers). Weak, so the runner and its callers have no cycle.
+@MainActor
+final class GardenRehomeRelay: GardenRehoming {
+    weak var runner: GardenGuardRunner?
+    func rehomeRequested(_ request: GardenRehomeRequest) {
+        runner?.startJournal(account: request.accountKey, householdID: request.fromHouseholdID)
+    }
 }
 
 @MainActor
@@ -375,6 +394,100 @@ final class GardenGuardStore {
             account.gone[householdID] = GardenGoneRecord(
                 reason: reason, action: nil, phase: .awaitingChoice, replacementID: nil, createdAt: self.now())
         }
+    }
+
+    // MARK: - Journals (G3)
+
+    /// The user's answer, in ONE guard write: the action, the replacement ID (keep only) and its
+    /// `pending` creation grant. Moves the entry from `awaitingChoice` to `journaled`, so a crash
+    /// never mints a second ID. Idempotent: an entry that already holds an action keeps it, and the
+    /// existing record is returned (a second tap, or a second window, changes nothing).
+    @discardableResult
+    func chooseAction(
+        _ key: String, _ householdID: String, action: GardenGoneRecord.Action, replacementID: String?
+    ) throws -> GardenGoneRecord {
+        guard let existing = account(key).gone[householdID] else { throw GardenGuardError.missingJournal }
+        if existing.phase != .awaitingChoice { return existing }
+        var chosen = existing
+        try mutate(key) { account in
+            chosen.action = action
+            chosen.phase = .journaled
+            chosen.replacementID = action == .discard ? nil : replacementID
+            chosen.steps = []
+            account.gone[householdID] = chosen
+            if let id = chosen.replacementID, account.grants[id] == nil, !account.retired.contains(id) {
+                account.grants[id] = GardenCreationGrant(state: .pending, createdAt: self.now())
+            }
+        }
+        return chosen
+    }
+
+    /// Records a step as done, after its effect. Only an open (`journaled`) entry takes one: a
+    /// superseded entry is never advanced.
+    func checkpoint(_ key: String, _ householdID: String, step: String) throws {
+        guard let record = account(key).gone[householdID], record.phase == .journaled else {
+            throw GardenGuardError.missingJournal
+        }
+        if record.hasCompleted(step) { return }
+        try mutate(key) { account in
+            var updated = record
+            updated.steps = (record.steps ?? []) + [step]
+            account.gone[householdID] = updated
+        }
+    }
+
+    /// The last step of a keep or a silent re-home, in one guard write: the new owned binding, the old
+    /// garden retired, the journal done. Refused when the journal is no longer open (a newer binding
+    /// superseded it), so a stale run never overwrites a newer binding.
+    func completeRehome(_ key: String, from householdID: String, binding: GardenGuardBinding) throws {
+        guard let record = account(key).gone[householdID], record.phase == .journaled,
+              record.replacementID == binding.household.id else { throw GardenGuardError.missingJournal }
+        try mutate(key) { account in
+            for (id, other) in account.gone where id != householdID && other.phase == .journaled
+                && other.replacementID != binding.household.id {
+                var closed = other
+                closed.phase = .superseded
+                account.gone[id] = closed
+            }
+            account.binding = binding
+            account.bindingWritten = true
+            if !account.retired.contains(householdID) { account.retired.append(householdID) }
+            var done = record
+            done.phase = .done
+            done.steps = (record.steps ?? []) + ["bind"]
+            account.gone[householdID] = done
+        }
+    }
+
+    /// The last step of a discard, in one guard write: the binding cleared, the garden retired, the
+    /// journal done. Refused when the journal is no longer open. The cleared binding is explicit
+    /// (`bindingWritten`), so the defaults are never re-seeded from a stale cache.
+    func completeDiscard(_ key: String, householdID: String) throws {
+        guard let record = account(key).gone[householdID], record.phase == .journaled,
+              record.action == .discard else { throw GardenGuardError.missingJournal }
+        try mutate(key) { account in
+            for (id, other) in account.gone where id != householdID && other.phase == .journaled {
+                var closed = other
+                closed.phase = .superseded
+                account.gone[id] = closed
+            }
+            account.binding = nil
+            account.bindingWritten = true
+            if !account.retired.contains(householdID) { account.retired.append(householdID) }
+            var done = record
+            done.phase = .done
+            done.steps = (record.steps ?? []) + ["clear"]
+            account.gone[householdID] = done
+        }
+    }
+
+    /// Removes a closed (`done` or `superseded`) journal. The runner calls this only after a later
+    /// launch has confirmed the defaults against the latest binding (and, for a keep, after the grant
+    /// was consumed). An open journal is never removed.
+    func removeJournal(_ key: String, _ householdID: String) throws {
+        guard let record = account(key).gone[householdID],
+              record.phase == .done || record.phase == .superseded else { return }
+        try mutate(key) { account in account.gone[householdID] = nil }
     }
 
     /// Records a garden known to exist. A recorded generation is never overwritten; a missing one

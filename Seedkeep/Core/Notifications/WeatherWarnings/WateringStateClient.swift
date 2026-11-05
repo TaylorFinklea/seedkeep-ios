@@ -44,7 +44,7 @@ struct LocalWateringStateClient: WateringStateClient {
 private final class WateringStateDefaults: @unchecked Sendable {
     private let defaults: UserDefaults
     private static let lock = Mutex(())
-    private static let keyPrefix = "seedkeep.watering.lastFire."
+    fileprivate static let keyPrefix = "seedkeep.watering.lastFire."
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
@@ -64,5 +64,35 @@ private final class WateringStateDefaults: @unchecked Sendable {
             defaults.set(latest, forKey: key)
             return latest
         }
+    }
+}
+
+/// N2-E (G3): the watering ledger is per garden. A kept copy takes its old garden's timestamp with it
+/// (the later of the two, as `put` is monotonic), and a discard removes it.
+enum WateringLedger {
+    static func move(from old: String, to new: String, in defaults: UserDefaults) {
+        WateringStateDefaults.moveLedger(from: old, to: new, in: defaults)
+    }
+
+    static func remove(householdID: String, in defaults: UserDefaults) {
+        WateringStateDefaults.removeLedger(householdID: householdID, in: defaults)
+    }
+}
+
+extension WateringStateDefaults {
+    fileprivate static func moveLedger(from old: String, to new: String, in defaults: UserDefaults) {
+        lock.withLock { _ in
+            let oldKey = keyPrefix + old
+            let newKey = keyPrefix + new
+            if let moved = defaults.object(forKey: oldKey) as? Date {
+                let current = defaults.object(forKey: newKey) as? Date
+                defaults.set(max(current ?? .distantPast, moved), forKey: newKey)
+            }
+            defaults.removeObject(forKey: oldKey)
+        }
+    }
+
+    fileprivate static func removeLedger(householdID: String, in defaults: UserDefaults) {
+        lock.withLock { _ in defaults.removeObject(forKey: keyPrefix + householdID) }
     }
 }

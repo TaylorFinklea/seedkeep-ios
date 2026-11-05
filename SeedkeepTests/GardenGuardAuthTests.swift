@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import Seedkeep
 import SeedkeepKit
@@ -32,8 +33,8 @@ struct GardenGuardAuthTests {
             identity: provider, tokenStore: InMemoryTokenStore(), defaults: defaults,
             guardStore: store, rehomer: rehomer,
             makeHouseholdID: { queue.isEmpty ? GardenHouseholdID.make() : queue.removeFirst() })
-        auth.wireLocalDataEraser { onFullErase() }
-        auth.wireGardenSwitchEraser {}
+        auth.wireLocalDataEraser { requireCurrent in try requireCurrent(); onFullErase() }
+        auth.wireGardenSwitchEraser { _ in }
         return auth
     }
 
@@ -51,6 +52,25 @@ struct GardenGuardAuthTests {
 
     private static func binding(_ id: String) -> GardenGuardBinding {
         GardenGuardBinding(household: .init(id: id, name: "Mine", createdAt: 1, updatedAt: 1), participant: nil)
+    }
+
+    private static func retireSharedID(
+        _ id: String, action: GardenGoneRecord.Action, store: GardenGuardStore
+    ) throws {
+        let participant = GardenGuardBinding.Participant(
+            zoneName: SeedkeepRecordNames.zoneName(householdID: id), ownerName: "_owner")
+        try store.setBinding(Self.keyA, GardenGuardBinding(
+            household: .init(id: "hhr_local", name: "Mine", createdAt: 1, updatedAt: 1),
+            participant: participant))
+        try store.markGone(Self.keyA, id, reason: .accessLost)
+        try store.chooseAction(Self.keyA, id, action: action,
+                               replacementID: action == .keep ? "hhr_successor" : nil)
+        if action == .keep {
+            try store.completeRehome(Self.keyA, from: id, binding: Self.binding("hhr_successor"))
+        } else {
+            try store.completeDiscard(Self.keyA, householdID: id)
+        }
+        try store.removeJournal(Self.keyA, id)
     }
 
     private static func zone(
@@ -355,6 +375,44 @@ struct GardenGuardAuthTests {
         #expect(Self.household(auth) == "hh_a")
     }
 
+    @Test("a reissued invitation cannot revive an ID retired by discard, even from a stale chooser")
+    func reissuedInvitationAfterDiscard() async throws {
+        let store = GardenGuardStore(directory: GuardTestDirectory.make())
+        let shared = Self.zone("hhr_shared", scope: .shared)
+        let provider = FakeCloudIdentityProvider(owned: [Self.zone("hh_own")], shared: [shared])
+        let defaults = Self.defaults("retiredInviteDiscard")
+        let auth = Self.makeAuth(provider, defaults: defaults, store: store)
+
+        await auth.restoreSession()
+        guard case .choosingGarden = auth.state else { Issue.record("expected the shared invitation chooser"); return }
+        try Self.retireSharedID(shared.householdID, action: .discard, store: store)
+
+        await auth.chooseGarden(shared, discardingDeviceData: false)
+
+        #expect(store.isRetired(Self.keyA, shared.householdID))
+        #expect(Self.household(auth) == "hh_own")
+        #expect(store.latestBinding(Self.keyA)?.participant == nil)
+    }
+
+    @Test("a reissued invitation cannot revive an ID retired by keep, even from a stale chooser")
+    func reissuedInvitationAfterKeep() async throws {
+        let store = GardenGuardStore(directory: GuardTestDirectory.make())
+        let shared = Self.zone("hhr_shared", scope: .shared)
+        let provider = FakeCloudIdentityProvider(owned: [Self.zone("hh_own")], shared: [shared])
+        let defaults = Self.defaults("retiredInviteKeep")
+        let auth = Self.makeAuth(provider, defaults: defaults, store: store)
+
+        await auth.restoreSession()
+        guard case .choosingGarden = auth.state else { Issue.record("expected the shared invitation chooser"); return }
+        try Self.retireSharedID(shared.householdID, action: .keep, store: store)
+
+        await auth.chooseGarden(shared, discardingDeviceData: false)
+
+        #expect(store.isRetired(Self.keyA, shared.householdID))
+        #expect(Self.household(auth) == "hhr_successor")
+        #expect(store.latestBinding(Self.keyA)?.participant == nil)
+    }
+
     @Test("after the first launch a new pre-N2-E-format garden is offered too")
     func discoveryAfterFirstLaunch() async throws {
         let store = GardenGuardStore(directory: nil)
@@ -443,6 +501,94 @@ struct GardenGuardAuthTests {
         #expect(store.latestBinding(Self.keyA)?.household.id == "hhr_next")
         #expect(ActiveGardenContext.participant(in: defaults) == nil)
         #expect(Self.cachedHousehold(defaults) == "hhr_next")
+    }
+
+    @Test("failed discarded-garden discovery retains ownership across relaunch and forces the new account wipe")
+    func clearedBindingFailureRetainsOwnership() async throws {
+        let directory = GuardTestDirectory.make()
+        let store = GardenGuardStore(directory: directory)
+        try store.setBinding(Self.keyA, nil)
+        let defaults = Self.defaults("clearedFailure")
+        Self.cache(defaults, user: Self.userA, household: "hh_discarded")
+        let provider = FakeCloudIdentityProvider(shared: nil)
+        let first = Self.makeAuth(provider, defaults: defaults, store: store)
+        await first.restoreSession()
+        #expect(first.state == .needsICloud(.couldNotVerify))
+        #expect(Self.cachedHousehold(defaults) == "hh_discarded")
+        provider.status = .unverified
+        let offline = Self.makeAuth(provider, defaults: defaults, store: GardenGuardStore(directory: directory))
+        await offline.restoreSession()
+        #expect(offline.state == .needsICloud(.couldNotVerify), "ownership evidence must not reopen a discarded garden")
+
+        // Same retained synthetic store on a later launch; a failed full wipe must still bind nothing.
+        let container = makeTestContainer(name: "cleared-failure-\(UUID().uuidString)")
+        let context = ModelContext(container)
+        context.insert(LocalSeed(id: "foreign", householdID: "hh_other_A", state: .active, packetCount: 1,
+                                 source: .store, customName: "Private A", createdAt: 1, updatedAt: 1))
+        context.insert(LocalJournalRecoveryItem(id: "foreign-recovery", scopeKey: "hh_other_A|A", snapshotJSON: "{}",
+                                               detectedAt: 1, status: "pending"))
+        try context.save()
+        provider.status = .available
+        provider.recordName = Self.userB
+        provider.shared = []
+        let second = Self.makeAuth(provider, defaults: defaults, store: GardenGuardStore(directory: directory), ids: ["hhr_B"])
+        var failWipe = true
+        second.wireLocalDataEraser { requireCurrent in
+            try requireCurrent()
+            if failWipe { throw FakeCloudIdentityProvider.Failure() }
+            try context.delete(model: LocalSeed.self)
+            try context.delete(model: LocalJournalRecoveryItem.self)
+            try context.save()
+        }
+        await second.restoreSession()
+        guard case .failed = second.state else { Issue.record("new account bound over retained A data"); return }
+        #expect(Self.cachedHousehold(defaults) == "hh_discarded")
+        #expect(try context.fetchCount(FetchDescriptor<LocalSeed>()) == 1)
+        failWipe = false
+        await second.retry()
+        #expect(Self.household(second) == "hhr_B")
+        #expect(try context.fetchCount(FetchDescriptor<LocalSeed>()) == 0)
+        #expect(try context.fetchCount(FetchDescriptor<LocalJournalRecoveryItem>()) == 0)
+    }
+
+    @Test("a new account during discarded-garden discovery wipes retained foreign rows before binding")
+    func clearedBindingSwitchDuringDiscovery() async throws {
+        let store = GardenGuardStore(directory: GuardTestDirectory.make())
+        try store.setBinding(Self.keyA, nil)
+        let defaults = Self.defaults("clearedSuperseded")
+        Self.cache(defaults, user: Self.userA, household: "hh_discarded")
+        let provider = FakeCloudIdentityProvider()
+        let container = makeTestContainer(name: "cleared-switch-\(UUID().uuidString)")
+        let context = ModelContext(container)
+        context.insert(LocalSeed(id: "foreign", householdID: "hh_other_A", state: .active, packetCount: 1,
+                                 source: .store, customName: "Private A", createdAt: 1, updatedAt: 1))
+        context.insert(LocalJournalRecoveryItem(id: "foreign-recovery", scopeKey: "hh_other_A|A", snapshotJSON: "{}",
+                                               detectedAt: 1, status: "pending"))
+        try context.save()
+        let auth = Self.makeAuth(provider, defaults: defaults, store: store, ids: ["hhr_B"])
+        var wipes = 0
+        auth.wireLocalDataEraser { requireCurrent in
+            try requireCurrent()
+            #expect(Self.cachedHousehold(defaults) == "hh_discarded")
+            try context.delete(model: LocalSeed.self)
+            try context.delete(model: LocalJournalRecoveryItem.self)
+            try context.save()
+            wipes += 1
+        }
+        provider.holdNextListing()
+        let discovery = Task { await auth.restoreSession() }
+        await provider.waitUntilListingIsHeld()
+        #expect(Self.cachedHousehold(defaults) == "hh_discarded")
+        provider.recordName = Self.userB
+        await auth.revalidateAfterAccountChange()
+        #expect(wipes == 1)
+        #expect(Self.household(auth) == "hhr_B")
+        #expect(try context.fetchCount(FetchDescriptor<LocalSeed>()) == 0)
+        #expect(try context.fetchCount(FetchDescriptor<LocalJournalRecoveryItem>()) == 0)
+        provider.releaseListing()
+        await discovery.value
+        #expect(Self.household(auth) == "hhr_B", "the superseded A discovery cannot bind after B")
+        #expect(store.latestBinding(Self.keyA) == nil)
     }
 
     @Test("a newer binding supersedes an open re-home journal, and a relaunch never replays it")
