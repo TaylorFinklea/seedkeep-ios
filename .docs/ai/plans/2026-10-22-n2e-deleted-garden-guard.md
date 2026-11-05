@@ -1,7 +1,7 @@
 # N2-E — Never recreate a deleted garden (contract)
 
-Status: draft 7, approved by Sol on round 7 (2026-10-23) with no open
-findings. Owner decisions are in the umbrella `decisions.md` ([2026-10-22]
+Contract revision 7 was approved by Sol on round 7 (2026-10-23) with no open
+findings. G1–G3 are implemented; current verification is recorded in Results below. Owner decisions are in the umbrella `decisions.md` ([2026-10-22]
 N2-E). The owner accepted the residual limits below on 2026-10-24. Branch `redesign/r2-design-system`.
 
 ## Owner decisions (fixed)
@@ -420,7 +420,7 @@ per-household keys and the recovery restore path, and records any change.
 ## Slices (they ship together; none is release-safe alone)
 
 1. **G1 — Guard store, binding authority, grants, fresh IDs, discovery**
-   (`worker-sonnet`): §1, §2, §4. It adds a fake provisioner that records every
+   (`isolated native worker`): §1, §2, §4. It adds a fake provisioner that records every
    zone save, root save and `.saveZone` staging. Tests:
    - existing gardens never create a zone (startup, first save,
      `zoneNotFound` retry, share, restored `.saveZone` in engine state);
@@ -447,7 +447,7 @@ per-household keys and the recovery restore path, and records any change.
      unprovisioned: it and its grant survive the relaunch, and no other
      garden is created;
    - account entries kept across switches.
-2. **G2 — Checks, signals, runner and fence** (`worker-sonnet`): §3, §5, §6.
+2. **G2 — Checks, signals, runner and fence** (`isolated native worker`): §3, §5, §6.
    The fake engine gains zone deletions for each reason, zone fetch errors,
    permission failures, a recreated root, coalesced delete-then-modify
    batches, and multiple batches per send. Tests:
@@ -469,7 +469,7 @@ per-household keys and the recovery restore path, and records any change.
    - the pure classifier for every event and error, and the batch hook
      through the real `HouseholdSyncEngine` delegate code with a stub
      database.
-3. **G3 — Choice, keep, discard, silent re-home** (`worker-sonnet`): §7.
+3. **G3 — Choice, keep, discard, silent re-home** (`isolated native worker`): §7.
    Tests:
    - crash and resume between every effect and its checkpoint, for keep,
      discard and the silent re-home;
@@ -487,8 +487,12 @@ per-household keys and the recovery restore path, and records any change.
 
    Screenshots for owner and participant wording at default and AX sizes.
 
-Each slice gets the gate, Opus and Sol reviews, and DeepSeek (the owner
-approved this routing in the user-level instructions).
+Execution follows the current owner working agreement: initial Luna work,
+bounded Sol escalation after an unsuccessful attempt/repair, independent
+read-only Sol CLI and an approved-family Ollama review for consequential
+slices, with the gate and signed Mac build before commits. The original
+contract's model labels are historical; the accepted behavior and limits stay
+fixed.
 
 ## Verification
 
@@ -506,3 +510,95 @@ approved this routing in the user-level instructions).
     another device shows the choice;
   - keep a copy;
   - stop sharing with a participant device.
+
+
+## Results (2026-11-05)
+
+**Implementation:** G1 `a5add72`, G2 `c239d06`, G3 `cf64db0`, local on
+`redesign/r2-design-system`. Guard only for 1.0; in-app deletion of all iCloud
+data remains deferred. G3's complete diff from G2 has SHA-256
+`f4210d9e79eab12140bdcc22c3491847347beee752da7cf9cd0fbd28f1bfe8e9`.
+
+- Every window shares the choice, write fence and resumable journal. Stale
+  erasers revalidate their originating transition; ownership evidence stays
+  until a successor binding or complete account wipe commits. Initial resume
+  preserves an already-started silent re-home.
+- Photo enumeration errors stop and retry, including inventory loading.
+  Pending recovery entries still present locally contribute their photos from
+  their original households; unavailable children drop in the same save as
+  the parent/status move. Private/kept/unrelated items stay unchanged. The
+  disclosure and copy use the same photo eligibility. No missing-photo
+  placeholder remains in the kept copy.
+- Retired shared IDs are excluded from discovery, stale choices and both
+  platform invitation paths before replacement of local data. Retirement
+  survives journal removal; Reset retains its accepted limitations above.
+- Exact read-only Sol CLI and DeepSeek V4.1 Flash approved the committed
+  implementation after the confirmed findings were fixed and covered.
+
+**Code-commit checks:** full worktree and main gates passed on Xcode 27.2:
+SeedkeepKit 25; SeedkeepCloudKit 176; iOS 1,439 passed / 0 failed / 1 skipped
+(1,440 total); macOS 1,454 passed / 0 failed / 1 skipped (1,455 total). Each skip is the opt-in
+`PreN3StoreFixtureGenerator/generate()`; fixture writing was not enabled.
+The signed Mac Debug build and deep/strict codesign verification passed.
+An unchanged table timing test exceeded 50 ms in earlier runs and then passed
+all final gates; no threshold or performance code changed. The specified
+5,000-row CSV test passed.
+
+**Screenshot reachability:** Gone 4 tests / 8 PNGs, R3 4 tests / 32 PNGs and
+R4 4 tests / 28 PNGs passed on DD9BE2B2-F191-459F-8B5B-1AD8B252B171, each with zero
+failures, skips or unreached steps. Default/light/dark and largest-text owner/
+participant wording is captured for Gone; large text scrolls. Artifacts:
+
+- `/private/tmp/seedkeep-gone-screenshots/20261105-152104-33359`
+- `/private/tmp/seedkeep-r3-screenshots/20261105-152812-41966`
+- `/private/tmp/seedkeep-r4-screenshots/20261105-153524-48602`
+
+**Accessibility audit:** all four configurations completed on the same iPhone
+simulator. The script exited 1 (xcodebuild 65) on unallowlisted findings, not a
+clean audit. There were no ABORT, AUDIT-ERROR, timeout or unreached markers.
+
+| Configuration | Checkpoint audits | Unresolved | Suppressed |
+| --- | ---: | ---: | ---: |
+| Dark / Accessibility XXXL | 34 | 68 | 23 |
+| Dark / default | 27 | 108 | 64 |
+| Light / Accessibility XXXL | 36 | 62 | 24 |
+| Light / default | 27 | 107 | 63 |
+| Total | 124 | 345 | 174 |
+
+Unresolved types: contrast 188, dynamic type 93, text clipped 62, element
+detection 2. One existing Add Seed / scrolled / Source / dynamic-type allowlist
+entry went unused at light/default; no allowlist entries were changed.
+Compared with N3's recorded 309, the unresolved total increased by 36. The old
+raw bundle is unavailable, so exact per-element additions/removals cannot be
+reconstructed, and this count does not establish 36 new defects. Of the 345
+reports, 160 have no associated element. The reports include Today frost/
+section labels, Settings rows, Add Seed, the bed grid/square details and Seed
+Detail planting guidance; they remain unresolved pending evidence-based
+triage (`seedkeep-ios-65p`). A read-only source comparison found the existing
+Add Seed, Today, bed/square-detail, sample data, manifest and audit-walker
+sources unchanged from G2; the Settings change is in the Mac-only window.
+No source-backed regression was identified in those sampled paths. This does
+not classify every report as harmless or establish accessibility acceptance.
+The new Gone screen is outside this audit's manifest; its screenshots and
+unit tests do not establish VoiceOver acceptance.
+
+Artifacts: `/private/tmp/seedkeep-a11y-audit/20261105-154446-58673`, including
+raw `SeedkeepAccessibilityAudit.xcresult`, `xcodebuild.log`,
+`finding-counts.txt` and exported `attachments/manifest.json` with 530 PNGs.
+
+**Documentation-commit checks:** the full main gate passed again on unchanged
+`cf64db0` application source: package suites passed, iOS 1,439 passed / one
+opt-in generator skip, macOS 1,454 passed / the same skip, zero failures.
+Fresh bundles: `/private/tmp/seedkeep-n2e-docs-fresh-gate/ios.xcresult` and
+`macos.xcresult`. The signed Mac Debug build and deep/strict codesign
+verification passed again; build log
+`/private/tmp/seedkeep-n2e-docs-signed-build.log` and app under
+`/private/tmp/seedkeep-n2e-docs-signed-derived/Build/Products/Debug/Seedkeep.app`.
+
+**Owner acceptance remains open:** the manual checklist/VoiceOver (including
+new Gone checks), approved iPad and Mac runtime QA, an older-build device
+upgrade, and live throwaway-garden deletion/Keep/stop-sharing checks. These
+results use synthetic fixtures, fake engines and the real delegate batch hook;
+they do not prove live CloudKit delivery or cross-device convergence. The
+optional `seedkeep-spike-*` check and all release/retirement/push/publish actions
+retain their separate approvals. No photo picker was opened on the simulator.

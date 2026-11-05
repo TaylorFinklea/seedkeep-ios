@@ -78,6 +78,27 @@ sample garden, launch with `-SeedkeepFixture`; your own garden works too.
   window. A new window gets the same appearance.
 - [ ] The inspector is kept as you left it when you switch routes.
 
+## Deleted garden (N2-E; pending owner acceptance)
+
+Use the sample garden (`-SeedkeepFixture -SeedkeepGardenGone owner`, then
+`participant`) or a separately approved throwaway garden. iPad simulation,
+Mac runtime and real-account actions retain their approval requirements.
+These checks have not been performed by the automated screenshot runs.
+
+- [ ] VoiceOver reads the title as a header, then the owner/participant
+  explanation, local counts, unavailable-photo warning when present, and
+  the separate Keep and Discard actions with their descriptions.
+- [ ] At the largest text size, scroll to every count, warning and button;
+  content wraps without overlap or horizontal clipping.
+- [ ] Keep becomes available only after the current copy has been counted.
+  A displayed count retry is labelled and reachable with VoiceOver.
+- [ ] The guard appears in every open app window, including Mac Settings.
+  Navigation and keyboard commands cannot return to edits of the old garden.
+- [ ] On approved test data, Discard opens its destructive confirmation;
+  Cancel returns to the choice and leaves the copy intact.
+- [ ] A displayed journal failure and Try again can be read and operated;
+  completion brings the replacement garden or entry flow into focus.
+
 ## Appearance override
 - [ ] On iPhone with the device in dark mode, set Settings → Appearance →
   Light. The app turns light at once and stays light after relaunching.

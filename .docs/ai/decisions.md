@@ -426,3 +426,69 @@ Earlier entries that mention Beads are historical.
 **Alternatives considered**: A source grep for server names (rejected: it checks text, not what ships); checking entitlements in the unit test (rejected: the unsigned test host has none to read).
 
 **Rationale**: The checks run against what ships, and a release cannot regain the entitlement unnoticed.
+
+
+## [2026-11-05] N2-E guard authority, journal lifetime and local copy policy
+
+**Context**: G1 and G2 landed before the website experiment; G3 resumes the
+approved October 22 contract. This records their implementation choices and
+the owner's accepted copy behavior. G3 is local commit `cf64db0`; automated
+results and remaining acceptance limits are in the contract's Results.
+`seedkeep-ios-eee` tracks this resumption; accessibility triage remains open
+as `seedkeep-ios-65p`.
+
+**Decision**:
+- The account-keyed guard binding is authoritative over cached identity and
+  participant defaults. Resolve the verified account and any different-account
+  wipe before repairing defaults. A cleared binding retains the cached local-
+  store owner until a successor bind or complete wipe commits; it routes to
+  fresh discovery and never reopens the cleared cached garden. A newer binding
+  supersedes an older open
+  journal's target; never replay an obsolete target.
+- A completed or superseded journal stays until a later launch confirms the
+  defaults against the latest binding. A kept copy also waits for its creation
+  grant to be consumed. An open failed journal stays durable for retry.
+- Discard clears the binding and then re-runs session resolution, which can
+  select an existing garden, show the chooser or grant a fresh garden ID.
+- Quiesce and await scan resumption and weather refresh before journal effects.
+  Account/store replacement must cancel and await journal tasks before erasing
+  local data. The originating identity transition supplies a synchronous
+  validity permit, checked immediately after the wait before destructive
+  effects. Execution must validate verified account and scope ownership
+  after suspension; unfinished journals continue to fence writes after failure.
+- A failed gone-record commit fences that account/garden in memory for the
+  process. It does not block another account using the same shared garden ID.
+- Permission and ambiguous save failures hold the current send pass and retain
+  queued records for a later pass, without a permanent retry cap. They do not
+  prove deletion. Creation abandonment has its separate three-in-24-hours cap.
+- During Keep and silent re-home, seed and journal photo rows with absent or
+  hash-invalid local bytes are dropped in the same SwiftData save as row
+  re-homing. The choice-screen missing count uses the same eligibility rule.
+  The kept garden does not retain a missing-photo placeholder. Enumeration
+  errors stop copying before its checkpoint; they never mean an empty photo
+  list. Inventory errors keep Keep disabled and offer a count retry.
+  Pending recovery entries still present locally use their actual source
+  households for photo copying and the same unavailable-photo disclosure.
+  Missing children are deleted in the save that moves their parent and marks
+  the recovery item shared. Private/kept and unrelated recovery items stay;
+  snapshot-only items do not imply orphan photos.
+- After Keep or Discard of a shared garden, that ID stays retired for this
+  account on this device, including after another invitation. Discovery,
+  stale chooser results and both platform share-adoption paths must enforce
+  it before replacing the current garden. Retirement is local, not synced.
+- Initial launch resume preserves a silent re-home already started by legacy
+  binding. True account/binding and journal start/end transitions invalidate
+  epochs; launch resumption adds no redundant invalidation over that journal.
+
+**Rationale**: A deleted garden must not be resurrected, partial copy work must
+not admit competing writes, and a journal for one account must never mutate
+another account's local store. The seven owner-accepted residual limits remain
+in the contract. This does not add in-app deletion of all iCloud data.
+
+## [2026-11-05] Resume project-local task tracking without importing the archive
+
+The current working agreement restores Beads for actionable tracking. A fresh
+embedded project-local Dolt store is local-only with no remote; the retired
+20-row export and older Markdown roadmap are preserved without import. Earlier
+tracker retirement and issue statuses remain historical. The umbrella roadmap
+continues to hold product direction; Beads holds current actionable work.

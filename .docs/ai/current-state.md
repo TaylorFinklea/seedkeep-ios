@@ -1,5 +1,39 @@
 # Current State
 
+## N2-E guard implemented — R5 owner acceptance next (2026-11-05)
+
+Native iOS, iPadOS and macOS only. Branch `redesign/r2-design-system` is local
+only: G1 `a5add72`, G2 `c239d06`, G3 `cf64db0`. G1 supplies account-keyed
+binding/grants/discovery; G2 supplies detection, participant rules and the
+write fence; G3 supplies the every-window choice and resumable Keep/Discard/
+silent re-home journals. Missing/hash-invalid photo rows drop atomically,
+including recovered journal photos; enumeration failures stop/retry. Shared
+IDs stay retired on this device/account even after a new invitation.
+
+Final worktree/main code gates passed: SeedkeepKit 25, CloudKit 176, iOS
+1,439 passed + one opt-in fixture-generator skip, macOS 1,454 passed + the
+same skip. Signed Mac Debug build/strict codesign passed. Exact read-only Sol
+CLI and DeepSeek approved the committed source. Gone passed 4 tests / 8 PNGs,
+R3 4 / 32, R4 4 / 28; every step reached.
+
+The four-configuration accessibility audit completed with **345 unresolved
+findings**, versus N3's recorded 309 (+36). It exited nonzero on findings;
+there were no aborted, errored, timed-out or unreached checkpoints. Exact
+per-element changes cannot be reconstructed because the old raw bundle is
+unavailable. This is not accessibility acceptance. Triage is
+`seedkeep-ios-65p`; owner VoiceOver/manual checks remain open.
+
+Contract Results and the seven accepted limits:
+`.docs/ai/plans/2026-10-22-n2e-deleted-garden-guard.md`. R5 (`seedkeep-30f` in
+the umbrella) needs owner-approved iPad/Mac runtime, manual accessibility,
+older-build device upgrade, live throwaway-garden/optional spike checks and
+separate release approvals. No picker, Portview, iPad, live-account, personal-
+device or manual Mac runtime checks were performed. No push.
+
+Task worktrees were removed after frozen-hash checks; patches are archived in
+`.git/seedkeep-agent-patches/2026-11-05`. Seasonal care is untouched. Resumption
+tracking: native `seedkeep-ios-eee` / umbrella `seedkeep-qjx`.
+
 ## N3 done (2026-10-22): the server code is gone
 
 Contract: `.docs/ai/plans/2026-10-22-n3-server-removal.md`. Branch
