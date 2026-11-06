@@ -1,37 +1,27 @@
 # Current State
 
-## R5 local verification — Mac interaction checks blocked (2026-11-05)
+## R5 local verification — Mac interaction flows verified (2026-11-06)
 
-This handoff includes the one-file selected-sidebar contrast repair. Signed
-Mac build/strict codesign and actual light/dark iPad/Mac visual checks passed.
-The iPad probe passed four unique cases plus two focused Gone repeats,
-including rotation, search, full XXXL choices and safe confirmation dismissal.
-Mac routes, Settings, multiple windows, every-window Gone and CSV export
-passed. The required main gate passed 25 / 176 / iOS 1,439 + one expected skip /
-Mac 1,454 + one expected skip. Complete output/results are retained; no fixture
-UI overlapped hosted tests. DeepSeek approved the shipping patch.
+The owner unlocked/enabled Mac automation. The prepared Gone test passed
+Discard → Cancel for both roles with inventory unchanged. After temporary
+harness repairs, the focused Mac run passed two tests, zero failures: seed
+selection populates inspector Name/Company, and CSV roundtrip checks 20
+unchanged/disabled Apply, cancellation, 19 unchanged + one update, apply/result
+and packet-count 2 readback. These are three unique passing scenarios across
+two runs, not a clean rerun of the original three-case suite. No shipping
+source or configuration changed; all fixture/test processes stopped.
 
-The Mac UI runner timed out before any test body (exit 65, zero started).
-Retained system logs now confirm testmanagerd required authentication for
-“Enable UI Automation.” A signed, verified test-without-building run is ready;
-it awaits the owner attending that prompt. Inspector selection, CSV import/
-roundtrip and Mac Discard cancellation remain unverified. No system permission
-or VoiceOver setting changed. The launch candidate remains excluded after no
-A-B-B-A benefit; normal-use startup acceptance stays open.
-
-A focused DD9 Settings follow-up reached eight light default/XXXL checkpoints,
-retaining 70 audit reports (exit 65; both test cases failed on findings).
-Three named controls fit in both sizes; paired evidence shows the XXXL audit
-blanking content until another scroll. This is audit-associated state evidence,
-not a diagnosed normal-use source defect or a finding waiver. Details and
-ready-run artifacts are in the R5 plan. No shipping code changed.
-
-The audit remains **345 unresolved findings**; representative triage neither
-cleared nor suppressed them. Actual VoiceOver, physical-device upgrade, live
-CloudKit and release acceptance remain separate. Tracking: `seedkeep-ios-k97`
-/ `seedkeep-ios-65p`, umbrella `seedkeep-30f.1` under R5 `seedkeep-30f`.
-Source base `0823468` plus patch `b7212222…dfab`; no push. Evidence and limits:
-`plans/2026-11-05-r5-local-acceptance.md`.
+The fresh main gate passed 25 / 176 / iOS 1,439 + one expected skip / Mac
+1,454 + one expected skip; signed Mac build/strict codesign also passed.
+Earlier iPad/runtime results remain recorded in the R5 plan. The sidebar fix
+is native `3ded648`.
+The 345 original audit reports remain unresolved; the focused Settings
+reports do not clear them. Normal-use startup, grid/keyboard/Tab order and
+actual VoiceOver/manual accessibility remain unverified, with physical-device
+upgrade, live CloudKit and release approvals separate. R5 is not complete.
+Tracking: `seedkeep-ios-k97` / `seedkeep-ios-65p`, umbrella `seedkeep-30f.1`
+under `seedkeep-30f`. Evidence and limits:
+`plans/2026-11-05-r5-local-acceptance.md`. No push or release.
 
 ## N2-E guard implemented — R5 owner acceptance next (2026-11-05)
 

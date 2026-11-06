@@ -175,8 +175,10 @@ export produced the 20-row synthetic fixture file
 destination was confirmed before export. The complete per-action matrix is
 `/private/tmp/seedkeep-r5-local/mac-action-matrix.md`.
 
-CSV import/roundtrip, table-row selection/inspector, grid keyboard behavior
-and Mac Discard confirmation/cancel are not yet accepted. Coordinate probes
+At the November 5 checkpoint, CSV import/roundtrip, table-row selection/
+inspector, grid keyboard behavior and Mac Discard confirmation/cancel were
+unverified. The November 6 follow-up below verifies the three prepared flows;
+grid/keyboard/Tab-order acceptance remains open. Coordinate probes
 did not reach the controls; subsequent read-only AX traversal timed out and
 one batched repair failed with `-1700`. The owned fixture was quit. These
 helper failures are not application defects. A temporary macOS XCTest target/scheme was prepared only in an isolated
@@ -186,8 +188,9 @@ out enabling automation mode and exited 65 before any test body: **zero tests
 started**, no app UI actions or screenshots reached. This is a tool failure,
 not evidence of an application defect. No permission, trust, automation,
 VoiceOver or security settings changed. All owned processes stopped and the
-Mac lease returned. The three prepared flows remain unverified and need a
-manual pass. Nothing from this QA target is shipping.
+Mac lease returned. At that checkpoint the three prepared flows remained
+unverified; see the later owner-attended results below. Nothing from this QA
+target is shipping.
 
 The frozen QA-only patch is
 `/private/tmp/seedkeep-r5-local/mac-ui-harness.patch` (SHA-256
@@ -196,8 +199,9 @@ corrected probe source SHA-256 is
 `5aadb6ed0c42bacffff290f7cde7170c2f0f2373820654ad6eff0fc609f6f4a5`.
 Raw compile/run logs and the result bundle are
 `mac-ui-probe.log`, `mac-ui-probe-corrected.log` and
-`mac-ui-probe-corrected.xcresult` under the R5 artifact root. The original
-export is unchanged; no derived import file was created because no test ran.
+`mac-ui-probe-corrected.xcresult` under the R5 artifact root. At that checkpoint
+the original export was unchanged; no derived import file had been created
+because no test ran.
 
 A subsequent read-only system-log check established a concrete prerequisite:
 at 22:14:06, testmanagerd's writer daemon required authentication to enable
@@ -205,7 +209,8 @@ automation and LocalAuthentication evaluated “Enable UI Automation”; the
 runner timed out at 22:15:06. Scoped retained events and the exact query are
 in `/private/tmp/seedkeep-r5-local/mac-automation-diagnosis/`. The trace does
 not establish a missing Accessibility grant or whether the prompt was visible.
-The owner was asked to attend one future bounded retry; no retry has run.
+The owner was asked to attend one future bounded retry; it had not run at
+that checkpoint. The later owner-attended run is recorded below.
 
 To make that retry concrete, the frozen QA-only patch was restored over
 `3ded648` in `seedkeep-ios-wt/r5-mac-qa-ready`. Build-for-testing succeeded
@@ -217,8 +222,9 @@ app, test bundle and generated `.xctestrun`; its SHA-256 is
 The run spec SHA-256 is
 `fa5e63538c11c196289fabb9fb0071e4e39bebab4142cc22b80210394bfc8164`.
 `mac-ui-ready-invocations.txt` records the exact unexecuted command and log
-paths. Keep the QA worktree/artifacts available for the owner-attended run;
-its target and scheme remain excluded from main shipping configuration.
+paths. That manifest records preparation-time hashes; subsequent QA rebuilds
+reused derived products, so it does not attest their current binary contents.
+The target and scheme remain excluded from main shipping configuration.
 
 Some exact signed fixture relaunches produced a process and menus without an
 initial window; File > New Window then opened it. This occurred with Light
@@ -241,6 +247,49 @@ use. Automatic restoration and global settings are unchanged. Raw receipts:
 Mac artifacts remain under `/private/tmp/seedkeep-r5-local`. Actual VoiceOver
 speech, physical hardware, upgrade and live CloudKit acceptance are not
 established by these local checks.
+
+## November 6 owner-attended Mac follow-up
+
+The owner reported the Mac unlocked and automation enabled. XCTest then ran
+without another authentication prompt. The first run executed three methods:
+Gone confirmation → Cancel passed for owner and participant, preserving the
+inventory label; the other two failed in temporary harness setup/selectors.
+A Luna repair rerun also failed. Those failures are retained, not counted as
+application defects or passing suites.
+
+A bounded Sol repair reached the substantive CSV checkpoints but both methods
+failed on inspector lookup. The final narrow Luna correction normalized the
+checkbox value instead of treating it only as a String. Actual receipts show
+`__NSCFNumber`, value `1`, normalized `true`; the helper no longer closed the
+open inspector. No application source, shipping project or system setting was
+changed by the agents.
+
+The final focused run **passed two methods, zero failures/skips, exit 0**:
+selection displayed inspector identity fields Name=Brandywine and Company=
+Baker Creek; the original export previewed 20 unchanged with Apply disabled
+and cancelled safely; the edited copy previewed 19 unchanged + one update,
+applied with a one-update result, and read back packet count 2 in the table
+plus the correct inspector identity. These join the first run's Gone pass as
+**three unique passing scenarios across two runs**. No final all-three-case
+green suite is claimed. No final Keep/Discard was invoked.
+
+Evidence under `/private/tmp/seedkeep-r5-local/`:
+`mac-ui-owner-retry.{log,xcresult}`, `mac-ui-owner-retry-focused.{log,xcresult}`,
+`mac-sol-repair/` and `mac-luna-bool-repair/`. The latter folders retain actual
+run/source/binary hashes, checkpoints and results; the original export remains
+SHA-256 `92a3db62776347827c188b9ccfd7d7ae3c3b1346465b34ed934391bbf249ab21`.
+Screenshots include the menu bar and thin background/desktop edges; they are
+private local evidence, not strictly app-window-only captures. Exact owned
+app/runner/build PIDs stopped and the Mac UI lease was returned.
+The lead inspected the final selection and packet-2 screenshots. The final
+QA-only patch SHA-256 is
+`49c58f21e1971b7c7d9429fb7229491ef71c4aa9d014f0416db0a130d0b58a3e`;
+its source and evidence are archived privately in native Git metadata at
+`.git/seedkeep-agent-patches/2026-11-06-r5-mac-owner-followup/`.
+
+This verifies the prepared Mac interactions, not normal-use launch behavior,
+grid keyboard/Tab order, VoiceOver, the 345 unresolved audit reports, a device
+upgrade or live CloudKit acceptance. All prior release boundaries remain.
 
 ## Required verification
 
@@ -290,6 +339,28 @@ Build log: `/private/tmp/seedkeep-r5-followup-signed-build.log`; strict receipt:
 `/private/tmp/seedkeep-r5-followup-codesign.log`. These are source/build checks,
 not the owner-attended Mac UI run. Temporary Settings diagnostics and the
 Mac UI target remain excluded from shipping source/configuration.
+
+## November 6 pre-commit verification
+
+After the UI lease returned, the exact full main-checkout DD9 gate ran on
+`5da57e1` with unchanged shipping source: exit 0, Kit 25 / CloudKit 176 / iOS
+1,439 passed + one expected fixture-generator skip / Mac 1,454 passed + the
+same skip; zero failures. No standalone retry was needed. Raw log and both
+xcresults: `/private/tmp/seedkeep-r5-mac-owner-followup/main-gate/`.
+Gate-log SHA-256:
+`c674d8a9341825cbfc2c6f18175f85b44867960e7581c910112f22f5da9812c4`.
+
+A fresh main Debug Mac build with existing default development signing and
+strict deep codesign passed. Build and identity/verification receipts:
+`/private/tmp/seedkeep-r5-mac-owner-followup/signed-build.log` and
+`codesign.log` in that directory. Build-log SHA-256:
+`ecf37b8337da9d615b9bb46a59f37832e427908380fe50c7904239c1b36e9d8c`;
+codesign-log SHA-256:
+`692835de6d34754ab8ff97d1aa562811d65ff189790903d49d6e2b86e90ca85a`.
+The app is the main checkout's default DerivedData Debug `Seedkeep.app`,
+team `K7CBQW6MPG`; the source runtime repair remains `3ded648`. No fixture UI
+overlapped hosted tests. Both leases returned; this follow-up commits only
+handoff documentation, with the temporary QA target excluded.
 
 ## Remaining owner and release boundaries
 
