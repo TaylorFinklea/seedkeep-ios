@@ -11,13 +11,20 @@ passed. The required main gate passed 25 / 176 / iOS 1,439 + one expected skip /
 Mac 1,454 + one expected skip. Complete output/results are retained; no fixture
 UI overlapped hosted tests. DeepSeek approved the shipping patch.
 
-The temporary Mac UI-test target compiled/signed, but the runner timed out
-enabling automation before any test body (exit 65, zero tests started).
-Inspector selection, CSV import/roundtrip and Mac Discard cancellation remain
-unverified; a manual pass is needed. No settings were changed and all owned
-processes stopped. The window-launch A-B-B-A showed one window on all four
-launches; its candidate gave no benefit and is excluded. Earlier missing-
-window behavior remains unconfirmed, with normal-use startup acceptance open.
+The Mac UI runner timed out before any test body (exit 65, zero started).
+Retained system logs now confirm testmanagerd required authentication for
+“Enable UI Automation.” A signed, verified test-without-building run is ready;
+it awaits the owner attending that prompt. Inspector selection, CSV import/
+roundtrip and Mac Discard cancellation remain unverified. No system permission
+or VoiceOver setting changed. The launch candidate remains excluded after no
+A-B-B-A benefit; normal-use startup acceptance stays open.
+
+A focused DD9 Settings follow-up reached eight light default/XXXL checkpoints,
+retaining 70 audit reports (exit 65; both test cases failed on findings).
+Three named controls fit in both sizes; paired evidence shows the XXXL audit
+blanking content until another scroll. This is audit-associated state evidence,
+not a diagnosed normal-use source defect or a finding waiver. Details and
+ready-run artifacts are in the R5 plan. No shipping code changed.
 
 The audit remains **345 unresolved findings**; representative triage neither
 cleared nor suppressed them. Actual VoiceOver, physical-device upgrade, live

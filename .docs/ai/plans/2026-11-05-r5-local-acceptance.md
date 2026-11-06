@@ -72,6 +72,57 @@ No source-backed defect in those sampled iPhone audit families was confirmed.
 That does not classify all findings as harmless. Runtime accessibility and
 owner acceptance remain open; the allowlist is unchanged.
 
+## Focused Settings diagnostic follow-up
+
+On source `3ded648`, an isolated temporary test class captured eight DD9
+checkpoints: Settings top, Share garden via iCloud, Check iCloud account and
+What's New, at light default and Accessibility XXXL. The initial Luna capture
+failed before its first checkpoint because it read metadata from a lazy,
+offscreen row. Its bounded repair also failed; a Sol worker repaired those
+optional reads and split the two configurations. Only QA code changed.
+
+The repaired diagnostic completed all checkpoints but **did not pass cleanly**:
+Xcode exited 65 and both test cases failed on retained audit findings. There
+were no harness aborts or audit errors.
+
+| Configuration | Checkpoints | Contrast | Dynamic Type | Clipping | Reports |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Light default | 4 | 12 | 31 | 15 | 58 |
+| Light XXXL | 4 | 2 | 5 | 5 | 12 |
+| Total | 8 | 14 | 36 | 20 | 70 |
+
+Fifteen reports had no element. These targeted checkpoints differ from the
+canonical four-configuration walk: do not add 70 to 345 or interpret the
+count difference as a regression/resolution set. Seventeen old configuration/
+type/id/label groups reproduce (29 old reports, 31 fresh reports), without
+checkpoint/frame identity. **All original 345 reports remain unresolved.**
+
+Six full-frame receipts and the pre-audit screenshots show each named button
+fully rendered inside the 402×791 usable viewport at both sizes. At XXXL,
+Share and Check are 217.33 pt high; What's New is 155.33 pt. Default heights
+are 52 pt. This supports visibility of those captured controls, not every
+rendered node or a waiver of their reported clipping/text-size issues.
+
+The light-XXXL Share checkpoint exposes an audit-associated state change:
+before auditing, Share and What's New render fully; immediately afterward,
+the form is blank except for the title/tab bar and its AX scrollbar is at
+100%. Another bounded scroll re-exposes content. The lead inspected the
+paired captures. This does not establish a normal-use source defect, explain
+all findings, or test a normal user's runtime text-size change. Manual
+accessibility/VoiceOver acceptance remains open; the allowlist is unchanged.
+
+Evidence: `/private/tmp/seedkeep-r5-settings-diagnostic-sol/` holds raw log,
+xcresult, invocation, `evidence-summary.json`, `matched-old-groups.json` and
+`curated-manifest.json`: 16 explicit app-only PNGs and 32 AX/frame texts.
+Temporary source SHA-256:
+`8b00f778ef852ff6ce5e5612f0865c7c4b3582049c803eef7f7564e4d9f24ddf`;
+QA patch SHA-256:
+`1b0277104c80b3973e6ccb63f228cd05fc35523074836bfd31cc068520bf6985`.
+The earlier failed harness is retained separately at
+`/private/tmp/seedkeep-r5-settings-diagnostic/`. No named action, picker,
+camera, live CloudKit or global setting was activated. Both fixture and test
+runner stopped; DD9's lease was returned.
+
 ## Confirmed runtime blocker
 
 The initial actual iPad fixture capture
@@ -148,6 +199,27 @@ Raw compile/run logs and the result bundle are
 `mac-ui-probe-corrected.xcresult` under the R5 artifact root. The original
 export is unchanged; no derived import file was created because no test ran.
 
+A subsequent read-only system-log check established a concrete prerequisite:
+at 22:14:06, testmanagerd's writer daemon required authentication to enable
+automation and LocalAuthentication evaluated “Enable UI Automation”; the
+runner timed out at 22:15:06. Scoped retained events and the exact query are
+in `/private/tmp/seedkeep-r5-local/mac-automation-diagnosis/`. The trace does
+not establish a missing Accessibility grant or whether the prompt was visible.
+The owner was asked to attend one future bounded retry; no retry has run.
+
+To make that retry concrete, the frozen QA-only patch was restored over
+`3ded648` in `seedkeep-ios-wt/r5-mac-qa-ready`. Build-for-testing succeeded
+and produced a real run specification; the app and runner passed strict
+signature verification. This preparation launched neither app nor tests.
+`/private/tmp/seedkeep-r5-local/mac-ui-ready-manifest.json` binds the source,
+app, test bundle and generated `.xctestrun`; its SHA-256 is
+`51532b5b8e86e7bb4f1e70ab67360dba85581b132eef3a2e20594bf9d8e9ddb0`.
+The run spec SHA-256 is
+`fa5e63538c11c196289fabb9fb0071e4e39bebab4142cc22b80210394bfc8164`.
+`mac-ui-ready-invocations.txt` records the exact unexecuted command and log
+paths. Keep the QA worktree/artifacts available for the owner-attended run;
+its target and scheme remain excluded from main shipping configuration.
+
 Some exact signed fixture relaunches produced a process and menus without an
 initial window; File > New Window then opened it. This occurred with Light
 and Gone roles, including a normal `open` without `-n`. A later launch with
@@ -201,6 +273,23 @@ artifact hashes are in `sidebar-evidence-provenance.json` under the R5 root;
 they use retained build/launch/probe receipts, not a retroactive capture-time
 attestation. The lead inspected representative repaired Mac light/dark and
 iPad dark selected states. No new audit finding is declared resolved.
+
+## Follow-up commit verification
+
+The required main-checkout gate was rerun on unchanged shipping source
+`3ded648` before this follow-up handoff: exit 0; Kit 25, CloudKit 176, iOS
+1,439 passed + one expected fixture-generator skip, Mac 1,454 passed + the
+same skip; zero failures. Full raw log and both result bundles are in
+`/private/tmp/seedkeep-r5-followup-gate/`. Gate-log SHA-256:
+`f3bb1bd2f6c09bb3e2816bfb3ac0ef8c864203da129307fc07b057b3005eee78`.
+
+A fresh signed Debug Mac build from main and strict codesign passed using
+existing default development signing. App:
+`/private/tmp/seedkeep-r5-followup-signed-derived/Build/Products/Debug/Seedkeep.app`.
+Build log: `/private/tmp/seedkeep-r5-followup-signed-build.log`; strict receipt:
+`/private/tmp/seedkeep-r5-followup-codesign.log`. These are source/build checks,
+not the owner-attended Mac UI run. Temporary Settings diagnostics and the
+Mac UI target remain excluded from shipping source/configuration.
 
 ## Remaining owner and release boundaries
 
