@@ -18,14 +18,12 @@ struct WorkbenchSidebar: View {
                             if route == .seeds {
                                 Text("\(seedCount)")
                                     .font(.wbMonoCaption)
-                                    .foregroundStyle(WBColor.muted)
                                     .accessibilityLabel("\(seedCount) seeds")
                             }
                         }
                         .font(.wbBody)
-                        .foregroundStyle(WBColor.ink)
                     } icon: {
-                        Image(systemName: route.symbol).foregroundStyle(WBColor.accent)
+                        Image(systemName: route.symbol)
                     }
                     .padding(.vertical, 4)
                     .frame(minHeight: WBMetrics.touchTarget)

@@ -1,5 +1,31 @@
 # Current State
 
+## R5 local verification — Mac interaction checks blocked (2026-11-05)
+
+This handoff includes the one-file selected-sidebar contrast repair. Signed
+Mac build/strict codesign and actual light/dark iPad/Mac visual checks passed.
+The iPad probe passed four unique cases plus two focused Gone repeats,
+including rotation, search, full XXXL choices and safe confirmation dismissal.
+Mac routes, Settings, multiple windows, every-window Gone and CSV export
+passed. The required main gate passed 25 / 176 / iOS 1,439 + one expected skip /
+Mac 1,454 + one expected skip. Complete output/results are retained; no fixture
+UI overlapped hosted tests. DeepSeek approved the shipping patch.
+
+The temporary Mac UI-test target compiled/signed, but the runner timed out
+enabling automation before any test body (exit 65, zero tests started).
+Inspector selection, CSV import/roundtrip and Mac Discard cancellation remain
+unverified; a manual pass is needed. No settings were changed and all owned
+processes stopped. The window-launch A-B-B-A showed one window on all four
+launches; its candidate gave no benefit and is excluded. Earlier missing-
+window behavior remains unconfirmed, with normal-use startup acceptance open.
+
+The audit remains **345 unresolved findings**; representative triage neither
+cleared nor suppressed them. Actual VoiceOver, physical-device upgrade, live
+CloudKit and release acceptance remain separate. Tracking: `seedkeep-ios-k97`
+/ `seedkeep-ios-65p`, umbrella `seedkeep-30f.1` under R5 `seedkeep-30f`.
+Source base `0823468` plus patch `b7212222…dfab`; no push. Evidence and limits:
+`plans/2026-11-05-r5-local-acceptance.md`.
+
 ## N2-E guard implemented — R5 owner acceptance next (2026-11-05)
 
 Native iOS, iPadOS and macOS only. Branch `redesign/r2-design-system` is local
