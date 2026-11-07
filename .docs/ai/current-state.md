@@ -2,6 +2,13 @@
 
 ## R5 local verification — Mac interaction flows verified (2026-11-06)
 
+The automated keyboard follow-up (`seedkeep-ios-k97.3`) remains blocked on
+focus setup. Test methods now run, but neither intended scenario is verified;
+bounded Luna and Sol harness repairs did not give the inline field keyboard
+focus. Grid focus is also unproved. No shipping defect/fix is established and
+the global keyboard setting is unchanged. Evidence:
+`/private/tmp/seedkeep-r5-keyboard/`. Manual checks remain deferred.
+
 The owner unlocked/enabled Mac automation. The prepared Gone test passed
 Discard → Cancel for both roles with inventory unchanged. After temporary
 harness repairs, the focused Mac run passed two tests, zero failures: seed
@@ -12,9 +19,10 @@ two runs, not a clean rerun of the original three-case suite. No shipping
 source or configuration changed; all fixture/test processes stopped.
 
 The fresh main gate passed 25 / 176 / iOS 1,439 + one expected skip / Mac
-1,454 + one expected skip; signed Mac build/strict codesign also passed.
-Earlier iPad/runtime results remain recorded in the R5 plan. The sidebar fix
-is native `3ded648`.
+1,454 + one expected skip after a sole Mac timing failure and focused retry;
+the signed Mac build/strict codesign also passed. Failed/focused/retry evidence
+is retained in the R5 plan. Earlier iPad/runtime results remain recorded there.
+The sidebar fix is native `3ded648`.
 The 345 original audit reports remain unresolved; the focused Settings
 reports do not clear them. Normal-use startup, grid/keyboard/Tab order and
 actual VoiceOver/manual accessibility remain unverified, with physical-device

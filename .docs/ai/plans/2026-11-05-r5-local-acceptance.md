@@ -362,6 +362,80 @@ team `K7CBQW6MPG`; the source runtime repair remains `3ded648`. No fixture UI
 overlapped hosted tests. Both leases returned; this follow-up commits only
 handoff documentation, with the temporary QA target excluded.
 
+## Automated Mac keyboard follow-up — focus blocked
+
+Neither intended keyboard scenario is verified. The temporary QA target builds
+and passes strict app/runner signature checks, and owner prompt approval
+resolved runner initialization. Actual tests then failed to establish the
+required keyboard focus; no shipping defect or fix is established. Main app
+source/configuration remain unchanged from `bd6b2b1` (sidebar repair `3ded648`).
+
+| Actual run | Passed / failed | What the evidence establishes |
+|---|---|---|
+| Prompt-approved original QA | 0 / 2 | Harness assumed compact Garden navigation/sheet; numeric typing failed without editor focus. |
+| Luna Mac harness repair | 0 / 2 | Danvers inspector opens on click; arrows/Return leave it unchanged. Visible numeric field does not acquire keyboard focus. |
+| Sol numeric-only double-click repair | 0 / 1 | Focus remains on Outline/Cell; Packets stays 1 and typing draft 2 fails. Grid was not rerun. |
+
+These are repeated attempts at two scenarios, not five distinct defects.
+No numeric draft, Return commit, Escape cancellation, blur commit or subsequent
+model readback was reached. The intended numeric readback would establish only
+same-process in-memory state, not persistence across launches. Mac Garden uses
+the bed switcher and persistent inspector; actual North-bed fixtures are Black
+Seeded Simpson at `r8.s1` and Danvers 126 at `r8.s3`. The repaired grid assertion
+requires a changed inspector position/identity, avoiding stale-detail success.
+
+Luna corrected the Mac route/fixture/inspector assumptions and used the public
+Window menu to move only the fixture window onto the captured display. After
+that concrete attempt and repair failed, Sol tried public double-click entry
+into the number editor once. Its post-click AX still shows the table cell,
+rather than the TextField, with keyboard focus. No private focus API or new
+permission/trust change was used. Capture files include desktop/other-app
+context and remain private; they are not strictly app-only screenshots.
+
+The host's read-only `AppleKeyboardUIMode` was 0. [Apple's focus guidance](https://developer.apple.com/videos/play/wwdc2023/10162/)
+explains that Mac buttons do not acquire focus on click and need keyboard
+navigation for Tab focus. The grid test's focus precondition is therefore
+unproved; this does not establish that the app's arrow logic is defective or
+that enabling the setting would make it pass. The global setting is unchanged.
+Manual checks stay deferred, and no additional automatic retry is planned.
+
+Evidence root: `/private/tmp/seedkeep-r5-keyboard/`.
+
+- Original prepared QA patch: `prepared-qa.patch`, SHA-256
+  `a8bef3e61a058541c793af69fa212e452dc5d1f5e4efa42155bb1250cc6599a9`.
+- Luna repair: `run-manifest-prompt-approved-repair.json`, frozen
+  `qa-keyboard-final.patch`, two-case xcresult and 17 exported attachments.
+- Sol attempt: `sol-numeric/run-manifest.json`, SHA-256
+  `da8bfbab95af9859b741c22983f500260c7064408f8fc0f93b92d4324d537756`,
+  source/patch/product/spec/log/result hashes and nine private attachments.
+
+Earlier ENOSPC build failures and both zero-method initialization failures
+(LocalAuthentication Code -4, then automation-mode timeout) are retained.
+The owner approved exactly five inactive generated-build folders for removal;
+`cleanup-receipt.json` records only those deletions, 3.7 GiB before and 5.6 GiB
+afterward. The current task's derived-data was then rebuilt. This is not a
+claim of permanent free capacity or broader cleanup authority. Source, logs,
+results, simulators and personal files were preserved. An unrelated physical-
+device WebDriverAgent run was identified read-only and left untouched.
+All task-owned app, runner and xcodebuild PIDs exited; Mac UI lease returned.
+
+Fresh main verification is preserved in `main-precommit/`. The first full
+gate had one Mac mapping/sorting timing failure: 50.358375 ms against 50 ms.
+An incorrect focused filter ran zero tests and is discarded as pass evidence;
+the corrected selector ran exactly one test and passed (reported 46 ms).
+The exact full-gate retry then passed: Kit 25, CloudKit 176, iOS 1,439 passed
+plus one expected skip, Mac 1,454 passed plus one expected skip; zero failures.
+No threshold or app source changed. The default signed main Mac Debug build
+and strict deep codesign passed with team `K7CBQW6MPG`; raw gate/build/signature
+logs and all failed, focused and retry results are retained.
+
+Frozen QA sources, patches and private evidence are copied/hash-verified under
+`.git/seedkeep-agent-patches/2026-11-06-r5-mac-keyboard/`; DerivedData
+is excluded. This follow-up changes handoff documentation only; the temporary
+QA target stays outside main. `seedkeep-ios-k97.3` remains open. Normal-use
+startup, Tab order, VoiceOver/manual accessibility, all 345 audit findings,
+device/CloudKit checks and release approvals remain open. R5 is not complete.
+
 ## Remaining owner and release boundaries
 
 The fixture app shares the normal bundle identifier. OS-managed window
