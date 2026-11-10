@@ -1,32 +1,28 @@
 # Current State
 
-## R5 local verification — Mac keyboard fixes (2026-11-09)
+## R5 local verification — Mac keyboard (2026-11-10)
 
-Local fixes (`seedkeep-ios-k97.4` / `k97.5`) align ⌘1–5 with Today, Seeds,
-Garden, Windows, Journal and reveal numbers while Command is held. Actual
-signed sample-app checks passed all routes and hint hold/release/inactive
-window clearing. The numeric editor now bridges a successful save until its
-row arrives and ignores unchanged native setter echoes, fixing stale counts.
+The grid Return-focus repair (`seedkeep-ios-k97.7`) passes actual
+signed sample verification. Left/Right navigation, the left edge,
+both inspector selections and retained focus after both Return activations
+pass. Selected-only named accessibility Move actions remain exposed.
+Mac route/hint and numeric save/Undo/Redo fixes remain in `2c17004`.
 
-The final sample run passed immediate table/inspector Return=2, Undo=1,
-Redo=2, observed draft 3 → Escape=2, observed draft 4 → blur=4, Year=2025,
-and route readbacks 2 / 2 / 4. Focused tests: commands 10/10, editing 31/31.
-The six-file code patch is `77385d1b382c448828f36fd2ed1bfcf32220abfcd041e9e1df4b5676d3ba14b4`.
-The exact main gate passed: Kit 25, CloudKit 176, iOS 1,447 + one expected
-skip, Mac 1,462 + one expected skip; zero failures and no retry. The signed
-main Mac build and strict codesign passed. Private evidence location:
-`.git/seedkeep-agent-patches/2026-11-09-r5-shortcuts/`; working copies:
-`/private/tmp/seedkeep-r5-shortcuts/`. Local only; no push or release.
+The one-file worker patch is
+`27e5e7d94c6daee786d4b916f2a4515a9126ea45e8b0b9441e95ea10524f7ff7`.
+Focused Garden tests pass 44/44. The main gate passed: Kit 25, CloudKit 176,
+iOS 1,447 + one expected skip, Mac 1,462 + one expected skip; zero failures,
+no retry. Signed main Mac build/strict codesign passed. Review records are in
+the evidence directory. Original Keyboard navigation mode 0 is restored and
+all owned fixtures are stopped. Evidence: `/private/tmp/seedkeep-r5-grid/`;
+private archive: `.git/seedkeep-agent-patches/2026-11-10-r5-grid/`.
 
-Grid arrows (`seedkeep-ios-k97.3`) remain unverified: actual public focus
-checks fail with Mac Keyboard navigation Off (`AppleKeyboardUIMode=0`).
-The owner has a pending choice about enabling it temporarily and restoring
-Off; no global setting changed. All fixture processes stopped before main
-checks. Other manual/VoiceOver checks, normal-use startup, the 345 original
-audit findings, device upgrade, live CloudKit and release acceptance remain
-open. R5 is not complete. Prior iPad and Mac interaction evidence and full
-results/limits: `plans/2026-11-05-r5-local-acceptance.md`. Tracking:
-`seedkeep-ios-k97` / `seedkeep-ios-65p`, umbrella `seedkeep-30f.1`.
+Other manual/VoiceOver checks, normal-use startup, full Tab order, the 345
+original audit findings, device upgrade, live CloudKit and release acceptance
+remain open. R5 is not complete. Detailed results and limits:
+`plans/2026-11-05-r5-local-acceptance.md`. Tracking: `seedkeep-ios-k97.3` /
+`k97.7` under `k97`, accessibility `seedkeep-ios-65p`, umbrella `seedkeep-30f.1`.
+Local only; no push or release.
 
 ## N2-E guard implemented — R5 owner acceptance next (2026-11-05)
 

@@ -524,3 +524,76 @@ specific owner choice to enable Keyboard navigation temporarily and restore
 Off is pending. No global preference, VoiceOver, personal data, live CloudKit,
 physical-device or release action was changed by this slice. The 345 original
 audit findings and the other R5 acceptance boundaries remain open.
+
+## Garden grid Return focus repair — November 10
+
+`seedkeep-ios-k97.7` keeps the grid button's accessibility action container
+attached across selection changes. The four existing Move actions are supplied
+only for the selected planting. No explicit focus forcing, model/query/writer
+change or shipping QA target was added. The frozen one-file patch SHA-256 is
+`27e5e7d94c6daee786d4b916f2a4515a9126ea45e8b0b9441e95ea10524f7ff7`.
+
+The approved temporary Keyboard navigation test first needed a fresh fixture
+process launched under mode 2 to establish actual grid focus. A bounded Luna
+attempt/repair stopped before arrows; a Sol fresh-process diagnostic then
+confirmed that Return selected Black Seeded Simpson but moved actual focus
+from R8S1 to empty R8S2 before any Right input. The fixture stayed frontmost;
+screenshots did not precede that transition. The source repair replaces the
+selection-dependent outer modifier branch with an unconditional actions builder.
+
+Final-source signed Mac build/strict codesign passed. Focused GardenGrid and
+GardenInteraction tests passed 44/44. Actual uninstrumented sample UI verified:
+
+| Check | Observed result |
+| --- | --- |
+| From Danvers R8S3, Left twice | Focus R8S2 then R8S1 |
+| Third Left at first column | Focus stays R8S1 |
+| Return at R8S1 | Black Seeded Simpson / Row 8, square 1; focus stays R8S1 |
+| Right twice, then Return | Focus R8S2 then R8S3; Danvers 126 / Row 8, square 3 |
+| After each Return | Actual focus retained at immediate, ~0.5/~1s and screenshot checkpoints |
+| Public AX Move names | Four directions on selected cell; none on unselected cell |
+
+The lead independently inspected both app-only Return captures. The runtime
+copy's debug-dylib SHA-256 is
+`40d6e2468fa902f11b1383825a89864eca61fa12f2dbcd22961c749fd46ffdac`.
+The accepted helper exited 0; `implementation/attempt2/runtime.log` SHA-256:
+`4209f5e681912e9b0d9a160c03e1dc5c0bb9ce68a22d2620381e12db878160ac`.
+Original `AppleKeyboardUIMode=0` was restored and read back; exact owned
+fixture PID 45885 stopped before main checks. Earlier diagnostic/probe
+processes also stopped. No other global setting was changed.
+
+Limits: the first inspector's scoped AX tree retained old opposite-position
+text even though its screenshot showed the correct latest position. The
+initial helper's exclusion of every stale descendant failed; the bounded
+helper repair retained scoped expected text, captured both visible inspectors,
+and checked actual focus before/after capture. Failed evidence is preserved.
+A separate bounded old-fixture AXPress metadata comparison failed before a
+cell query, so default accessibility activation compatibility was not verified
+by that comparison. This is not VoiceOver/speech acceptance or clearance of
+the 345 original findings. No custom Move action was invoked. The checks use
+same-process in-memory synthetic data; normal-use startup/full Tab order,
+personal-device upgrade, live CloudKit and release acceptance remain open.
+
+Working evidence: `/private/tmp/seedkeep-r5-grid/`; private retained evidence:
+`.git/seedkeep-agent-patches/2026-11-10-r5-grid/`. Review inputs/results are in
+the `reviews/` subdirectory. No push or release is part of this slice.
+
+The exact full main gate ran once before commit and exited 0 (239 seconds):
+`scripts/test-gate.sh --simulator-udid DD9BE2B2-F191-459F-8B5B-1AD8B252B171`.
+Kit passed 25; CloudKit 176; iOS 1,447 + one expected pre-N3 fixture-generator
+skip; Mac 1,462 + the same skip; zero failures. Both 5,000-row yield checks
+passed and no retry was needed. DD9 returned to its original Shutdown state.
+No interactive fixture overlapped hosted Mac tests. Gate-log SHA-256: `50e37930b4bb570b8e0704d4a73d92984fb5e4bc045c6617d866b1e97eef23d3`.
+
+The main signed build command was
+`xcodebuild -project Seedkeep.xcodeproj -scheme Seedkeep -destination 'platform=macOS' build`.
+It and strict deep codesign exited 0 using the established Apple Development
+identity / Team `K7CBQW6MPG`; CDHash
+`ac3ee6929d30d3bd5c7253c92c6921ce6156677c`. Build-log SHA-256:
+`e4bd88a451caf64c36f9a7a9ae1548425bc7002073a9856840c0064d4f852598`;
+codesign-log SHA-256:
+`16ee44f7a9083a66234cedac888421c9edcb7b9def8b42f1ff9a4fba67013b63`.
+The frozen source hash stayed unchanged. Raw logs, xcresults and summaries
+are in `main-precommit/` under the evidence root; no owned app, test, build
+or fixture process remains. Completed independent reviews are identified in
+the commit trailers; their raw outputs and lead assessment remain private.

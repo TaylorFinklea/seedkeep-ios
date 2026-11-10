@@ -136,15 +136,16 @@ private struct MoveActions: ViewModifier {
     let onMove: (GardenInteraction.Direction) -> Void
 
     func body(content: Content) -> some View {
-        if enabled {
-            content
-                .accessibilityAction(named: GardenInteraction.Direction.left.actionName) { onMove(.left) }
-                .accessibilityAction(named: GardenInteraction.Direction.right.actionName) { onMove(.right) }
-                .accessibilityAction(named: GardenInteraction.Direction.up.actionName) { onMove(.up) }
-                .accessibilityAction(named: GardenInteraction.Direction.down.actionName) { onMove(.down) }
-        } else {
-            content
-        }
+        content
+            // Keep the action container attached in both states so selection doesn't replace the focused button.
+            .accessibilityActions {
+                if enabled {
+                    Button(GardenInteraction.Direction.left.actionName) { onMove(.left) }
+                    Button(GardenInteraction.Direction.right.actionName) { onMove(.right) }
+                    Button(GardenInteraction.Direction.up.actionName) { onMove(.up) }
+                    Button(GardenInteraction.Direction.down.actionName) { onMove(.down) }
+                }
+            }
     }
 }
 
