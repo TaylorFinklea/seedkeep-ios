@@ -53,10 +53,10 @@ struct WorkbenchCommandsTests {
         }
     }
 
-    @Test("Go shortcuts keep their numbers; Windows is ⌘5 and Settings has none")
+    @Test("Go shortcuts match sidebar order; Windows is ⌘4 and Journal is ⌘5")
     func goShortcuts() {
         #expect(WorkbenchGoShortcut.routes == [.today, .seeds, .garden, .windows, .journal])
-        #expect(WorkbenchGoShortcut.routes.map { WorkbenchGoShortcut.key(for: $0) } == ["1", "2", "3", "5", "4"])
+        #expect(WorkbenchGoShortcut.routes.map { WorkbenchGoShortcut.key(for: $0) } == ["1", "2", "3", "4", "5"])
         #expect(WorkbenchGoShortcut.key(for: .settings) == nil)
         // Every route but Settings (⌘,) is in the Go menu.
         #expect(Set(WorkbenchGoShortcut.routes) == Set(WorkbenchRoute.allCases).subtracting([.settings]))

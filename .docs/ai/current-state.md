@@ -1,35 +1,32 @@
 # Current State
 
-## R5 local verification — Mac interaction flows verified (2026-11-06)
+## R5 local verification — Mac keyboard fixes (2026-11-09)
 
-The automated keyboard follow-up (`seedkeep-ios-k97.3`) remains blocked on
-focus setup. Test methods now run, but neither intended scenario is verified;
-bounded Luna and Sol harness repairs did not give the inline field keyboard
-focus. Grid focus is also unproved. No shipping defect/fix is established and
-the global keyboard setting is unchanged. Evidence:
-`/private/tmp/seedkeep-r5-keyboard/`. Manual checks remain deferred.
+Local fixes (`seedkeep-ios-k97.4` / `k97.5`) align ⌘1–5 with Today, Seeds,
+Garden, Windows, Journal and reveal numbers while Command is held. Actual
+signed sample-app checks passed all routes and hint hold/release/inactive
+window clearing. The numeric editor now bridges a successful save until its
+row arrives and ignores unchanged native setter echoes, fixing stale counts.
 
-The owner unlocked/enabled Mac automation. The prepared Gone test passed
-Discard → Cancel for both roles with inventory unchanged. After temporary
-harness repairs, the focused Mac run passed two tests, zero failures: seed
-selection populates inspector Name/Company, and CSV roundtrip checks 20
-unchanged/disabled Apply, cancellation, 19 unchanged + one update, apply/result
-and packet-count 2 readback. These are three unique passing scenarios across
-two runs, not a clean rerun of the original three-case suite. No shipping
-source or configuration changed; all fixture/test processes stopped.
+The final sample run passed immediate table/inspector Return=2, Undo=1,
+Redo=2, observed draft 3 → Escape=2, observed draft 4 → blur=4, Year=2025,
+and route readbacks 2 / 2 / 4. Focused tests: commands 10/10, editing 31/31.
+The six-file code patch is `77385d1b382c448828f36fd2ed1bfcf32220abfcd041e9e1df4b5676d3ba14b4`.
+The exact main gate passed: Kit 25, CloudKit 176, iOS 1,447 + one expected
+skip, Mac 1,462 + one expected skip; zero failures and no retry. The signed
+main Mac build and strict codesign passed. Private evidence location:
+`.git/seedkeep-agent-patches/2026-11-09-r5-shortcuts/`; working copies:
+`/private/tmp/seedkeep-r5-shortcuts/`. Local only; no push or release.
 
-The fresh main gate passed 25 / 176 / iOS 1,439 + one expected skip / Mac
-1,454 + one expected skip after a sole Mac timing failure and focused retry;
-the signed Mac build/strict codesign also passed. Failed/focused/retry evidence
-is retained in the R5 plan. Earlier iPad/runtime results remain recorded there.
-The sidebar fix is native `3ded648`.
-The 345 original audit reports remain unresolved; the focused Settings
-reports do not clear them. Normal-use startup, grid/keyboard/Tab order and
-actual VoiceOver/manual accessibility remain unverified, with physical-device
-upgrade, live CloudKit and release approvals separate. R5 is not complete.
-Tracking: `seedkeep-ios-k97` / `seedkeep-ios-65p`, umbrella `seedkeep-30f.1`
-under `seedkeep-30f`. Evidence and limits:
-`plans/2026-11-05-r5-local-acceptance.md`. No push or release.
+Grid arrows (`seedkeep-ios-k97.3`) remain unverified: actual public focus
+checks fail with Mac Keyboard navigation Off (`AppleKeyboardUIMode=0`).
+The owner has a pending choice about enabling it temporarily and restoring
+Off; no global setting changed. All fixture processes stopped before main
+checks. Other manual/VoiceOver checks, normal-use startup, the 345 original
+audit findings, device upgrade, live CloudKit and release acceptance remain
+open. R5 is not complete. Prior iPad and Mac interaction evidence and full
+results/limits: `plans/2026-11-05-r5-local-acceptance.md`. Tracking:
+`seedkeep-ios-k97` / `seedkeep-ios-65p`, umbrella `seedkeep-30f.1`.
 
 ## N2-E guard implemented — R5 owner acceptance next (2026-11-05)
 

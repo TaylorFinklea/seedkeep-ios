@@ -452,3 +452,75 @@ throwaway garden. Optional spikes are restricted to approved
 Postgres export. Push, publication, upload, submission and release remain
 separate explicit approvals. R5 is not complete merely because local checks
 or a styling repair pass.
+
+## Mac route discovery and numeric edit repair — November 9
+
+The owner reported ⌘4/⌘5 opposite to sidebar order and absent held-Command
+numbers, then explicitly handed the remaining sample checks to the agent.
+`seedkeep-ios-k97.4` corrects the shared Go mapping to Today 1, Seeds 2,
+Garden 3, Windows 4, Journal 5; Mac-only hints use that mapping. Settings keeps
+⌘,. Actual signed fixture screenshots verify routes 1–5 and hints present
+while held, absent on release and absent when Settings takes window focus.
+
+The agent-driven editor checks exposed a separate persistent display bug
+(`seedkeep-ios-k97.5`): a committed count could show 1 in the table while the
+independent inspector showed 2. A fixture-only trace identified the race:
+`finish` dropped draft 2 while stored fallback was 1; the native text field
+echoed 1 as a new draft before the canonical row 2 arrived. Model/query cell
+variants failed and were preserved. The accepted repair uses the stable
+window editing object for current row values, a confirmed-save handoff and
+idempotent unchanged setters. It adds no per-cell query and changes no
+writer, CloudKit or garden-fence behavior. Temporary instrumentation was
+removed before the final build and UI run.
+
+Final uninstrumented, Apple Development-signed fixture run (helper exit 0):
+
+| Check | Actual result |
+| --- | --- |
+| Draft 2, Return, before navigation | Table 2 and inspector 2 |
+| Real ⌘Z / ⇧⌘Z | Both 1 / both 2 |
+| Observed draft 3, Escape | 2; route readback 2 |
+| Observed draft 4, focus Year to blur | Table 4 and inspector 4; Year 2025 |
+| Route away and back after each edit case | 2 / 2 / 4 |
+
+This proves same-process in-memory sample behavior, not disk persistence or
+real-account acceptance. Focused Mac commands passed 10/10; final editing
+regressions passed 31/31, including retained bindings, save/feed timing,
+unchanged native echoes, active input, cancellation, normalization, reset,
+and coalesced undo. The final six-file code patch SHA-256 is
+`77385d1b382c448828f36fd2ed1bfcf32220abfcd041e9e1df4b5676d3ba14b4`.
+
+Evidence root: `/private/tmp/seedkeep-r5-shortcuts/`:
+`k97-5-final/numeric.log`, `return-immediate.png`, `blur-immediate.png`,
+`focused-summary.json`, `manifest.json`, `shortcut-ui/` for route/hint
+screenshots, and `sol-runtime/` for the inactive-window and grid boundary. Accepted runtime debug-dylib SHA-256:
+`e17b7bc46fed09c27c7c13bf4ab949135dc4724db0d75a94057ff7d9ba04114f`.
+The exact fixture PID 92518 was stopped and verified absent before the main
+gate. Failed candidate worktrees and evidence remain preserved.
+
+The exact full gate ran once in the main checkout and passed (321 seconds):
+Kit 25, CloudKit 176, iOS 1,447 passed + one expected fixture-generator skip,
+Mac 1,462 passed + one expected skip, zero failures. Both 5,000-row yield
+checks passed without retry. Xcode and both SDKs were 27.2. DD9 returned to
+its pre-run Shutdown state. Gate log SHA-256:
+`530010d7ead562788993ede79234b83aeb307fe4413d85c2446ad82260533a04`.
+
+The signed main Mac Debug build and strict deep codesign passed with the
+established Apple Development identity (Team `K7CBQW6MPG`). Build-log SHA-256:
+`673c070e920f403d94bab73039b3ceaa878857711c80ecf805e363f2eccd1960`;
+codesign-log SHA-256:
+`ea9e0e87a26987e1d6abeeb491e36286541d9bb0e2b811e627ed6279f4c34365`.
+Raw gate result paths and commands are in the evidence receipts.
+
+Independent read-only Sol CLI and DeepSeek through OMP are precommit gates.
+Private check/source/review evidence location:
+`.git/seedkeep-agent-patches/2026-11-09-r5-shortcuts/` in the native repo.
+No push or release is part of this slice.
+
+Grid keyboard acceptance remains open. A real cell click left focus on the
+main window and its public `AXFocused` attribute was not settable; no arrow
+or Return outcome was claimed. The global keyboard mode is still 0. A
+specific owner choice to enable Keyboard navigation temporarily and restore
+Off is pending. No global preference, VoiceOver, personal data, live CloudKit,
+physical-device or release action was changed by this slice. The 345 original
+audit findings and the other R5 acceptance boundaries remain open.

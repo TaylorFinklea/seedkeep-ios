@@ -132,8 +132,7 @@ struct WorkbenchCommands: Commands {
     }
 }
 
-/// The Go menu's numbered routes. Numbers stay with their routes, so Windows (added in R3) is ⌘5
-/// though it is listed after Garden.
+/// The Go menu's numbered routes, in sidebar order.
 enum WorkbenchGoShortcut {
     static let routes: [WorkbenchRoute] = [.today, .seeds, .garden, .windows, .journal]
 
@@ -142,8 +141,8 @@ enum WorkbenchGoShortcut {
         case .today: return "1"
         case .seeds: return "2"
         case .garden: return "3"
-        case .journal: return "4"
-        case .windows: return "5"
+        case .windows: return "4"
+        case .journal: return "5"
         case .settings: return nil
         }
     }

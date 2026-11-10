@@ -151,6 +151,202 @@ struct SeedsEditingTests {
         #expect(editing.draft(for: packets) == nil)
     }
 
+    @Test("a retained cell binding reads newly stored rows after commit and undo")
+    func retainedBindingReadsCurrentStoredRows() throws {
+        let container = Self.makeContainer()
+        try Self.insert([Self.seed("s1", packets: 1, year: 2020)], into: container)
+        let undo = Self.makeUndoManager()
+        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household))
+        let editing = SeedEditing()
+        let key = Self.key("s1", .packets)
+        let originalShown = "1"
+        let retainedGet = { editing.text(for: key, shown: originalShown) }
+        func storedRows() throws -> [SeedTableRow] {
+            SeedTableRow.rows(seeds: [try Self.fetchSeed("s1", in: container)], locations: [], tags: [], recommendations: [:])
+        }
+        editing.refreshStoredValues(from: try storedRows())
+        editing.setDraft("2", for: key)
+        let report = try writer.commitDraft(key, text: "2", currentYear: 2026).get()
+        #expect(report.changed == ["s1"])
+        editing.finish(key)
+        #expect(editing.draft(for: key) == nil)
+        #expect(retainedGet() == "2", "the finish-to-feed gap must never expose the old 1")
+        editing.refreshStoredValues(from: try storedRows())
+        #expect(retainedGet() == "2", "the same getter must stop showing its captured 1")
+
+        undo.undo()
+        editing.refreshStoredValues(from: try storedRows())
+        #expect(retainedGet() == "1", "the stored projection also follows undo")
+    }
+
+    @Test("an active draft wins a stored-row update and Escape reveals the latest stored value")
+    func draftWinsStoredRowRefresh() throws {
+        let container = Self.makeContainer()
+        try Self.insert([Self.seed("s1", packets: 2)], into: container)
+        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household))
+        let editing = SeedEditing()
+        let key = Self.key("s1", .packets)
+        let retainedGet = { editing.text(for: key, shown: "1") }
+        editing.setDraft("3", for: key)
+        #expect(writer.apply(.packets(4), to: ["s1"]).changed == ["s1"])
+        let rows = SeedTableRow.rows(seeds: [try Self.fetchSeed("s1", in: container)], locations: [], tags: [], recommendations: [:])
+        editing.refreshStoredValues(from: rows)
+        #expect(retainedGet() == "3")
+        editing.cancel(key)
+        #expect(retainedGet() == "4")
+        #expect(editing.consumeSuppressedBlur(for: key))
+    }
+
+    @Test("stored rows retain a cleared year and discard values on scope reset or replacement")
+    func storedRowScopeAndClearedYear() throws {
+        let container = Self.makeContainer()
+        try Self.insert([Self.seed("s1", year: 2020)], into: container)
+        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household))
+        let editing = SeedEditing()
+        let key = Self.key("s1", .year)
+        let retainedGet = { editing.text(for: key, shown: "2020") }
+        _ = try writer.commitDraft(key, text: "", currentYear: 2026).get()
+        let rows = SeedTableRow.rows(seeds: [try Self.fetchSeed("s1", in: container)], locations: [], tags: [], recommendations: [:])
+        editing.refreshStoredValues(from: rows)
+        #expect(retainedGet() == "", "nil year is a stored empty value, not a missing lookup")
+        editing.discardAll()
+        #expect(retainedGet() == "2020", "a scope reset removes the old stored projection")
+        editing.refreshStoredValues(from: rows)
+        editing.refreshStoredValues(from: [])
+        #expect(retainedGet() == "2020", "replacing the feed drops departed seed keys")
+    }
+
+    @Test("a confirmed save survives unchanged feeds and new typing until its stored row arrives")
+    func pendingSaveAndNewDraft() throws {
+        let container = Self.makeContainer()
+        try Self.insert([Self.seed("s1", packets: 1)], into: container)
+        let editing = SeedEditing()
+        let key = Self.key("s1", .packets)
+        let baseline = SeedTableRow.rows(seeds: [try Self.fetchSeed("s1", in: container)], locations: [], tags: [], recommendations: [:])
+        editing.refreshStoredValues(from: baseline)
+        editing.setDraft("2", for: key)
+        let writer = Self.makeWriter(container: container, undo: Self.makeUndoManager(), household: HouseholdBox(Self.household))
+        _ = try writer.commitDraft(key, text: "2", currentYear: 2026).get()
+        editing.finish(key)
+        editing.refreshStoredValues(from: baseline)
+        editing.handleUndoEvent(Notification.Name("NSUndoManagerDidCloseUndoGroupNotification"))
+        #expect(editing.text(for: key, shown: "1") == "2", "unchanged rows and group closure cannot roll back the save")
+        editing.setDraft("3", for: key)
+        editing.cancel(key)
+        #expect(editing.text(for: key, shown: "1") == "2", "Escape before the feed reveals the confirmed save")
+        editing.setDraft("3", for: key)
+        let stored = SeedTableRow.rows(seeds: [try Self.fetchSeed("s1", in: container)], locations: [], tags: [], recommendations: [:])
+        editing.refreshStoredValues(from: stored)
+        #expect(editing.text(for: key, shown: "1") == "3", "active typing survives acknowledgment")
+        editing.cancel(key)
+        #expect(editing.text(for: key, shown: "1") == "2")
+    }
+
+    @Test("superseding row metadata and undo events release pending saves without dropping active drafts")
+    func supersedingRowsAndUndoBeforeFeed() throws {
+        let container = Self.makeContainer()
+        try Self.insert([Self.seed("s1", packets: 1)], into: container)
+        let baseline = SeedTableRow.rows(seeds: [try Self.fetchSeed("s1", in: container)], locations: [], tags: [], recommendations: [:])
+        let editing = SeedEditing()
+        let key = Self.key("s1", .packets)
+        editing.refreshStoredValues(from: baseline)
+        editing.setDraft("2", for: key)
+        editing.finish(key)
+        var superseding = baseline
+        superseding[0].updatedAt -= 1
+        superseding[0].packets = 4
+        editing.refreshStoredValues(from: superseding)
+        #expect(editing.text(for: key, shown: "1") == "4", "version equality, not clock ordering, controls supersession")
+
+        for event in ["NSUndoManagerDidUndoChangeNotification", "NSUndoManagerDidRedoChangeNotification"] {
+            editing.refreshStoredValues(from: baseline)
+            editing.setDraft("2", for: key)
+            editing.finish(key)
+            editing.handleUndoEvent(Notification.Name(event))
+            editing.refreshStoredValues(from: baseline)
+            #expect(editing.text(for: key, shown: "1") == "1", "undo/redo can restore identical values and timestamps before the feed")
+            editing.setDraft("2", for: key)
+            editing.finish(key)
+            editing.setDraft("3", for: key)
+            editing.handleUndoEvent(Notification.Name(event))
+            #expect(editing.text(for: key, shown: "1") == "3", "undo never clears real active input")
+            editing.cancel(key)
+        }
+    }
+
+    @Test("confirmed numeric saves normalize text and drop pending values on removal or scope reset")
+    func normalizedPendingNumbersAndScope() throws {
+        let editing = SeedEditing()
+        let packets = Self.key("s1", .packets)
+        let year = Self.key("s1", .year)
+        for (key, input, saved) in [(packets, " 02 ", "2"), (year, " 02025 ", "2025"), (year, "  ", "")] {
+            editing.setDraft(input, for: key)
+            editing.finish(key)
+            #expect(editing.draft(for: key) == nil)
+            #expect(editing.text(for: key, shown: "old") == saved)
+            editing.discardAll()
+            #expect(editing.text(for: key, shown: "old") == "old")
+        }
+        editing.setDraft("2", for: packets)
+        editing.finish(packets)
+        editing.refreshStoredValues(from: [])
+        #expect(editing.text(for: packets, shown: "fallback") == "fallback")
+        editing.setDraft("2", for: packets)
+        editing.finish(packets)
+        _ = editing.discardMissing(liveIDs: [])
+        #expect(editing.text(for: packets, shown: "fallback") == "fallback")
+    }
+
+    @Test("unchanged native setter echoes after save or cancel cannot mask undo or newer stored rows")
+    func unchangedSetterEchoesDoNotCreateDrafts() throws {
+        let container = Self.makeContainer()
+        try Self.insert([Self.seed("s1", packets: 1)], into: container)
+        let undo = Self.makeUndoManager()
+        let writer = Self.makeWriter(container: container, undo: undo, household: HouseholdBox(Self.household))
+        let editing = SeedEditing()
+        let key = Self.key("s1", .packets)
+        func storedRows() throws -> [SeedTableRow] {
+            SeedTableRow.rows(seeds: [try Self.fetchSeed("s1", in: container)], locations: [], tags: [], recommendations: [:])
+        }
+        let baseline = try storedRows()
+        editing.refreshStoredValues(from: baseline)
+        editing.setDraft("2", for: key)
+        _ = try writer.commitDraft(key, text: "2", currentYear: 2026).get()
+        editing.finish(key)
+        editing.setDraft("2", for: key)
+        #expect(editing.draft(for: key) == nil, "a post-submit echo must not become active input")
+        undo.undo()
+        editing.handleUndoEvent(Notification.Name("NSUndoManagerDidUndoChangeNotification"))
+        editing.refreshStoredValues(from: baseline)
+        #expect(editing.text(for: key, shown: "1") == "1", "even an identical baseline feed after undo wins")
+
+        #expect(writer.apply(.packets(2), to: ["s1"]).changed == ["s1"])
+        editing.refreshStoredValues(from: try storedRows())
+        editing.setDraft("3", for: key)
+        editing.cancel(key)
+        editing.setDraft("2", for: key)
+        #expect(editing.draft(for: key) == nil, "a post-cancel echo also must not become active input")
+        #expect(writer.apply(.packets(4), to: ["s1"]).changed == ["s1"])
+        editing.refreshStoredValues(from: try storedRows())
+        #expect(editing.text(for: key, shown: "1") == "4")
+    }
+
+    @Test("changed input is accepted and unchanged setters preserve validation errors")
+    func changedInputAndUnchangedErrors() {
+        let editing = SeedEditing()
+        let key = Self.key("s1", .packets)
+        editing.setDraft("1", for: key)
+        #expect(editing.draft(for: key) == "1", "input before any canonical row exists is accepted")
+        editing.fail(key, message: "validation failure")
+        editing.setDraft("1", for: key)
+        #expect(editing.errors[key] == "validation failure", "unchanged text cannot clear a validation error")
+        editing.setDraft("2", for: key)
+        #expect(editing.errors[key] == nil)
+        editing.finish(key)
+        editing.setDraft("1", for: key)
+        #expect(editing.draft(for: key) == "1", "real input differing from the presented confirmed 2 is never suppressed")
+    }
+
     @Test("drafts for seeds that disappear are dropped and reported")
     func draftsForMissingSeeds() {
         let editing = SeedEditing()

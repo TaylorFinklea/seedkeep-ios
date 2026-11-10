@@ -492,3 +492,34 @@ embedded project-local Dolt store is local-only with no remote; the retired
 20-row export and older Markdown roadmap are preserved without import. Earlier
 tracker retirement and issue statuses remain historical. The umbrella roadmap
 continues to hold product direction; Beads holds current actionable work.
+
+## [2026-11-09] Match navigation shortcuts to sidebar order
+
+The owner reported that ⌘4 and ⌘5 were opposite to the visible sidebar order
+and requested numbered hints while holding Command. The historical choice
+that kept Journal on ⌘4 is superseded: Today, Seeds, Garden, Windows and
+Journal use ⌘1 through ⌘5 in displayed order. Settings keeps its separate ⌘,
+window. The shared Go-menu mapping also supplies the Mac sidebar hints.
+
+On Mac, SwiftUI modifier-key handling reveals the numbers while Command is
+held in the active window. Scene/window inactivity and disappearance clear
+the hints; no event monitor, new permission or global keyboard setting is
+needed. Other sidebar content, selection behavior and seed-count labels stay
+as before. Verification and limits are recorded in the R5 local acceptance plan.
+
+## [2026-11-09] Bridge successful numeric edits until the row feed catches up
+
+A traced Mac table race cleared a successful draft before SwiftData delivered
+the updated row. The old fallback then entered the text binding as a new
+draft and masked the saved value. The window's existing `SeedEditing` object
+now receives the current row projection and retains a normalized, confirmed
+save until that row acknowledges it or a superseding row arrives. Genuine
+active input wins over this handoff value. Unchanged native setter echoes
+are no-ops; changed input remains editable.
+
+Undo/redo releases pending handoffs, including an undo coalesced before a row
+feed update. Cancel retains a successful save while dropping only active
+input. Scope reset and departing rows clear the corresponding transient
+state. Writes and their garden fence continue through the existing writer.
+Regression tests and real sample-app Return/Escape/blur/undo/redo checks are
+recorded in the R5 acceptance plan.

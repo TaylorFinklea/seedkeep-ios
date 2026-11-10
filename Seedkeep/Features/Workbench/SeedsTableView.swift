@@ -191,10 +191,12 @@ struct SeedsTableView: View {
         .modifier(DoneToolbar(action: finishEditing))
         .onReceive(Publishers.MergeMany(
             UndoEvents.names.map { NotificationCenter.default.publisher(for: $0, object: undoTarget) }
-        )) { _ in
+        )) { notification in
+            editing.handleUndoEvent(notification.name)
             undoRevision += 1
         }
         .onAppear {
+            editing.refreshStoredValues(from: rows)
             // The shell owns the window's undo manager; only fill it in when used without one.
             if model.activeUndoManager == nil { model.activeUndoManager = undoTarget }
             handleRequests()
@@ -213,6 +215,7 @@ struct SeedsTableView: View {
             decideSeedsInspectorStart()
         }
         .onChange(of: rows) {
+            editing.refreshStoredValues(from: rows)
             pruneSelection()
             discardMissingDrafts()
             handleReveal()

@@ -63,6 +63,23 @@ enum SeedInputValidation {
 final class SeedEditing {
     private(set) var drafts: [SeedDraftKey: String] = [:]
     private(set) var errors: [SeedDraftKey: String] = [:]
+    /// Read-only projection of the shell's current stored rows. Table cell bindings can retain an
+    /// earlier `shown` snapshot; this shared observable lookup keeps their stored fallback current.
+    /// Only the incoming row feed refreshes it, never a draft or a successful-write assumption.
+    private var storedValues: [SeedDraftKey: String] = [:]
+    private struct StoredRowStamp: Equatable {
+        let updatedAt: Int64
+        let packets: Int
+        let year: Int?
+    }
+    private struct PendingCommit {
+        let value: String
+        let baseline: StoredRowStamp?
+    }
+    private var storedStamps: [String: StoredRowStamp] = [:]
+    /// A confirmed save bridges the interval before its row-feed update. Clearing the active draft
+    /// must not expose an older stored fallback that the native text field can echo into a new draft.
+    private var pendingCommits: [SeedDraftKey: PendingCommit] = [:]
     /// Set by Escape. The blur that follows the cancel must not commit.
     private var suppressedBlur: SeedDraftKey?
 
@@ -70,12 +87,38 @@ final class SeedEditing {
         drafts[key]
     }
 
-    /// The text a cell shows: the draft if there is one, otherwise the stored value.
+    /// Active input wins, then a confirmed save awaiting its feed, then the current stored row.
     func text(for key: SeedDraftKey, shown: String) -> String {
-        drafts[key] ?? shown
+        drafts[key] ?? pendingCommits[key]?.value ?? storedValues[key] ?? shown
+    }
+
+    /// Replaces the projection once per incoming row change, also dropping departed seeds.
+    func refreshStoredValues(from rows: [SeedTableRow]) {
+        var values: [SeedDraftKey: String] = [:]
+        values.reserveCapacity(rows.count * 2)
+        var stamps: [String: StoredRowStamp] = [:]
+        for row in rows {
+            stamps[row.id] = StoredRowStamp(updatedAt: row.updatedAt, packets: row.packets, year: row.year)
+            values[SeedDraftKey(seedID: row.id, field: .packets)] = String(row.packets)
+            values[SeedDraftKey(seedID: row.id, field: .year)] = row.year.map(String.init) ?? ""
+        }
+        // Publish canonical values first, so releasing a pending commit cannot reveal an old value.
+        if storedValues != values { storedValues = values }
+        storedStamps = stamps
+        pendingCommits = pendingCommits.filter { key, commit in
+            guard let value = values[key] else { return false }
+            return value != commit.value && stamps[key.seedID] == commit.baseline
+        }
     }
 
     func setDraft(_ text: String, for key: SeedDraftKey) {
+        guard drafts[key] != text else { return }
+        if drafts[key] == nil,
+           let presented = pendingCommits[key]?.value ?? storedValues[key], presented == text {
+            // Native fields can echo their displayed value after submit/cancel. An unchanged setter
+            // is not fresh input; inventing a draft here would mask a later canonical update or undo.
+            return
+        }
         drafts[key] = text
         errors[key] = nil
     }
@@ -92,10 +135,30 @@ final class SeedEditing {
         errors[key] = message
     }
 
-    /// A commit that succeeded (or found nothing to change) clears the draft.
+    /// Called only after a successful writer result. Keep the normalized saved value until its row
+    /// arrives (or a superseding row wins), while clearing active input and errors as before.
     func finish(_ key: SeedDraftKey) {
+        if let draft = drafts[key] {
+            let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            let saved = key.field == .year && trimmed.isEmpty ? "" : Int(trimmed).map(String.init)
+            if let saved, storedValues[key] != saved {
+                pendingCommits[key] = PendingCommit(value: saved, baseline: storedStamps[key.seedID])
+            } else {
+                pendingCommits[key] = nil
+            }
+        }
         drafts[key] = nil
         errors[key] = nil
+    }
+
+    /// A coalesced undo may restore the identical baseline row, including its timestamp. Its existing
+    /// window notification must release pending saves even when the row feed has no visible change.
+    /// Real active drafts remain intact; closing an undo group is not an undo or redo.
+    func handleUndoEvent(_ name: Notification.Name) {
+        if name == Notification.Name("NSUndoManagerDidUndoChangeNotification")
+            || name == Notification.Name("NSUndoManagerDidRedoChangeNotification") {
+            pendingCommits = [:]
+        }
     }
 
     /// True once for the blur that follows an Escape.
@@ -106,6 +169,9 @@ final class SeedEditing {
     }
 
     func discardAll() {
+        storedValues = [:]
+        storedStamps = [:]
+        pendingCommits = [:]
         drafts = [:]
         errors = [:]
         suppressedBlur = nil
@@ -115,6 +181,7 @@ final class SeedEditing {
     /// say what happened.
     @discardableResult
     func discardMissing(liveIDs: Set<String>) -> [String] {
+        pendingCommits = pendingCommits.filter { liveIDs.contains($0.key.seedID) }
         let missing = Set(drafts.keys.map(\.seedID)).subtracting(liveIDs)
         guard !missing.isEmpty else { return [] }
         drafts = drafts.filter { !missing.contains($0.key.seedID) }
