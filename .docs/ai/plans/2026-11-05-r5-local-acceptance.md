@@ -688,3 +688,57 @@ Full command/timestamp/state receipts, logs and xcresult summaries are in
 `main-precommit/` under the evidence root. Completed independent reviews are
 identified in commit trailers; source packets, raw outputs and lead assessment
 are retained privately. No interactive fixture overlapped the main tests.
+
+
+## Automated release-readiness follow-up — November 13
+
+The owner approved normal-render large-text/clipping investigation, isolated
+Mac launch/remaining keyboard checks and an evidence-based local release
+checklist. Application source stays `63b5709`; no shipping code or QA target
+was added. [Readiness checklist](2026-11-13-native-release-readiness.md)
+separates the accepted sample evidence from pending release gates.
+
+Two exact signed sample Mac launches, with fixture-only then fixture plus the
+fail-closed audit guard, each had one initial window from first observation
+through ten seconds. Neither used New Window recovery. Cmd+F/Tab/Shift+Tab
+produced fresh AXTextField → AXOutline → AXTextField focus readbacks; the
+final capture shows the search caret. The outline has no semantic identity
+in that log, so full Tab order is not accepted. Keyboard navigation remained
+0; exact owned PIDs exited. This tests WindowGroup presentation with sample
+data, not normal owner-account startup or shared OS-restoration isolation.
+
+A fresh four-case DD9 normal-render run, without an audit API call, passed
+bed/square details at default and Accessibility XXXL. Representative heading,
+Sow event, Sugar Snap detail label, Notes field and Delete action had full measured viewport
+coverage after scrolling. No edit, Move or Delete action was pressed.
+The two Add Seed cases failed existing safe-drag/scroll logic. A single
+Add-Seed-only helper repair reran those two cases, and both still failed:
+its exact `NOTES` query differs from the captured lowercase AX label `notes`.
+The captured Notes AX frame is inside the form viewport, and XXXL State, Location
+and Source choices read back Wishlist, Garage shelf and Self-saved. The Notes
+field assertion and Cancel step were not reached. No product clipping defect
+is confirmed, and no four-case green suite or completed Add Seed test is
+claimed. Both failed runs and QA-only source are retained. DD9 was restored
+to Shutdown before the separate main-gate lease.
+
+`release.sh --plan-version` and five fake-backed release-script tests passed
+without real credential access, version mutation, archive or upload. Offline
+schema artifact-to-code parity passed for umbrella `6a219a8` / native `63b5709`;
+this does not verify Production schema deployment. Submission notes now match
+the accepted N2-E guard-only 1.0 scope; in-app data deletion remains after 1.0.
+
+All 345 historical audit reports remain unresolved. Their original raw
+bundle/tally paths are now absent, preventing a fresh per-element comparison.
+Actual VoiceOver remains owner-deferred. The unavailable `worker_hard` role
+blocks further Add Seed helper repair under the latest supplied AGENTS.md;
+an exception for a separate native Terra agent is pending owner decision.
+Fresh main verification passed: Kit 25, CloudKit 176, iOS 1,447 plus one
+expected skip, Mac 1,462 plus the same skip; no failures or test retry. Signed
+Mac build and strict codesign passed after a preserved sandbox cache-write
+denial was resolved through the authorized host execution. Runtime provenance:
+iOS 27.0 on DD9, macOS 27.0.1, Xcode 27.2; no minimum-OS runtime acceptance
+is claimed. Independent review receipts must be retained with the checklist's frozen patch
+before commit. Working evidence:
+`/private/tmp/seedkeep-r5-readiness/`; private archive target:
+`.git/seedkeep-agent-patches/2026-11-13-r5-readiness/`. R5 remains open. No push,
+live CloudKit/device action, preference change, release or publication.

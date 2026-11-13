@@ -1,32 +1,37 @@
 # Current State
 
-## R5 local verification — accessibility activation (2026-11-12)
+## R5 automated release readiness — local checks recorded (2026-11-13)
 
-The two-line `seedkeep-ios-k97.9` repair restores the grid's default
-accessibility action. Actual signed sample checks pass Black → Danvers →
-Black via public AXPress, ordinary pointer selection, and exact named Move
-left/right from R8S3 → R8S2 → R8S3. The grid, inspector and selected Events
-row agree; one matching sow row and 11 total rows remain, unrelated rows
-unchanged. The lead inspected the default/left/right captures.
+Application source is unchanged at `63b5709`. Two exact signed Mac sample
+launches had one initial window through 10 seconds without New Window recovery.
+Cmd+F/Tab/Shift+Tab produced AXTextField → AXOutline → AXTextField readbacks;
+no semantic outline identity/full Tab order or owner-account startup is claimed.
+Keyboard navigation stayed 0 and owned fixtures stopped. The version dry run,
+five fake-backed release-script checks and offline schema parity passed.
 
-Focused Garden tests pass 44/44 and the signed candidate/strict codesign
-pass. Frozen source patch:
-`014dc66f81f26ad65fa4d7a3a4441c1416ba800bd29bfb6b897a9b34ae07697b`.
-The main gate passed: Kit 25, CloudKit 176, iOS 1,447 + one expected skip,
-Mac 1,462 + one expected skip; zero failures/no retry. Signed main Mac build
-and strict codesign passed. Review records are retained in the evidence. Keyboard navigation stayed 0; VoiceOver/settings unchanged;
-exact owned fixture stopped. Raw inspector AX still retains stale opposite
-position text; no speech/audit clearance is claimed.
+Bed/square details passed default and Accessibility XXXL normal-render checks:
+sampled controls fit their measured viewport after scrolling. Both Add Seed
+cases failed a helper query/scroll step, including their one bounded repair.
+XXXL picker choices read back correctly; captured hierarchies show lowercase
+`notes` and a Notes AX frame inside the form viewport. Its assertion/Cancel
+were not reached.
+No product defect is confirmed; those two tests remain incomplete. Required
+`worker_hard` is unavailable; a native-Terra exception awaits owner decision.
 
-Earlier route/hint/numeric fixes are in `2c17004`, Return-focus repair in
-`52acc84`. Full results/limits: `plans/2026-11-05-r5-local-acceptance.md`.
-Working evidence: `/private/tmp/seedkeep-r5-accessibility/`; private archive:
-`.git/seedkeep-agent-patches/2026-11-10-r5-accessibility/`.
-Other manual/VoiceOver checks, normal-use startup, full Tab order, all 345
-original audit findings, device upgrade, live CloudKit and release remain
-open. R5 is not complete. Tracking: `seedkeep-ios-k97.8` / `k97.9` under
-`k97`, accessibility `seedkeep-ios-65p`, umbrella `seedkeep-30f.1`.
-Local only; no push or release.
+All 345 historical audit reports remain unresolved; original raw temporary
+bundle/tally paths are absent. VoiceOver is owner-deferred. Full application
+Tab order, normal owner-account startup, device upgrade, live CloudKit and
+release acceptance remain open. The fresh main gate passed: Kit 25, CloudKit 176, iOS 1,447 + one expected
+skip, Mac 1,462 + one expected skip; no failures/retry. Signed Mac build and
+strict codesign passed. Runtime coverage is iOS 27.0 / macOS 27.0.1 (Xcode
+27.2), not minimum-OS acceptance. Review and source/build receipts must be retained with the frozen patch before commit.
+No app or shipping QA code changed.
+
+Checklist: `plans/2026-11-13-native-release-readiness.md`; earlier evidence:
+`plans/2026-11-05-r5-local-acceptance.md`. Submission notes reflect guard-only
+1.0. Tracking: native `seedkeep-ios-k97.10` / `k97.11`, audit `65p`; umbrella
+`seedkeep-30f.2`. Working evidence: `/private/tmp/seedkeep-r5-readiness/`.
+No push/release. R5 remains open.
 
 ## N2-E guard implemented — R5 owner acceptance next (2026-11-05)
 
