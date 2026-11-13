@@ -1,37 +1,39 @@
 # Current State
 
-## R5 automated release readiness — local checks recorded (2026-11-13)
+## R5 automated release readiness — targeted checks passed (2026-11-13)
 
-Application source is unchanged at `63b5709`. Two exact signed Mac sample
-launches had one initial window through 10 seconds without New Window recovery.
-Cmd+F/Tab/Shift+Tab produced AXTextField → AXOutline → AXTextField readbacks;
-no semantic outline identity/full Tab order or owner-account startup is claimed.
-Keyboard navigation stayed 0 and owned fixtures stopped. The version dry run,
-five fake-backed release-script checks and offline schema parity passed.
+Four unique normal-render layout cases now pass across the recorded runs:
+bed/square details and Add Seed at default/Accessibility XXXL. The owner
+approved a separate native Terra agent after `worker_hard` was unavailable.
+Its isolated QA helper correction matches the lowercase Notes header and
+selects the actual TextField. Both Add Seed tests passed (2/0 failures/0
+skips), including full-frame/hittability checks and Cancel/form dismissal.
+The XXXL case also passed picker readbacks. No app source or shipping QA code changed;
+the earlier failed runs remain preserved. Application code stays `63b5709`.
 
-Bed/square details passed default and Accessibility XXXL normal-render checks:
-sampled controls fit their measured viewport after scrolling. Both Add Seed
-cases failed a helper query/scroll step, including their one bounded repair.
-XXXL picker choices read back correctly; captured hierarchies show lowercase
-`notes` and a Notes AX frame inside the form viewport. Its assertion/Cancel
-were not reached.
-No product defect is confirmed; those two tests remain incomplete. Required
-`worker_hard` is unavailable; a native-Terra exception awaits owner decision.
+Two signed Mac sample launches opened their initial window without recovery.
+A focused TextField → Outline → TextField sequence passed with keyboard mode
+0 unchanged; full Tab order and normal owner-account startup remain open.
+Final full-gate retry passed: Kit 25, CloudKit 176, iOS 1,447 + one expected
+skip, Mac 1,462 + one expected skip; signed Mac/strict codesign passed. One
+iOS 50 ms timing check first failed, passed alone, then passed in the full
+retry; no threshold or app change. Failed-gate logs remain, but its raw result
+bundle is unavailable; focused/retry raw results are preserved. Local
+schema parity, version dry run and five fake-backed release checks passed.
+Before-commit follow-up receipts and independent reviews must accompany the
+frozen patch. Source/build observations remain distinct from release archives.
 
-All 345 historical audit reports remain unresolved; original raw temporary
-bundle/tally paths are absent. VoiceOver is owner-deferred. Full application
-Tab order, normal owner-account startup, device upgrade, live CloudKit and
-release acceptance remain open. The fresh main gate passed: Kit 25, CloudKit 176, iOS 1,447 + one expected
-skip, Mac 1,462 + one expected skip; no failures/retry. Signed Mac build and
-strict codesign passed. Runtime coverage is iOS 27.0 / macOS 27.0.1 (Xcode
-27.2), not minimum-OS acceptance. Review and source/build receipts must be retained with the frozen patch before commit.
-No app or shipping QA code changed.
+All 345 historical audit reports remain unresolved; their original raw
+temporary paths are absent. VoiceOver remains deferred. Runtime evidence is
+iOS 27.0 / macOS 27.0.1, not minimum-26 acceptance. Physical-device upgrade,
+live CloudKit and release acceptance remain open; R5 is not complete.
 
-Checklist: `plans/2026-11-13-native-release-readiness.md`; earlier evidence:
-`plans/2026-11-05-r5-local-acceptance.md`. Submission notes reflect guard-only
-1.0. Tracking: native `seedkeep-ios-k97.10` / `k97.11`, audit `65p`; umbrella
-`seedkeep-30f.2`. Working evidence: `/private/tmp/seedkeep-r5-readiness/`.
-No push/release. R5 remains open.
+Checklist: `plans/2026-11-13-native-release-readiness.md`; detailed Results:
+`plans/2026-11-05-r5-local-acceptance.md`. Evidence:
+`/private/tmp/seedkeep-r5-readiness/`; private archive
+`.git/seedkeep-agent-patches/2026-11-13-r5-readiness/` (Terra follow-up separate).
+Tracking: native `seedkeep-ios-k97.10` / `k97.11`, audit `65p`; umbrella
+`seedkeep-30f.1`. Local only; no push/release or personal/live data change.
 
 ## N2-E guard implemented — R5 owner acceptance next (2026-11-05)
 

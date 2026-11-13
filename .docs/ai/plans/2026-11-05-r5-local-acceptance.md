@@ -731,7 +731,8 @@ All 345 historical audit reports remain unresolved. Their original raw
 bundle/tally paths are now absent, preventing a fresh per-element comparison.
 Actual VoiceOver remains owner-deferred. The unavailable `worker_hard` role
 blocks further Add Seed helper repair under the latest supplied AGENTS.md;
-an exception for a separate native Terra agent is pending owner decision.
+an exception for a separate native Terra agent was pending at that checkpoint.
+The following section records its approval and the completed focused rerun.
 Fresh main verification passed: Kit 25, CloudKit 176, iOS 1,447 plus one
 expected skip, Mac 1,462 plus the same skip; no failures or test retry. Signed
 Mac build and strict codesign passed after a preserved sandbox cache-write
@@ -742,3 +743,50 @@ before commit. Working evidence:
 `/private/tmp/seedkeep-r5-readiness/`; private archive target:
 `.git/seedkeep-agent-patches/2026-11-13-r5-readiness/`. R5 remains open. No push,
 live CloudKit/device action, preference change, release or publication.
+
+
+## Add Seed helper completion — owner-approved Terra follow-up
+
+The owner answered “Use a native Terra agent” for only the helper repair and
+two failed Add Seed checks. The separate Terra implementer used a new linked
+worktree based on documentation checkpoint `c4c697a`; application code was
+unchanged. A case-insensitive form-scoped header match and a precise Notes
+TextField query replace the incorrect selector. No product code or assertion
+was weakened, and the successful bed/square cases were not rerun.
+
+One focused invocation passed exactly two Add Seed tests with zero failures
+and zero skips. At default and Accessibility XXXL, the Notes header and actual
+TextField were hittable and wholly within the measured form viewport; field
+frames were (32, 740.67, 338, 64.33) and (32, 617.67, 338, 187.33). XXXL
+State/Location/Source navigation returned Wishlist/Garage shelf/Self-saved,
+with full row coverage. Both tests tapped Cancel and asserted form dismissal.
+The lead inspected both Notes-field captures. No text or Save input occurred.
+Four unique layout cases now have passing evidence across the original and
+final runs; no single final all-four-case green suite is claimed.
+
+The QA-only patch/source, raw `add-seed.xcresult`, log, nine PNGs and hashes
+are in `/private/tmp/seedkeep-r5-readiness/add-seed-terra/`. The worktree stays
+uncommitted; no QA target/source was added to main. Previous failures and the
+missing original first-run source-snapshot limitation remain recorded.
+DD9 was confirmed Shutdown and its lease returned before follow-up main checks.
+The follow-up main gate first stopped on the sole iOS mapping/sorting timing
+check (58.55 ms against 50 ms); no Mac suite ran in that failed invocation.
+The first focused selector executed zero tests and was discarded. The exact
+`mapAndSortPerformance()` selector then executed one test and passed. One
+full-gate retry passed: Kit 25, CloudKit 176, iOS 1,447 plus one expected
+fixture-generator skip, macOS 1,462 plus the same skip. Final 5,000-row yield
+checks passed in 39.164s / 31.172s. No app source or threshold changed.
+Signed main Mac build and strict deep codesign both exited 0; DD9 was restored
+to Shutdown. Command/log receipts for all failed/focused/retry invocations are retained in
+`/private/tmp/seedkeep-r5-readiness/main-precommit-terra-followup/`. The first
+failed gate's raw `10-53-56.xcresult` bundle is unavailable. Four other main-
+check raw bundles (zero-test selector, isolated pass, iOS retry and Mac retry)
+were copied and hash-verified; the failed run must not be described as raw-
+bundle-preserved.
+Separate Terra/Sol/DeepSeek review receipts must be retained with this
+follow-up's frozen documentation patch before commit.
+
+All 345 historical audit reports and the remaining VoiceOver, full Tab order,
+normal owner-account startup, minimum-OS runtime, physical-device, live
+CloudKit and release acceptance stay open. This closes the bounded helper
+verification, not R5. No push or release.
