@@ -93,6 +93,8 @@ struct BedGridView: View {
             moveFocus(from: square, key: press.key, proxy: proxy)
         }
         .accessibilityElement(children: .ignore)
+        // Ignoring children replaces the Button's accessibility element, so supply its default action explicitly.
+        .accessibilityAction(.default) { onActivate(square) }
         .accessibilityLabel(GardenText.cellLabel(square: square, contents: contents, seedName: seedName))
         .accessibilityHint(GardenText.cellHint(
             mode: mode, contents: contents, brushSeedName: brushSeedName, movingSeedName: movingSeedName

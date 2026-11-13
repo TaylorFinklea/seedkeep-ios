@@ -597,3 +597,94 @@ The frozen source hash stayed unchanged. Raw logs, xcresults and summaries
 are in `main-precommit/` under the evidence root; no owned app, test, build
 or fixture process remains. Completed independent reviews are identified in
 the commit trailers; their raw outputs and lead assessment remain private.
+
+## Default grid accessibility activation — November 12
+
+`seedkeep-ios-k97.9` supplies the replacement grid accessibility element with
+an explicit default action calling the existing `onActivate(square)`. The
+Button action, Return/native Space paths, stable Move-action container,
+IDs/focus state, reducer and guarded writer routing are unchanged. Apple
+[documents that ignore creates an element with no initial properties](https://developer.apple.com/documentation/swiftui/accessibilitychildbehavior/ignore);
+the new default handler restores activation on that element. The frozen
+one-file patch SHA-256 is
+`014dc66f81f26ad65fa4d7a3a4441c1416ba800bd29bfb6b897a9b34ae07697b`.
+
+The original signed-main probe selected Black at R8S1, then attempted a
+single public AXPress on the verified Danvers R8S3 cell. It advertised no
+AXPress; the call returned 0 but left the inspector and screenshot unchanged.
+This proves ineffective current default activation, without claiming when it
+regressed. The original negative log SHA-256 is
+`cd5c712c185fc33f50184f52a0ac947c9e737a8943bce121e7480795ae409382`.
+
+The candidate passed 44 focused GardenGrid/GardenInteraction tests and an
+isolated signed Mac build/strict codesign. Its source SHA-256 is
+`94e6ce16de8bd713d491c2612b2e431fbd8a0d2100cb5fd74dc9dbb33ef48fe8`;
+runtime debug-dylib SHA-256:
+`628e39bb89cc367875531b3e26b2040663893426d62770e338f02e42d4869c5c`.
+The November 12 accepted public-AX run uses the exact signed candidate:
+
+| Check | Observed result |
+| --- | --- |
+| Default AXPress | Advertised; status 0; Black → Danvers inspector and selected Events row |
+| Reverse AXPress | Status 0; Danvers → Black inspector and selected Events row |
+| Ordinary pointer | Danvers selected normally |
+| Exact named Move left | R8S3 → R8S2 in grid, inspector and selected Danvers sow row |
+| Fresh exact named Move right | R8S2 → R8S3 in all three readbacks |
+| Table integrity | 11 rows, one matching selected sow row; unrelated rows unchanged |
+| Cleanup | Helper exit 0; exact fixture PID 58898 exited; no Seedkeep process; keyboard mode 0 |
+
+The lead independently inspected default/left/right app-only PNGs. The
+opposite cell is visibly empty in the move captures, but emptiness was not a
+separate automated assertion. The original cell returns, not the literal
+x-coordinate: the fixture starts at x=2.0 and the existing movement rule
+snaps the moving axis to cell centres, ending at x=2.5. All writes were to
+the in-memory sample. Keyboard navigation stayed 0 and VoiceOver/settings
+were unchanged throughout this slice.
+
+Earlier failed attempts are retained: login-window foreground blocked the
+first candidate run; the Luna driver initially truncated table-row text,
+then its repair held a stale cell reference across selection and a long
+query (action metadata/action returned -25202), followed by a Safari
+foreground interruption. The bounded Sol scratch rewrite omitted startup
+readiness/the existing New Window fallback. The accepted run reused the
+original interpreter driver, restored bounded readiness/public New Window,
+and reacquired exact cell/action metadata immediately before each input.
+No product changes were made during those driver repairs. The final helper
+keeps strict foreground, identity, permissions and exact-PID cleanup guards;
+there was no authentication, session, TCC or security bypass.
+
+Raw inspector AX still contains stale opposite-position text alongside the
+current position; captures and semantic Events rows confirm the visible
+state. This is not VoiceOver/speech, full Tab order, normal-use startup,
+iOS accessibility runtime, physical-device/live CloudKit or release
+acceptance. The earlier keyboard-On checks were on `52acc84`; no new global
+keyboard toggle or keyboard-On runtime rerun occurred here. All original
+345 audit reports remain unresolved.
+
+Evidence: `/private/tmp/seedkeep-r5-accessibility/`; accepted runtime in
+`sol-runtime/reuse-driver/` (`handoff.md`, `results.txt`, `manifest.json`,
+raw log and six PNGs). Private archive:
+`.git/seedkeep-agent-patches/2026-11-10-r5-accessibility/`; accepted evidence
+is retained separately from the earlier unaccepted archives. Review records
+are in `reviews/`. No push or release is part of this slice.
+
+The exact main gate ran once before commit and exited 0 in 250 seconds:
+`scripts/test-gate.sh --simulator-udid DD9BE2B2-F191-459F-8B5B-1AD8B252B171`.
+Kit passed 25; CloudKit 176; iOS 1,447 + one expected pre-N3 fixture-generator
+skip; Mac 1,462 + the same skip; zero failures and no retry. Both 5,000-row
+yield checks passed (25.773s iOS / 11.217s Mac). DD9 started and finished
+Shutdown. Gate log SHA-256: `9cb83a137fb138090911180e67523a6c659108073950bbe42919af662aac95fc`.
+
+The main signed Mac build
+`xcodebuild -project Seedkeep.xcodeproj -scheme Seedkeep -destination 'platform=macOS' build`
+and strict deep codesign passed using the established Apple Development
+identity / Team `K7CBQW6MPG`; CDHash
+`c1b84371c49e0df48d5a5e0ce54b1f0d2ea60ee1`. Build log SHA-256:
+`3a256ef9852f6b690f791232e825b686411491cc5ef026a23ca0eb3a549d16a8`;
+codesign log SHA-256:
+`fb23b954a15de9c304cda184dd9778323b462e8afd7ab134b4c93754f9c4347e`.
+The frozen source hash remained unchanged; no owned Seedkeep process remains.
+Full command/timestamp/state receipts, logs and xcresult summaries are in
+`main-precommit/` under the evidence root. Completed independent reviews are
+identified in commit trailers; source packets, raw outputs and lead assessment
+are retained privately. No interactive fixture overlapped the main tests.
