@@ -523,3 +523,18 @@ input. Scope reset and departing rows clear the corresponding transient
 state. Writes and their garden fence continue through the existing writer.
 Regression tests and real sample-app Return/Escape/blur/undo/redo checks are
 recorded in the R5 acceptance plan.
+
+## [2026-11-16] Roshar test without backup or pre-upgrade comparison
+
+The owner explicitly waived the recent-backup prerequisite for this device
+test and approved the prepared in-place update despite unknown old source,
+iCloud environment/account comparison and recovery state. When the old app
+could not pass Apple sign-in, the owner separately approved proceeding if a
+pre-upgrade garden baseline was unavailable. Temporary Sel-only direction
+was superseded by explicit Roshar availability; Sel was left stopped.
+
+These are bounded test decisions, not permission to uninstall/clear data,
+choose Reset/Keep/Discard, edit a garden, switch accounts or release. They
+do not establish data preservation or waive release acceptance. The observed
+post-update/relaunch samples and the unresolved photo are recorded in
+`plans/2026-11-16-roshar-update-check.md`.
