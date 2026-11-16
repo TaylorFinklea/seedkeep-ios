@@ -126,6 +126,40 @@ struct PhotoByteStoreTests {
         try store.removeAll()
     }
 
+    @Test("writes preserve the current file across directory URL representations",
+          arguments: [PhotoByteStore.Lifetime.pendingUploads, .cache])
+    func directoryRepresentationsPreserveWrites(lifetime: PhotoByteStore.Lifetime) throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("photo-store-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let real = root.resolvingSymlinksInPath().appendingPathComponent("real", isDirectory: true)
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+        let roots = [
+            real.appendingPathComponent("canonical", isDirectory: true),
+            alias.appendingPathComponent("symlink", isDirectory: true),
+            URL(fileURLWithPath: "relative", isDirectory: true, relativeTo: real),
+            URL(fileURLWithPath: real.path + "/./dot", isDirectory: true)
+        ]
+        for directory in roots {
+            let store = PhotoByteStore(lifetime: lifetime, householdID: "synthetic", directory: directory)
+            let bytes = Data("first".utf8)
+            let first = try store.write(bytes, for: "seedPhoto:1")
+            #expect(try Data(contentsOf: first.url) == bytes)
+            let same = try store.write(bytes, for: "seedPhoto:1")
+            #expect(first.url == same.url)
+            #expect(try Data(contentsOf: same.url) == bytes)
+            let neighbor = try store.write(Data("neighbor".utf8), for: "seedPhoto:10")
+            let next = try store.write(Data("second".utf8), for: "seedPhoto:1")
+            #expect(try Data(contentsOf: next.url) == Data("second".utf8))
+            #expect(!fm.fileExists(atPath: first.url.path))
+            #expect(try Data(contentsOf: neighbor.url) == Data("neighbor".utf8))
+            #expect(try fm.contentsOfDirectory(atPath: directory.path).count == 2)
+        }
+    }
+
     // MARK: - env + household namespacing
 
     @Test("directory namespaces by CloudKit environment tag, lifetime, and household id")

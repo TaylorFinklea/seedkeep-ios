@@ -538,3 +538,22 @@ choose Reset/Keep/Discard, edit a garden, switch accounts or release. They
 do not establish data preservation or waive release acceptance. The observed
 post-update/relaunch samples and the unresolved photo are recorded in
 `plans/2026-11-16-roshar-update-check.md`.
+
+## [2026-11-16] Preserve the current photo file by directory-entry name
+
+`PhotoByteStore.write` compares candidate filenames within its one enumerated
+directory, rather than comparing complete URL objects. Foundation can return
+equivalent file locations using unequal URL representations; the old cleanup
+could therefore remove the file it had just published. Standardization alone
+did not cover every tested symlink case. Filename comparison preserves the
+current content-addressed file while removing prior versions for that record.
+Production environment/lifetime/household paths remain the default; a scoped
+internal directory seam supports isolated real-filesystem regression tests.
+
+The owner authorized this fix and its Sel test. Focused cache tests passed on
+iOS/Mac, and the original Sel photo rendered with matching persistent bytes
+across a controlled relaunch. Code/artifact/device evidence received separate
+native Terra review. Detailed results and limits are in
+`plans/2026-11-16-photo-loading-diagnosis.md`; work is tracked by
+`seedkeep-ios-8ii`. This does not change photo rows, the deleted-garden contract
+or release approval boundaries.

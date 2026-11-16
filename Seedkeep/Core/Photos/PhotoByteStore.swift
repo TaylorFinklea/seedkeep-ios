@@ -35,11 +35,11 @@ struct PhotoByteStore: Sendable {
     let householdID: String
     let directory: URL
 
-    init(lifetime: Lifetime, householdID: String) {
+    init(lifetime: Lifetime, householdID: String, directory: URL? = nil) {
         self.lifetime = lifetime
         self.householdID = householdID
-        self.directory = Self.rootDirectory(lifetime: lifetime, householdID: householdID)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        self.directory = directory ?? Self.rootDirectory(lifetime: lifetime, householdID: householdID)
+        try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
     struct Ref: Equatable, Sendable {
@@ -66,7 +66,8 @@ struct PhotoByteStore: Sendable {
         } else {
             try FileManager.default.moveItem(at: stagingURL, to: finalURL)
         }
-        for stale in existingFiles(for: recordName) where stale != finalURL {
+        // All candidates are in the same directory; compare names so URL aliases cannot delete the new file.
+        for stale in existingFiles(for: recordName) where stale.lastPathComponent != finalURL.lastPathComponent {
             try? FileManager.default.removeItem(at: stale)
         }
         return Ref(recordName: recordName, sha256: sha256, url: finalURL)

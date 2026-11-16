@@ -10,26 +10,29 @@ retained the same two beds, two active seeds and sampled details after one
 controlled relaunch. CloudKit Settings diagnostics were visible; their
 record-count label is a local engine-store count, not a transfer receipt.
 
-The one owner-approved exact iCloud photo read succeeded: the original asset
-was readable, 87,110 bytes, matched its recorded size/hash and decoded. A valid
-Mac recovery copy is also preserved; its equality to the remote bytes was not
-compared. The phone has a matching row/binding but lacks local bytes and still
-fails after fresh detail navigation. Its exact failed read stage remains
-unknown (`seedkeep-ios-6y0`); the separate second-row staging error does not
-identify its cause. Temporary diagnostic code passed Terra/Sol review; signed
-diagnostic/normal artifacts passed checks and Terra artifact review. Final
-Ollama review is incomplete. The owner selected Sel instead of Roshar. Sel's
-runner timed out enabling automation; owned processes stopped and its endpoint
-closed. One retry waits for owner unlock/UI Automation confirmation. No Seedkeep
-installation is enumerated on Sel (hidden apps excluded); baseline/data remain
-unknown, not absent. No Seedkeep install or repair occurred in this follow-up. Results/limits:
-`plans/2026-11-16-photo-loading-diagnosis.md`. Full preservation,
+Photo-cache fix (`seedkeep-ios-8ii`) is implemented and verified on Sel. Cleanup now
+compares filenames within the enumerated directory, preserving the new file
+when equivalent URLs compare unequal. Focused cache suites passed 17/17 on
+iOS and Mac; native Terra approved code, signed artifact and device evidence.
+The owner-requested fixed normal 1.0.0 (54) remains on Sel. The original photo
+renders before/after one cold relaunch; its one 87,110-byte cache file retains
+its filename/mtime/hash and matches the protected Mac original. No picker,
+manual sync, user edit or Roshar action occurred; owned automation stopped.
+Main gate: Kit 25 and CloudKit 176 passed; iOS 1,448 passed / one skipped;
+Mac 1,462 passed / one skipped / one failed. The sole failure is the unchanged
+50 ms seed mapping/sort benchmark (78.496 ms; isolated retry 72.914 ms).
+Signed Mac Debug/strict verification passed. Full gate remains failed; its
+pre-existing timing problem is tracked separately as `seedkeep-ios-219`.
+No threshold change, push or release. Diagnosis and results:
+`plans/2026-11-16-photo-loading-diagnosis.md` (`seedkeep-ios-6y0`).
+Full preservation,
 prior-source/account equality, remote round-trip, minimum-26, VoiceOver,
 the 345-report audit and release acceptance remain open. R5 is not complete. Seedkeep and WDA remain installed;
 the owned WDA runner/diagnostic stopped and its endpoint refused connection.
 Results/limits: `plans/2026-11-16-roshar-update-check.md`. Tracking:
-umbrella `seedkeep-30f.5`, native handoff `seedkeep-ios-ezm`. No shipping source change
-or push. Physical captures remain private task-temporary evidence.
+umbrella `seedkeep-30f.5`, native handoff `seedkeep-ios-ezm`. That earlier
+acceptance changed no app source; the cache fix above is the later source repair. No push.
+Physical captures remain private task-temporary evidence.
 
 ## R5 automated release readiness — targeted checks passed (2026-11-13)
 
