@@ -10,10 +10,17 @@ retained the same two beds, two active seeds and sampled details after one
 controlled relaunch. CloudKit Settings diagnostics were visible; their
 record-count label is a local engine-store count, not a transfer receipt.
 
-One existing photo resolved to a fallback glyph; bytes/cause remain unknown
-(`seedkeep-ios-6y0`). Full preservation, prior-source/account equality,
-remote round-trip, minimum-26, VoiceOver, the 345-report audit and release
-acceptance remain open. R5 is not complete. Seedkeep and WDA remain installed;
+The original unavailable photo has a valid 87,110-byte copy in the Mac cache;
+one hash-verified recovery copy is preserved privately. Its phone row and
+current garden binding match, but both phone byte stores lack its image and
+ordinary reopening still falls back. A separate second-row staging error does
+not identify the original failure. Remote asset state/cause remain unknown
+(`seedkeep-ios-6y0`); the prepared read-only helper remains unrun pending the
+owner's exception for an incomplete Ollama review. Terra and Sol approved the
+helper; DeepSeek timed out without a verdict and was not retried. Details:
+`plans/2026-11-16-photo-loading-diagnosis.md`. Full preservation,
+prior-source/account equality, remote round-trip, minimum-26, VoiceOver,
+the 345-report audit and release acceptance remain open. R5 is not complete. Seedkeep and WDA remain installed;
 the owned WDA runner/diagnostic stopped and its endpoint refused connection.
 Results/limits: `plans/2026-11-16-roshar-update-check.md`. Tracking:
 umbrella `seedkeep-30f.5`, native handoff `seedkeep-ios-ezm`. No source change
