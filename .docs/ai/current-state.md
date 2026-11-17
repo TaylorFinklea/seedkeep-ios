@@ -1,5 +1,18 @@
 # Current State
 
+## Seed-table timing gate — verified (2026-11-17)
+
+`seedkeep-ios-219` now has a passing main gate: Kit 25 / CloudKit 176;
+iOS 1,449 passed + one expected skip; Mac 1,464 passed + one expected skip.
+The sorter moves indices instead of large rows, preserving comparison/data
+rules. A mandatory serial XCTest checks the same full 1,000-row workload and
+hard 50 ms limit after ten-row warmup of all measured paths. Both app gates
+require XCTest and Swift Testing counts. Focused checks, signed Mac/strict
+verification and separate native Terra source review passed. This measures
+warmed operations; cold/scroll runtime and wider R5 acceptance remain open.
+Earlier failures and rejected prototypes remain documented. No mapper change,
+device action, push or release. Results: `plans/2026-11-17-seed-table-timing.md`.
+
 ## R5 Roshar update — startup and relaunch observed (2026-11-16)
 
 CoreDevice accepted the preserved 1.0.0 (54) candidate from `199e47c`
@@ -18,12 +31,12 @@ The owner-requested fixed normal 1.0.0 (54) remains on Sel. The original photo
 renders before/after one cold relaunch; its one 87,110-byte cache file retains
 its filename/mtime/hash and matches the protected Mac original. No picker,
 manual sync, user edit or Roshar action occurred; owned automation stopped.
-Main gate: Kit 25 and CloudKit 176 passed; iOS 1,448 passed / one skipped;
-Mac 1,462 passed / one skipped / one failed. The sole failure is the unchanged
-50 ms seed mapping/sort benchmark (78.496 ms; isolated retry 72.914 ms).
-Signed Mac Debug/strict verification passed. Full gate remains failed; its
-pre-existing timing problem is tracked separately as `seedkeep-ios-219`.
-No threshold change, push or release. Diagnosis and results:
+At that photo-fix checkpoint, the main gate passed Kit 25 / CloudKit 176 /
+iOS 1,448 + one skip, but Mac had 1,462 passed / one skip / one timing failure
+(78.496 ms; isolated retry 72.914 ms). Signed Mac/strict verification passed.
+The November 17 timing verification above supersedes that failed-gate state;
+its earlier results remain preserved. No threshold change, push or release.
+Diagnosis and results:
 `plans/2026-11-16-photo-loading-diagnosis.md` (`seedkeep-ios-6y0`).
 Full preservation,
 prior-source/account equality, remote round-trip, minimum-26, VoiceOver,

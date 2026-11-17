@@ -121,6 +121,25 @@ struct SeedsTableModelTests {
         #expect(Self.ids(sorted) == ["a", "b"])
     }
 
+    @Test("multiple sort keys preserve blanks, natural text order, and id ties")
+    func multipleSortKeysAndTies() {
+        let rows = [
+            Self.row("blank", name: "  ", year: 2024),
+            Self.row("ten", name: "Seed 10", year: 2024),
+            Self.row("old", name: "Seed 2", year: 2020),
+            Self.row("b", name: "Seed 2", year: 2024),
+            Self.row("a", name: "Seed 2", year: 2024),
+            Self.row("missing", name: "Seed 2"),
+        ]
+        let order = [
+            KeyPathComparator(\SeedTableRow.notes), // unsupported columns are ignored
+            KeyPathComparator(\SeedTableRow.name),
+            KeyPathComparator(\SeedTableRow.yearSortKey, order: .reverse),
+        ]
+        let sorted = SeedsTableModel.sorted(rows, using: order)
+        #expect(Self.ids(sorted) == ["a", "b", "old", "missing", "ten", "blank"])
+    }
+
     // MARK: - Search
 
     @Test("search matches name, variety, company, type and notes, ignoring case")
@@ -259,54 +278,7 @@ struct SeedsTableModelTests {
         #expect(SeedsTableModel.stateLabel("mystery") == "Mystery")
     }
 
-    // MARK: - Performance
 
-    @Test("mapping and sorting 1,000 seeds takes under 50 ms")
-    func mapAndSortPerformance() {
-        func makeSeeds(_ count: Int) -> [LocalSeed] {
-            (0..<count).map { index in
-                LocalSeed(
-                    id: "perf_\(index)",
-                    householdID: "hh_perf",
-                    catalogID: index.isMultiple(of: 2) ? "cat_\(index)" : nil,
-                    state: index.isMultiple(of: 3) ? .wishlist : .active,
-                    packetCount: index % 7,
-                    locationID: index.isMultiple(of: 5) ? "loc_shed" : nil,
-                    yearPacked: index.isMultiple(of: 4) ? nil : 2000 + index % 26,
-                    source: .store,
-                    customName: "Seed \(index * 37 % 1000)",
-                    customVariety: index.isMultiple(of: 3) ? nil : "Variety \(index % 40)",
-                    customCompany: "Company \(index % 12)",
-                    customType: "Type \(index % 9)",
-                    notes: "Notes \(index)",
-                    tagIDs: ["tag_a", "tag_b"],
-                    createdAt: 1,
-                    updatedAt: Int64(index)
-                )
-            }
-        }
-        let seeds = makeSeeds(1_000)
-        let locations = [LocalLocation(id: "loc_shed", householdID: "hh_perf", name: "Shed", sortOrder: 0, createdAt: 1, updatedAt: 1)]
-        let tags = [
-            LocalTag(id: "tag_a", householdID: "hh_perf", name: "Heirloom", createdAt: 1, updatedAt: 1),
-            LocalTag(id: "tag_b", householdID: "hh_perf", name: "Winter", createdAt: 1, updatedAt: 1),
-        ]
-
-        // Warm up once so one-time costs are not counted.
-        _ = SeedTableRow.rows(seeds: Array(seeds.prefix(10)), locations: locations, tags: tags, recommendations: [:])
-
-        let clock = ContinuousClock()
-        var sortedCount = 0
-        let elapsed = clock.measure {
-            let rows = SeedTableRow.rows(seeds: seeds, locations: locations, tags: tags, recommendations: [:])
-            let sorted = SeedsTableModel.sorted(rows, using: [KeyPathComparator(\SeedTableRow.name, order: .forward)])
-            let byYear = SeedsTableModel.sorted(sorted, using: [KeyPathComparator(\SeedTableRow.yearSortKey, order: .reverse)])
-            sortedCount = byYear.count
-        }
-
-        #expect(sortedCount == 1_000)
-        #expect(elapsed < .milliseconds(50), "mapping and sorting 1,000 seeds took \(elapsed)")
-    }
 }
 
 /// Reveal, the edit selection and the keyboard Delete gate.

@@ -63,7 +63,7 @@ XCODEBUILD_ARGS=(
     CODE_SIGNING_REQUIRED=NO
 )
 
-bash "$COUNT_GATE" "iOS app tests" xcodebuild "${XCODEBUILD_ARGS[@]}" test
+bash "$COUNT_GATE" --require-both-frameworks "iOS app tests" xcodebuild "${XCODEBUILD_ARGS[@]}" test
 
 MAC_XCODEBUILD_ARGS=(
     -project "$REPO_ROOT/Seedkeep.xcodeproj"
@@ -74,6 +74,6 @@ MAC_XCODEBUILD_ARGS=(
     CODE_SIGNING_REQUIRED=NO
 )
 
-bash "$COUNT_GATE" "macOS app tests" xcodebuild "${MAC_XCODEBUILD_ARGS[@]}" test
+bash "$COUNT_GATE" --require-both-frameworks "macOS app tests" xcodebuild "${MAC_XCODEBUILD_ARGS[@]}" test
 
 echo "[test-gate] all required tests passed"

@@ -557,3 +557,34 @@ native Terra review. Detailed results and limits are in
 `plans/2026-11-16-photo-loading-diagnosis.md`; work is tracked by
 `seedkeep-ios-8ii`. This does not change photo rows, the deleted-garden contract
 or release approval boundaries.
+
+## [2026-11-17] Sort row indices while preserving table comparison rules
+
+The Seeds table precomputes its sort values as before, but sorts original-array
+indices instead of moving complete `SeedTableRow` snapshots. The synchronous
+call keeps the input array unchanged and projects complete rows at the end.
+Indices and keys live only for that call; no cross-call cache or data-model
+change is introduced. Localized comparison, blanks-last rules, comparator
+priority and ascending ID ties remain in place.
+
+The owner approved resolving the timing gate under `seedkeep-ios-219`.
+Paired warm synthetic measurements supported the smaller sort representation;
+the original 1,000-seed workload and 50 ms assertion remain unchanged. The
+measurements do not prove historical failure cause or general load reliability.
+Actual focused/main checks and their limitations are recorded in
+`plans/2026-11-17-seed-table-timing.md`.
+
+## [2026-11-17] Keep the strict timing check separate from functional concurrency
+
+The R1 1,000-seed workload remains a mandatory, one-shot, under-50-ms wall-clock
+check. A dedicated XCTest case runs before Swift Testing in the tested SDK's
+harness, while functional tests retain their parallel execution. The existing
+ten-row warmup now initializes mapping and both sort paths; the measured full
+workload and strict assertion are unchanged. This measures warmed operations,
+not first-use latency, and does not replace the separate manual scroll check.
+
+App gates require positive counts from both frameworks so a lone benchmark
+cannot mask missing functional tests; package-mode count behavior remains as
+before. Earlier failed checks remain in the timing report, and their historical
+cause is not inferred. Source and gate reviews plus actual framework counts
+and final validation are recorded in `plans/2026-11-17-seed-table-timing.md`.

@@ -162,13 +162,13 @@ enum SeedsTableModel {
             return (field: field, order: comparator.order)
         }
 
-        // Compute each row's keys once rather than on every comparison.
+        // Compute keys once and sort lightweight indices rather than moving whole row snapshots.
         struct Keyed {
-            let row: SeedTableRow
+            let rowIndex: Int
             let values: [SeedSortValue?]
         }
-        let keyed = rows.map { row in
-            Keyed(row: row, values: keys.map { $0.field.value(row) })
+        let keyed = rows.enumerated().map { index, row in
+            Keyed(rowIndex: index, values: keys.map { $0.field.value(row) })
         }
 
         let ordered = keyed.sorted { lhs, rhs in
@@ -186,9 +186,9 @@ enum SeedsTableModel {
                     return key.order == .forward ? ordering < 0 : ordering > 0
                 }
             }
-            return lhs.row.id < rhs.row.id
+            return rows[lhs.rowIndex].id < rows[rhs.rowIndex].id
         }
-        return ordered.map(\.row)
+        return ordered.map { rows[$0.rowIndex] }
     }
 
     private static func compare(_ left: SeedSortValue, _ right: SeedSortValue) -> Int {
