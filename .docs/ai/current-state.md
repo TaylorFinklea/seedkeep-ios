@@ -1,5 +1,19 @@
 # Current State
 
+## Cold startup and scrolling — scoped checks verified (2026-11-17)
+
+`seedkeep-ios-5ff` verified three fresh processes per target on Mac and the
+approved iPhone/iPad simulators with a private 1,000-seed fixture. iPhone list, iPad table and Mac guarded wheel traversal
+passed first/middle/end/return checkpoints with sampled order/readbacks.
+Separate native Terra reviewed source, artifacts and retained runtime evidence.
+Main gate passed Kit 25 / CloudKit 176 / iOS 1,449 + one expected skip /
+Mac 1,464 + one expected skip; signed Mac/system-trust verification passed.
+Shipping source stays `914bff3`; private QA drivers are archived, not integrated.
+UI launch latency, frame/hitch performance and trackpad remain unmeasured.
+First-use pipeline samples use a simpler fixture than the warmed 50 ms gate.
+Earlier driver/profiler failures remain preserved. R5 is still open.
+Results and limits: [cold-start/scroll report](plans/2026-11-17-cold-start-scroll.md).
+
 ## Seed-table timing gate — verified (2026-11-17)
 
 `seedkeep-ios-219` now has a passing main gate: Kit 25 / CloudKit 176;
@@ -9,7 +23,8 @@ rules. A mandatory serial XCTest checks the same full 1,000-row workload and
 hard 50 ms limit after ten-row warmup of all measured paths. Both app gates
 require XCTest and Swift Testing counts. Focused checks, signed Mac/strict
 verification and separate native Terra source review passed. This measures
-warmed operations; cold/scroll runtime and wider R5 acceptance remain open.
+warmed operations; separate isolated cold/scroll checks are recorded above.
+Wider R5 acceptance remains open.
 Earlier failures and rejected prototypes remain documented. No mapper change,
 device action, push or release. Results: `plans/2026-11-17-seed-table-timing.md`.
 

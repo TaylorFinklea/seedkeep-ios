@@ -26,7 +26,9 @@ sort with `ContinuousClock`, then asserts 1,000 rows and elapsed time below
 The original ten-row warmup now exercises mapping and both sort paths, matching
 the existing intent to exclude one-time initialization. It never warms a full
 1,000-row pass. Results therefore describe **warmed operations**, not cold launch
-or first-use latency; the separate manual scroll check remains open.
+or first-use latency. Subsequent isolated runtime checks are recorded in
+[the cold-start/scroll report](2026-11-17-cold-start-scroll.md); UI latency
+and hitch metrics remain unmeasured.
 
 Frozen six-file implementation patch SHA-256:
 `1089f0fee8607799c193c334230aff65cb2aa30c3cab38fded403a7ea308bd1f`.
@@ -134,4 +136,5 @@ Raw temporary evidence remains in the task directories:
 Only DD9 was used for simulator checks; every completed focused run restored
 its initial Shutdown state. No picker, personal-device test, live owner-account
 app launch, CloudKit action, schema change, push or release occurred. Wider R5
-acceptance, cold/scroll runtime checks and deferred manual checks remain open.
+acceptance and deferred manual checks remain open; subsequent isolated
+cold/scroll results are linked above.
