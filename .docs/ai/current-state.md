@@ -1,5 +1,32 @@
 # Current State
 
+## Prompt contrast verified; accessibility acceptance open (2026-11-17)
+
+`seedkeep-ios-65p.1` repaired three Add Seed identity prompts with existing
+`WBColor.muted` (product patch `ef82bdb0`). Measured dark contrast rises from
+2.4016:1 to 5.96:1; light is 6.5289:1. All twelve captured prompts and four
+configuration draft checks are verified across runs. Earlier private helper
+failures are preserved. No palette, layout, driver, manifest or allowlist change.
+Main gate passed 25 / 176 / iOS 1,449 + one skip / Mac 1,464 + one skip;
+signed Mac and strict signature verification passed. Separate native Terra
+review covered source, artifacts, pixel measurements and runtime evidence.
+
+The unchanged baseline completed 124 checkpoints / 408 finding callbacks.
+The post-repair full walk records 114 checkpoints / 384 callbacks / 170
+suppressed / five unused entry-config pairs, with three navigation aborts:
+API Keys in both default sizes and journal entry in light XXXL. Coverage is
+incomplete; the desktop update lost the parent's exact outer exit receipt.
+A fresh-fixture follow-up reached all three screens and completed each audit,
+retaining nine unfiltered callbacks (exit 65, no setup/API error). This does
+not resolve the original walk failures or establish an audit-wide pass.
+Parent `seedkeep-ios-65p` and broader R5 remain open; counts are not bug deltas.
+
+Results: `plans/2026-11-17-accessibility-remediation.md`. Full synthetic
+results, failures, source patches and hash manifests are privately archived
+in `.git/seedkeep-agent-patches/2026-11-17-a11y-remediation/`. DD9 is verified
+Shutdown. Manual VoiceOver, minimum-26 runtime, device/data-preservation,
+live CloudKit and release acceptance remain separate.
+
 ## Cold startup and scrolling — scoped checks verified (2026-11-17)
 
 `seedkeep-ios-5ff` verified three fresh processes per target on Mac and the

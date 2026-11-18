@@ -72,15 +72,15 @@ struct AddSeedView: View {
                 }
 
                 Section {
-                    TextField("Name (e.g. Cherokee Purple)", text: $name)
+                    TextField("Name (e.g. Cherokee Purple)", text: $name, prompt: Text("Name (e.g. Cherokee Purple)").foregroundStyle(WBColor.muted))
                         #if os(iOS)
                         .textInputAutocapitalization(.words)
                         #endif
-                    TextField("Variety (optional)", text: $variety)
+                    TextField("Variety (optional)", text: $variety, prompt: Text("Variety (optional)").foregroundStyle(WBColor.muted))
                         #if os(iOS)
                         .textInputAutocapitalization(.words)
                         #endif
-                    TextField("Company (e.g. Baker Creek)", text: $company)
+                    TextField("Company (e.g. Baker Creek)", text: $company, prompt: Text("Company (e.g. Baker Creek)").foregroundStyle(WBColor.muted))
                         #if os(iOS)
                         .textInputAutocapitalization(.words)
                         #endif
