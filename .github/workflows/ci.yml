@@ -60,18 +60,14 @@ jobs:
 
   test:
     name: Build & Test
-    runs-on: macos-26
+    runs-on: xcode-27
 
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      # Use the runner image's newest STABLE Xcode. Pinning a specific version
-      # (e.g. 16.2) is fragile: setup-xcode switches the active toolchain, but a
-      # non-default Xcode's matching simulator *runtime* may be trimmed from the
-      # image — which manifests as "iOS 18.2 is not installed" + no eligible
-      # Simulator destination. latest-stable always pairs with an installed
-      # runtime, and the app (iOS 18.1+ deployment) builds on any recent Xcode.
+      # The app requires macOS 27; xcode-27 provides a matching host and
+      # Xcode 27 image with the iOS 27 simulator runtime used by the test gate.
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:

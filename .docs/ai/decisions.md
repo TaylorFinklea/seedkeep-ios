@@ -598,3 +598,16 @@ metadata. The declared iOS/macOS 26.0 floors remain unchanged; actual OS 26
 execution is untested and is not represented as passing. No runtime download,
 VM, cache cleanup or floor change is part of this decision. Broader R5 and
 release approval remain separate. Evidence: `plans/2026-11-17-minimum-os-26.md`.
+
+## [2026-11-17] Raise application minimums to OS 27
+
+The owner explicitly requested “make min os27,” superseding the preceding
+decision to retain 26.0 floors. XcodeGen now sets iOS/iPadOS 27.0 and macOS
+27.0 for the application and generated app/test configurations. Reusable
+Swift-package floors and valid API/model availability checks remain unchanged;
+OCR fallback still applies when structured extraction is unavailable.
+
+OS 26 application runtime acceptance is no longer required for the supported
+range. This is a compatibility change, not broader R5 or release approval.
+Product rationale: umbrella `decisions.md` (2026-11-17). Verification:
+`plans/2026-11-17-minimum-os-27.md` (`seedkeep-ios-k97.13`).

@@ -92,7 +92,8 @@ unrun or unapproved.
 
 ## Constraints
 
-- iOS 26.0+ floor; FoundationModels is available on every supported device.
+- iOS/iPadOS 27.0+ and macOS 27.0+ application floors (owner decision 2026-11-17).
+  FoundationModels depends on device/model availability; OCR fallback remains.
 - CloudKit/CKShare is the household-garden source of truth; the server remains for auth, catalog,
   recommendations, and account-deletion coordination, not a mirrored garden data plane.
 - `.xcodeproj` is generated from `project.yml`; do not hand-edit it.

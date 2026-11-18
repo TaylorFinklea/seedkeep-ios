@@ -1,5 +1,20 @@
 # Current State
 
+## Minimum OS 27 on all native platforms (2026-11-17)
+
+The owner explicitly raised application minimums to iOS/iPadOS 27.0 and
+macOS 27.0 (`seedkeep-ios-k97.13`), superseding the preceding keep-26 decision.
+XcodeGen and Debug/Release settings agree; fresh Debug device/simulator/Mac
+app plists and executable/debug/preview Mach-O minima are 27.0 (SDK 27.2).
+The main gate passed 25/176/iOS 1,449+1 skip/Mac 1,464+1 skip; signed Mac
+and strict deep signature checks passed. CI's test job now uses the OS 27
+`xcode-27` image; hosted CI was not run. Library floors and model/OCR guards
+are unchanged. DD9 is Shutdown; no new iPad/device or live-data check occurred.
+
+Results/review evidence: `plans/2026-11-17-minimum-os-27.md`. OS 26 execution
+is outside the new supported range; the earlier report below is historical.
+Broader R5 accessibility, device/CloudKit and release acceptance remain open.
+
 ## Declared OS 26 floors; OS 27 verification accepted (2026-11-17)
 
 The owner chose “os 27 is good enough” after minimum-OS resource preflight.

@@ -1,13 +1,11 @@
 name: Seedkeep
 options:
   deploymentTarget:
-    # The iOS 26.0 floor was set for 1.0 (decisions.md 2026-07-27).
-    # Builds with a newer SDK do not establish runtime acceptance on iOS 26.
+    # Owner selected the 27.0 minimum for the native app on 2026-11-17.
     # FoundationModels availability still depends on the device and model;
     # extraction falls back to OCR when the model is unavailable.
-    iOS: "26.0"
-    # The native macOS destination shares the declared 26.0 floor.
-    macOS: "26.0"
+    iOS: "27.0"
+    macOS: "27.0"
   developmentLanguage: en
   groupSortPosition: top
   generateEmptyDirectories: true

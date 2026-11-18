@@ -4,7 +4,7 @@ The iPhone, iPad and Mac app for [Seedkeep](https://seedkeep.app), a garden note
 
 ## Stack
 
-- SwiftUI on iOS 26 and macOS 26
+- SwiftUI on iOS/iPadOS 27.0+ and macOS 27.0+
 - SwiftData for the local store; CloudKit (`CKSyncEngine`) for sync and CKShare for sharing
 - Apple Foundation Models and Vision OCR for on-device packet extraction; optional bring-your-own-key AI providers
 - WeatherKit for frost and weather warnings
