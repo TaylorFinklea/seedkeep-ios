@@ -1,16 +1,12 @@
 name: Seedkeep
 options:
   deploymentTarget:
-    # iOS 26 floor: ship only what we actually verify. The 18.1 floor was never
-    # exercised anywhere — CI runs latest-stable (iOS 26), both test devices run
-    # iOS 26, and no iOS 18 simulator runtime is installed — so it asserted
-    # support we had zero evidence for. Raised for 1.0 (decisions.md 2026-07-27).
-    # Side effect: FoundationModels is now unconditionally available, so every
-    # Free-tier user gets on-device extraction and the OCR-only fallback path
-    # is unreachable.
+    # The iOS 26.0 floor was set for 1.0 (decisions.md 2026-07-27).
+    # Builds with a newer SDK do not establish runtime acceptance on iOS 26.
+    # FoundationModels availability still depends on the device and model;
+    # extraction falls back to OCR when the model is unavailable.
     iOS: "26.0"
-    # Native macOS destination of the same SwiftUI target (redesign plan, 2026-10-15). The
-    # target MacBook runs macOS 26, which also matches the iOS floor and FoundationModels.
+    # The native macOS destination shares the declared 26.0 floor.
     macOS: "26.0"
   developmentLanguage: en
   groupSortPosition: top

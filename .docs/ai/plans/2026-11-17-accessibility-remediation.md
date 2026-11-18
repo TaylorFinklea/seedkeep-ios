@@ -218,8 +218,10 @@ summaries, raw gate log and exit receipt are retained. The signed Mac Debug
 build and strict deep signature verification passed using system trust.
 No successful gate or signed build was repeated after the desktop update.
 A fresh state read confirmed DD9 Shutdown after the follow-up.
-Captured contrast and normal-draft evidence covers the four iPhone simulator
-configurations on OS 27.2; no new iPad/Mac runtime or minimum-26 claim is made.
+Captured contrast and normal-draft evidence uses SDK 27.2 builds for the four
+iPhone simulator configurations. Preserved main-audit device metadata records
+DD9 on iOS 27.0 (24A434); SDK 27.2 is not its runtime version. No new iPad/Mac
+runtime or minimum-26 claim is made.
 
 The first post-repair full walk remains incomplete, and the separate fresh
 checkpoint diagnostic remains nonzero on findings. The interrupted parent's

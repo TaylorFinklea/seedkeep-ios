@@ -1,5 +1,23 @@
 # Current State
 
+## Declared OS 26 floors; OS 27 verification accepted (2026-11-17)
+
+The owner chose “os 27 is good enough” after minimum-OS resource preflight.
+`seedkeep-ios-k97.12` therefore verifies current OS 27 and declared 26.0
+build floors; actual OS 26 execution is untested. Floors remain unchanged.
+Fresh unsigned generic iOS-device/simulator builds passed; all app Mach-O
+and plist minimums are 26.0 with SDK 27.2. Inspected prior signed Mac metadata
+also says 26.0. Comments now accurately retain model-availability/OCR fallback
+and avoid stale host/CI claims; non-comment configuration is identical.
+
+Main gate passed 25/176/iOS 1,449+1 skip/Mac 1,464+1 skip; signed Mac/strict
+verification passed on host 27.0.1. Separate native Terra source/artifact
+review passed. DD9 is verified Shutdown on iOS 27.0; the earlier audit report
+now distinguishes this runtime from SDK 27.2 using preserved result metadata.
+No OS download, cache cleanup, new simulator or VM was performed. This scope
+choice does not grant release acceptance; R5 accessibility/device/CloudKit and
+owner release work remain. Results: `plans/2026-11-17-minimum-os-26.md`.
+
 ## Prompt contrast verified; accessibility acceptance open (2026-11-17)
 
 `seedkeep-ios-65p.1` repaired three Add Seed identity prompts with existing

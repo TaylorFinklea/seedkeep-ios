@@ -588,3 +588,13 @@ cannot mask missing functional tests; package-mode count behavior remains as
 before. Earlier failed checks remain in the timing report, and their historical
 cause is not inferred. Source and gate reviews plus actual framework counts
 and final validation are recorded in `plans/2026-11-17-seed-table-timing.md`.
+
+## [2026-11-17] Use OS 27 evidence for the current compatibility pass
+
+After the minimum-OS preflight found only OS 27 environments and limited
+local storage, the owner answered “os 27 is good enough.” This pass therefore
+uses the existing OS 27 regression/runtime evidence and 26.0 build/link
+metadata. The declared iOS/macOS 26.0 floors remain unchanged; actual OS 26
+execution is untested and is not represented as passing. No runtime download,
+VM, cache cleanup or floor change is part of this decision. Broader R5 and
+release approval remain separate. Evidence: `plans/2026-11-17-minimum-os-26.md`.
