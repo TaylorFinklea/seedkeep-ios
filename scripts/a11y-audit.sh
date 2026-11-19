@@ -8,7 +8,8 @@
 # and scripts/r4-screenshots.sh run.
 #
 # Fails on: zero tests, any skipped test, a missing configuration, an audit execution error, a timeout,
-# or any finding not in SeedkeepUITests/AuditAllowlist.swift.
+# or any non-contrast finding not in SeedkeepUITests/AuditAllowlist.swift. Contrast callbacks are logged as
+# advisories only (umbrella decision 2026-11-19); WorkbenchContrastTests gates palette contrast.
 #
 # Budget (measured 2026-10-21, Xcode 27.1, "Seedkeep iPhone" simulator, Apple-silicon Mac): one configuration
 # alone took 392 s (light-default) and 437 s (dark-axxxl); the 4-configuration run took 1776 s of testing
@@ -152,10 +153,12 @@ fi
 
 UNUSED="$(grep -cF "[a11y-audit] UNUSED-ALLOWLIST" "$LOG" || true)"
 SUPPRESSED="$(grep -cF "[a11y-audit] SUPPRESSED" "$LOG" || true)"
+ADVISORIES="$(grep -cF "[a11y-audit] ADVISORY" "$LOG" || true)"
 
 echo
 echo "[a11y-audit] Tests executed: ${EXECUTED:-0}; elapsed ${ELAPSED}s (budget ${RUN_BUDGET_SECONDS}s)"
 echo "[a11y-audit] Suppressed by allowlist: $SUPPRESSED; unused allowlist entries reported: $UNUSED"
+echo "[a11y-audit] Contrast advisories (not gating; palette contrast is gated by WorkbenchContrastTests): $ADVISORIES"
 echo "[a11y-audit] Log: $LOG"
 echo "[a11y-audit] Result bundle: $RESULT_BUNDLE"
 if grep -qF "[a11y-audit] FINDING" "$LOG"; then

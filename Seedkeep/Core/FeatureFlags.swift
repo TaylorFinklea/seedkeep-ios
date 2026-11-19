@@ -14,6 +14,12 @@ enum FeatureFlags {
     /// notification setting).
     static let plantPetsEnabled = false
 
+    /// Starting an iCloud share as the garden owner (Settings ▸ "Share garden via iCloud"), hidden
+    /// for 1.0 because the two-account flow has never been checked on devices (umbrella decision
+    /// 2026-11-19). Only the owner's entry point is hidden: a device already in a shared garden
+    /// still sees "Leave shared garden", and accepting a share link still works.
+    static let iCloudSharingEnabled = false
+
     // N3 (T2): the CloudKit household-sync flag and its UserDefaults kill-switch are gone. CloudKit
     // is the only sync path, in every build and under XCTest. A device may still hold the old
     // stored flag value from earlier builds; nothing reads it.
@@ -22,8 +28,11 @@ enum FeatureFlags {
     /// R1 invitation model" ADR). Unlike the CloudKit capability messages above, this is a
     /// **permanent retirement, not a temporary gate** — server invite links are not coming back;
     /// CKShare (Settings ▸ "Share garden via iCloud") is the sole sharing model going forward.
-    static let legacyInviteRetirementMessage =
-        "Household invite links are no longer supported. Share your garden from Settings via iCloud — tap “Share garden via iCloud” to invite someone."
+    static var legacyInviteRetirementMessage: String {
+        iCloudSharingEnabled
+            ? "Household invite links are no longer supported. Share your garden from Settings via iCloud — tap “Share garden via iCloud” to invite someone."
+            : "Household invite links are no longer supported."
+    }
 
     /// True when the app is hosting a unit-test bundle (XCTest is linked + loaded only then).
     static let isRunningUnitTests = NSClassFromString("XCTestCase") != nil

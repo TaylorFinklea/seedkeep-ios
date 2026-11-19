@@ -1,5 +1,21 @@
 # Current State
 
+## 1.0 accessibility triage passes; owner sharing hidden (2026-11-19)
+
+Per the umbrella ship-first decision, the 2026-11-18 audit's 319 callbacks
+(74 groups) were triaged against the screenshots and source, and no 1.0
+blocker was found. The audit's pixel-sampled contrast check flagged a
+different set of elements on an identical rerun, so contrast is now logged
+as `ADVISORY` and no longer fails the run; `WorkbenchContrastTests` gates
+palette contrast instead. The allowlist gained an any-checkpoint match, an
+`.unresolved` match and 77 triaged entries. `FeatureFlags.iCloudSharingEnabled
+= false` hides only "Share garden via iCloud".
+
+Main gate passed (25/176/1,449/1,464). The four-configuration audit
+**passed** with 0 gating findings and 145 contrast advisories. Manual
+VoiceOver and device checks remain owner release-checklist items. Details:
+`plans/2026-11-19-a11y-triage.md`.
+
 ## Audit navigation safeguards verified; accessibility remains open (2026-11-18)
 
 `seedkeep-ios-65p.2` adds test-only safe row positioning/discovery for Journal

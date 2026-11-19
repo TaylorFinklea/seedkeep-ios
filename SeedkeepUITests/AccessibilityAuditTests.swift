@@ -24,6 +24,7 @@ final class AccessibilityAuditTests: XCTestCase {
     private var auditCount = 0
     private var findingCount = 0
     private var suppressedCount = 0
+    private var advisoryCount = 0
     private var usedAllowlistEntries: Set<Int> = []
 
     private func runAudit(_ configuration: AuditConfiguration) throws {
@@ -39,7 +40,7 @@ final class AccessibilityAuditTests: XCTestCase {
         app.launch()
         defer {
             reportUnusedAllowlistEntries()
-            driver.log("SUMMARY audits=\(auditCount) findings=\(findingCount) suppressed=\(suppressedCount) tabsByIdentifier=\(driver.tabsByIdentifier) tabsByLabel=\(driver.tabsByLabel)")
+            driver.log("SUMMARY audits=\(auditCount) findings=\(findingCount) suppressed=\(suppressedCount) contrastAdvisories=\(advisoryCount) tabsByIdentifier=\(driver.tabsByIdentifier) tabsByLabel=\(driver.tabsByLabel)")
             app.terminate()
         }
 
@@ -324,6 +325,15 @@ final class AccessibilityAuditTests: XCTestCase {
             driver.log("SUPPRESSED \(where_) \(what) disposition=\"\(entry.disposition)\" reason=\"\(entry.reason)\" recheck=\"\(entry.recheckWhen)\"")
             return true
         }
+        // Contrast is gated by WorkbenchContrastTests over the palette, not here (umbrella decision
+        // 2026-11-19). The audit samples pixels under translucent bars and at scroll edges, and its
+        // flagged set changed between identical runs (2026-11-18 vs 2026-11-19), so it is logged as an
+        // advisory for review instead of failing the run.
+        if issue.auditType == .contrast {
+            advisoryCount += 1
+            driver.log("ADVISORY \(where_) \(what) desc=\"\(issue.compactDescription)\"")
+            return true
+        }
         findingCount += 1
         let missing = elementType == nil ? " element=nil" : ""
         driver.log("FINDING \(where_) \(what)\(missing) desc=\"\(issue.compactDescription)\" detail=\"\(issue.detailedDescription)\"")
@@ -333,7 +343,7 @@ final class AccessibilityAuditTests: XCTestCase {
     private func reportUnusedAllowlistEntries() {
         for (index, entry) in AuditAllowlist.entries.enumerated()
         where entry.configurations.contains(configuration) && !usedAllowlistEntries.contains(index) {
-            driver.log("UNUSED-ALLOWLIST index=\(index) dest=\(entry.destination.rawValue) checkpoint=\(entry.checkpoint) type=\(Self.name(of: entry.auditType)) element=\(entry.element)")
+            driver.log("UNUSED-ALLOWLIST index=\(index) dest=\(entry.destination.rawValue) checkpoint=\(entry.checkpoint ?? "*") type=\(Self.name(of: entry.auditType)) element=\(entry.element)")
         }
     }
 

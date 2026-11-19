@@ -285,7 +285,7 @@ struct SettingsContent: View {
                         }
                         // N1: leaving needs a confirmed iCloud identity (CloudKit not paused).
                         .disabled(!appEnv.canUseCloudKit)
-                    } else {
+                    } else if FeatureFlags.iCloudSharingEnabled {
                         Button {
                             guard !preparingShare else { return }
                             preparingShare = true
