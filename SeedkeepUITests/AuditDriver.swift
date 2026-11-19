@@ -159,11 +159,12 @@ final class AuditDriver {
             && frame.maxX <= bounds.maxX
     }
 
-    /// One drag of about half a screen. Returns false when nothing moved (the end of the content).
+    /// One drag. Row-search and short-position drags can use a viewport below pinned chrome.
+    /// Returns false when nothing moved (the end of the content).
     @discardableResult
-    func scrollPage(_ direction: Direction) throws -> Bool {
+    func scrollPage(_ direction: Direction, contentTop: CGFloat? = nil, shortStep: Bool = true) throws -> Bool {
         let before = try settledFingerprint()
-        let (start, end) = try dragPoints(direction)
+        let (start, end) = try dragPoints(direction, contentTop: contentTop, shortStep: shortStep)
         // The short press before the drag is below the long-press threshold, and holding at the end
         // stops the scroll's momentum, so each page moves by the drag distance only.
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: XCUIGestureVelocity(rawValue: 900),
@@ -196,12 +197,13 @@ final class AuditDriver {
     }
 
     /// Scrolls down, then up, until the element is in view.
-    func scrollUntilInView(_ element: XCUIElement, _ what: String, wholly: Bool = true) throws {
+    func scrollUntilInView(_ element: XCUIElement, _ what: String, wholly: Bool = true,
+                           contentTop: CGFloat? = nil) throws {
         if isInView(element, wholly: wholly) { return }
         for direction in [Direction.down, .up] {
             resetScrollTracking()
             for _ in 0..<Self.maxPages {
-                let moved = try scrollPage(direction)
+                let moved = try scrollPage(direction, contentTop: contentTop, shortStep: false)
                 if isInView(element, wholly: wholly) { return }
                 if !moved { break }
             }
@@ -243,7 +245,7 @@ final class AuditDriver {
     ]
 
     /// A start and end point for a page drag, in a column whose start point is clear of unsafe elements.
-    private func dragPoints(_ direction: Direction) throws -> (XCUICoordinate, XCUICoordinate) {
+    private func dragPoints(_ direction: Direction, contentTop: CGFloat?, shortStep: Bool) throws -> (XCUICoordinate, XCUICoordinate) {
         var unsafe: [CGRect] = []
         // The grid scrolls inside its own frame, and squares scrolled out of it still report frames below it,
         // so each square counts only where it shows inside the grid ("garden.grid").
@@ -256,12 +258,47 @@ final class AuditDriver {
                 let shown = gridFrame.map { snapshot.frame.intersection($0) } ?? snapshot.frame
                 if !shown.isNull { unsafe.append(shown.insetBy(dx: -16, dy: -16)) }
             }
+            if contentTop != nil, snapshot.elementType == .button,
+               AuditManifest.neverTouchLabels.contains(where: { snapshot.label.localizedCaseInsensitiveContains($0) }) {
+                // Audit row drag starts must not press any never-touch control, including a composite label.
+                unsafe.append(snapshot.frame.insetBy(dx: -16, dy: -16))
+            }
             snapshot.children.forEach { walk($0, gridFrame: gridFrame) }
         }
         walk(try app.snapshot(), gridFrame: nil)
 
         let frame = window.frame
         let bottom = min(visibleBottom(), frame.maxY) - frame.minY
+        if let contentTop {
+            // Audit row search and positioning can need drags below a large pinned navigation/search bar.
+            // Keep its start in the scrollable viewport and clear of controls, as for ordinary page drags.
+            let top: CGFloat
+            if shortStep {
+                top = max(contentTop - frame.minY, 0)
+            } else {
+                let navigationBar = app.navigationBars.firstMatch
+                let currentChromeBottom = navigationBar.exists ? navigationBar.frame.maxY + 8 : frame.minY
+                top = max(max(contentTop, currentChromeBottom) - frame.minY, 0)
+            }
+            let lower = bottom - 16
+            guard lower - top >= 100 else {
+                throw AuditFailure(description: "not enough visible content for a safe row drag")
+            }
+            let span = shortStep ? min((lower - top) * 0.25, frame.height * 0.15) : (lower - top) * 0.7
+            for fraction in [0.5, 0.65, 0.35] {
+                let mid = top + (lower - top) * fraction
+                let from = direction == .down ? mid + span / 2 : mid - span / 2
+                let to = direction == .down ? mid - span / 2 : mid + span / 2
+                guard min(from, to) >= top, max(from, to) <= lower else { continue }
+                for dx in [0.5, 0.88, 0.12, 0.96, 0.04] {
+                    let start = window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: from / frame.height))
+                    if !unsafe.contains(where: { $0.contains(start.screenPoint) }) {
+                        return (start, window.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: to / frame.height)))
+                    }
+                }
+            }
+            throw AuditFailure(description: "no safe row drag start below the navigation bar")
+        }
         let low = (bottom - 24) / frame.height
         let high = 0.28
         // The usual starts near the bottom first; then, only if all of them are blocked (the bed grid fills the

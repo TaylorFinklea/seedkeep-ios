@@ -611,3 +611,17 @@ OS 26 application runtime acceptance is no longer required for the supported
 range. This is a compatibility change, not broader R5 or release approval.
 Product rationale: umbrella `decisions.md` (2026-11-17). Verification:
 `plans/2026-11-17-minimum-os-27.md` (`seedkeep-ios-k97.13`).
+
+## [2026-11-18] Keep audit route safeguards scoped to the observed failure paths
+
+Journal entry and API Keys can report hittable rows with only a thin strip
+below navigation/search chrome. The audit now requires a usable tap region
+and uses bounded discovery/positioning within the reported viewport for those
+two routes. Existing screenshot-driver defaults remain unchanged. Recovery
+checks that a child actually opened before attempting to leave it.
+
+The older navigation aborts did not reproduce in the instrumented baseline;
+the exact historical cause stays unproven. Current runtime evidence supports
+the safeguards and complete observed manifest reachability. No product-layout
+change or finding suppression follows from uncertain audit samples. Results:
+`plans/2026-11-18-a11y-navigation.md` (`seedkeep-ios-65p.2`).

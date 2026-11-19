@@ -134,8 +134,61 @@ final class AccessibilityAuditTests: XCTestCase {
         let target = driver.element(identifier)
         // A row below the fold isn't in the tree until scrolled to, so a miss here isn't a failure yet.
         _ = target.waitForExistence(timeout: 3)
-        try driver.scrollUntilInView(target, identifier, wholly: false)
+        if destination == .journalEntry || destination == .apiKeys {
+            try positionAuditRowForTap(target, identifier)
+        } else {
+            try driver.scrollUntilInView(target, identifier, wholly: false)
+        }
         try driver.tap(target, identifier)
+    }
+
+    /// Leave a real tap area above the tab bar and below the navigation/search chrome. A row can report
+    /// hittable with only a sliver showing, and a full-page drag may overshoot it beneath a pinned header.
+    private func positionAuditRowForTap(_ target: XCUIElement, _ identifier: String) throws {
+        func usableFrame() -> CGRect? {
+            guard target.exists else { return nil }
+            let frame = target.frame
+            guard !frame.isNull, !frame.isInfinite, !frame.isEmpty,
+                  frame.minX.isFinite, frame.minY.isFinite, frame.maxX.isFinite, frame.maxY.isFinite else { return nil }
+            return frame
+        }
+        var discoveries = 0
+        for _ in 0..<AuditDriver.maxPages {
+            let candidateFrame = usableFrame()
+            let window = driver.app.windows.firstMatch.frame
+            let nav = driver.app.navigationBars.firstMatch
+            let tab = driver.app.tabBars.firstMatch
+            let top = max(window.minY, nav.exists ? nav.frame.maxY : window.minY) + 8
+            let bottom = min(window.maxY, tab.exists ? tab.frame.minY : window.maxY) - 8
+            guard bottom - top >= 100 else { throw AuditFailure(description: "no usable viewport for \(identifier)") }
+            guard let frame = candidateFrame else {
+                // Keep the bounded down/up lazy-cell search, but start its drags below pinned chrome.
+                // A recycled cell gets one additional discovery attempt, not an unbounded retry.
+                guard discoveries < 2 else { throw AuditFailure(description: "\(identifier) has no usable frame") }
+                discoveries += 1
+                try driver.scrollUntilInView(target, identifier, wholly: false, contentTop: top)
+                continue
+            }
+            let viewport = CGRect(x: window.minX, y: top, width: window.width, height: bottom - top)
+            let visible = viewport.intersection(frame)
+            let center = CGPoint(x: frame.midX, y: frame.midY)
+            if viewport.contains(center), !visible.isNull, visible.width >= min(frame.width, 44),
+               visible.height >= min(frame.height, 44), target.isHittable {
+                driver.log("TAP-AREA target=\(identifier) frame=\(frame) top=\(top) bottom=\(bottom) visible=\(visible)")
+                return
+            }
+            let direction: AuditDriver.Direction = frame.midY < viewport.midY ? .up : .down
+            driver.resetScrollTracking()
+            if try !driver.scrollPage(direction, contentTop: top) {
+                // At an edge, try the other direction once before reporting failure.
+                let opposite: AuditDriver.Direction = direction == .down ? .up : .down
+                driver.resetScrollTracking()
+                guard try driver.scrollPage(opposite, contentTop: top) else {
+                    throw AuditFailure(description: "could not position \(identifier) in the usable viewport")
+                }
+            }
+        }
+        throw AuditFailure(description: "could not position \(identifier) within \(AuditDriver.maxPages) attempts")
     }
 
     private func run(_ plan: AuditCheckpointPlan, on destination: AuditDestination) throws {
@@ -215,7 +268,8 @@ final class AccessibilityAuditTests: XCTestCase {
 
     /// After a failed destination: dismiss whatever is open and return to its tab root.
     private func recover(from destination: AuditDestination) throws {
-        if !destination.isTabRoot {
+        if !destination.isTabRoot && driver.element(destination.screenIdentifier).exists {
+            // The failed entry may never have opened its child; do not tap a root toolbar button as Back.
             try? driver.leave(destination)
             if driver.element(destination.screenIdentifier).exists {
                 // A sheet whose own button failed: swipe it away.

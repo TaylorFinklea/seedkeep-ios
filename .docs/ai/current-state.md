@@ -1,5 +1,21 @@
 # Current State
 
+## Audit navigation safeguards verified; accessibility remains open (2026-11-18)
+
+`seedkeep-ios-65p.2` adds test-only safe row positioning/discovery for Journal
+entry and API Keys, plus recovery that leaves unopened children alone. The
+main four-configuration walk reached all 18 destinations and five fixed extra
+checkpoints per configuration, with no navigation, audit API or unmatched
+harness errors. Its 116 audits recorded 319 unallowlisted and 175 suppressed
+callbacks; script 1/Xcode 65 is a failing accessibility result. No app, manifest or allowlist change.
+
+Main regression gate passed 25/176/iOS 1,449+1 skip/Mac 1,464+1 skip; signed
+Mac, strict deep signature and offline system trust checks passed. DD9 is
+Shutdown. A bounded Today probe retained two findings; its captured header
+measures 8.0073:1, which does not explain or waive the audit's internal sample.
+Results/review receipts: `plans/2026-11-18-a11y-navigation.md`. Parent `65p`,
+manual VoiceOver, device/live CloudKit and release acceptance remain open.
+
 ## Minimum OS 27 on all native platforms (2026-11-17)
 
 The owner explicitly raised application minimums to iOS/iPadOS 27.0 and
