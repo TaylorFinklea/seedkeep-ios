@@ -1,5 +1,16 @@
 # Current State
 
+## Privacy manifest and 1.0 site pages (2026-11-19)
+
+`Seedkeep/PrivacyInfo.xcprivacy` (`dcd21b9`) declares no tracking, no collected
+data, UserDefaults CA92.1 and file timestamps C617.1; it is bundled in Debug
+iOS and Mac builds. The privacy, support and home pages (`b7c838f`) now match
+1.0: sharing can't be started, legacy accounts deleted with the export kept to
+2027-11-19, BYOK provider follows saved keys, deleted items keep their photos.
+"Data Not Collected" holds under the likely reading
+(`app-store-submission-notes.md`). Codex and Sonnet reviewed; site checks and
+builds pass. Not deployed: publishing needs the owner's go-ahead.
+
 ## 1.0 accessibility triage passes; owner sharing hidden (2026-11-19)
 
 Per the umbrella ship-first decision, the 2026-11-18 audit's 319 callbacks
