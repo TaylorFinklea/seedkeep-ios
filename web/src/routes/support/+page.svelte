@@ -2,7 +2,7 @@
   <title>Support — Seedkeep</title>
   <meta
     name="description"
-    content="Get help with Seedkeep: iCloud sync, garden sharing, packet scanning, home location, and deleting your data."
+    content="Get help with Seedkeep: iCloud sync, packet scanning, home location, and deleting your data."
   />
 </svelte:head>
 
@@ -34,9 +34,12 @@
     Scanning works best with flat, well-lit photos of the entire front and back
     of the packet. Avoid glare, shadows, and fingers over the text. Before
     saving, you can review the extracted growing information and edit the seed's
-    name, variety, company, and notes, or choose Add seed in the Seeds toolbar
+    name, variety, company, and notes, or choose + in the Seeds toolbar
     to enter a packet by hand. The Free option uses Apple's on-device foundation
     model when your device has it; without it, some fields may stay empty.
+    Packet scanning is on iPhone and iPad. On Mac, add a seed with + (New seed)
+    in the Seeds toolbar, or import a CSV from the toolbar's More actions menu or
+    the Seeds menu in the menu bar.
   </p>
 
   <h3>BYOK says that no API key is configured.</h3>
@@ -55,13 +58,12 @@
     device.
   </p>
 
-  <h3>How do I share my garden with my partner?</h3>
+  <h3>Can I share my garden?</h3>
   <p>
-    As the garden owner, open Settings → Share garden via iCloud and use Apple's
-    sharing sheet to invite them. They accept Apple's invitation while signed in
-    to iCloud with their own Apple ID. A participant can view and edit the shared
-    garden. A participant can leave with Settings → Leave shared garden. The owner
-    manages the share through Apple's sharing controls, and shared data stays in
+    Not in this version. If someone has already shared their garden with you
+    through iCloud, accept Apple's invitation while signed in to iCloud with your
+    own Apple ID. You can view the shared garden, and edit it if the owner allows.
+    Leave it at any time with Settings → Leave shared garden. Shared data stays in
     iCloud under the owner's account.
   </p>
 
@@ -80,7 +82,9 @@
   <p>
     The current app has no Seedkeep account and keeps no garden on a server.
     Deleting a seed, bed, or journal entry in the app hides it on all your synced
-    devices; the record stays in your iCloud garden, marked as deleted. Deleting
+    devices; the record stays in your iCloud garden, marked as deleted, and so do
+    its photos, so delete a photo itself first if you want it gone from iCloud.
+    Deleting
     Seedkeep from an iPhone or iPad removes the copy on that device but not your
     iCloud garden. On Mac, deleting the app leaves its local data behind, so quit
     Seedkeep and also delete the folder ~/Library/Containers/app.seedkeep.ios. BYOK
@@ -92,7 +96,9 @@
     iCloud storage, choose Seedkeep, and tap Delete Data. On Mac, open System
     Settings, click [your name], click iCloud, open your iCloud storage, and
     choose Seedkeep. See the <a href="/privacy">Privacy Policy</a> for details.
-    If you used an earlier test version that had a Seedkeep account, email
+    Accounts from earlier test versions were deleted on November 19, 2026; a
+    backup is kept until November 19, 2027. To have that data deleted sooner,
+    email
     <a href="mailto:support@finklea.dev">support@finklea.dev</a>.
   </p>
 </article>

@@ -2,12 +2,12 @@
   <title>Seedkeep — Plan, grow, and remember together</title>
   <meta
     name="description"
-    content="Organize seed packets, plan garden beds, keep a journal, and share your garden through iCloud. No Seedkeep account or server needed."
+    content="Organize seed packets, plan garden beds, and keep a journal, synced through iCloud. No Seedkeep account or server needed."
   />
   <meta property="og:title" content="Seedkeep" />
   <meta
     property="og:description"
-    content="Your household seed library, garden plan, and journal — shared through iCloud."
+    content="Your household seed library, garden plan, and journal — synced through iCloud."
   />
   <meta property="og:image" content="https://seedkeep.app/og-image.png" />
   <meta property="og:url" content="https://seedkeep.app/" />
@@ -34,8 +34,7 @@
     Seedkeep turns your seed collection into a garden you can plan, plant, and
     remember. Organize every packet, lay out beds and planting events, keep a
     journal with photos and checklists, and see planting windows for your home
-    ZIP code. It is built for gardeners who share the work — and the record of
-    what worked.
+    ZIP code. It is built for gardeners who want to remember what worked.
   </p>
 </section>
 
@@ -72,13 +71,10 @@
   </article>
 
   <article class="feature">
-    <h3>Your garden, shared through iCloud.</h3>
+    <h3>Your garden, synced through iCloud.</h3>
     <p>
       There is no Seedkeep account to create. Your garden lives in your private
-      iCloud database. An owner can invite another gardener from Settings
-      with “Share garden via iCloud,” and participants can view and edit the
-      same garden. Shared data stays in the owner's iCloud, and a participant
-      can leave.
+      iCloud database and stays in step across your iPhone, iPad, and Mac.
     </p>
   </article>
 </section>
@@ -87,7 +83,7 @@
   <p>
     On iPhone, five tabs keep the season together: Today for what needs
     attention, Seeds for every packet, Garden for beds and planting events,
-    Journal for the record, and Settings for sharing and preferences. On a wide
+    Journal for the record, and Settings for sync and preferences. On a wide
     iPad and on Mac, a sidebar puts your seeds in a spreadsheet-style table.
   </p>
 </section>

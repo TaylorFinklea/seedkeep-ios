@@ -12,7 +12,7 @@
   <h1>Privacy Policy</h1>
 
   <p class="meta">
-    <strong>Effective:</strong> October 22, 2026 ·
+    <strong>Effective:</strong> November 19, 2026 ·
     <strong>App:</strong> Seedkeep (iPhone, iPad, and Mac) ·
     <strong>Bundle ID:</strong> <code>app.seedkeep.ios</code> ·
     <strong>Developer:</strong> Taylor Finklea
@@ -70,8 +70,8 @@
       The app has no advertising, in-app purchases, subscriptions, or hosted AI.
     </li>
     <li>
-      Seedkeep does not request your device's location (no Core Location). The
-      only location it uses is the ZIP code you enter.
+      Seedkeep never asks for your device's location and shows no location
+      permission prompt. The only location it uses is the ZIP code you enter.
     </li>
     <li>
       Seedkeep accesses the camera or photo library only when you choose to take
@@ -96,8 +96,10 @@
       nothing to the developer.
     </li>
     <li>
-      <strong>BYOK (bring your own key)</strong> — you choose Anthropic or
-      OpenAI and save your own API key in the device Keychain. Your packet photos are
+      <strong>BYOK (bring your own key)</strong> — you save your own Anthropic
+      or OpenAI API key under Settings → API keys, where it is kept in the device
+      Keychain, and choose BYOK under Settings → AI provider. If both keys are
+      saved, Seedkeep uses Anthropic. Your packet photos are
       sent directly from your device to that provider's API, using your key, under
       that provider's terms. Seedkeep never receives the photos or your key, and the
       developer cannot see them. The provider may retain the photos under its own
@@ -119,20 +121,28 @@
     Test versions released before October 2026 used a Seedkeep server for Sign
     in with Apple accounts, a shared seed catalog of packet photos and extracted
     fields contributed by users, home ZIP lookup, and account deletion. The current
-    app does not use that server. The old server and its accounts are being
-    retired. If you had an account on it and want its data deleted, or have a
+    app does not use that server. The accounts on it were deleted on November 19,
+    2026. Before deleting them, the developer exported the server's database,
+    which holds the account and garden data entered in those versions. That
+    backup is not used by the app, is stored encrypted with access limited to the
+    developer, and is kept until November 19, 2027, then deleted. Photos uploaded
+    through those versions are in the old server's separate photo storage and stay
+    there until the old server is shut down. To have your data from those versions deleted sooner, or with any
     question about it, email
     <a href="mailto:support@finklea.dev">support@finklea.dev</a>.
   </p>
 
   <h2>Household sharing</h2>
   <p>
-    Garden sharing uses Apple's iCloud sharing. An owner can choose “Share
-    garden via iCloud” in Settings and send Apple's invitation. Accepted
-    participants can view and edit the shared garden. A participant can leave
-    with “Leave shared garden” in Settings. The owner manages the share through
-    Apple's sharing controls. Shared garden data stays in iCloud under the owner's
-    account.
+    This version of Seedkeep does not offer a way to start sharing your garden.
+    Shared gardens use Apple's iCloud sharing: if someone has shared their garden
+    with you, you can accept Apple's invitation while signed in to iCloud, then
+    view the shared garden, and edit it if the owner allows. You can leave with
+    “Leave shared garden” in Settings. The owner decides who has access, and
+    shared garden data stays in iCloud under the owner's account. Seedkeep also
+    creates an iCloud share record for each garden you own, in your private iCloud
+    database. It starts with no participants, and nobody else can open your
+    garden unless they are invited.
   </p>
 
   <h2>Location, WeatherKit, and notifications</h2>
@@ -170,8 +180,10 @@
     <li>
       <strong>Individual items</strong> — deleting a seed, bed, or journal entry in
       the app hides it on all your synced devices. The record stays in your iCloud
-      garden, marked as deleted, and photos of deleted seeds are not yet removed from
-      iCloud.
+      garden, marked as deleted, and photos of a deleted seed or journal entry stay
+      in your iCloud garden too. To remove a photo, delete the photo itself before
+      deleting the seed or entry; it is removed from iCloud the next time Seedkeep
+      syncs.
     </li>
     <li>
       <strong>The app</strong> — on iPhone and iPad, deleting Seedkeep removes the

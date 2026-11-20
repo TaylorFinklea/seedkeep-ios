@@ -43,23 +43,53 @@ DATA DELETION: The app creates no account, so account deletion under Guideline
 5.1.1(v) does not apply. Data deletion is described in the privacy policy.
 ```
 
-## Privacy label assessment (provisional — blocker until resolved)
+## Privacy label assessment (checked 2026-11-19)
 
-**Provisional answer: "Data Not Collected."** This is the owner's decision of 2026-10-22 (umbrella `decisions.md`, "[2026-10-22] N3"). It stays provisional until the open checks below are resolved, and any unresolved finding blocks submission.
+**Answer: "Data Not Collected."** Owner decision 2026-10-22, checked against
+Apple's definitions and the 1.0 source on 2026-11-19 (audit plus Codex and
+Sonnet reviews). It holds under the likely reading of Apple's rules. Apple's
+App Privacy Details page defines "collect" as transmitting data off the device
+so that the developer or its third-party partners can access it for longer
+than needed to service the request in real time. "Third-party partners" are
+vendors whose code is in the app. The page says developers are not
+responsible for disclosing data collected by Apple, and names CloudKit as an
+example. It does not mention WeatherKit, CloudKit private-database content, or
+services the user configures with their own key, so those calls are inferences.
 
-Basis for the submitted build:
+| Data flow (1.0 source) | Collected? | Why |
+|---|---|---|
+| Garden records and photos in the user's CloudKit private/shared database | No | The user's own iCloud; the developer has no access. Apple names CloudKit as Apple-collected. |
+| Day-one share record per owned garden (no participants, public permission none) | No | Lives in the user's private database; nobody is invited by the app. |
+| WeatherKit forecast requests (ZIP-centroid coordinates) | No (inference) | Apple's service; the developer never receives the coordinates. |
+| BYOK packet photos to api.anthropic.com / api.openai.com | No (inference) | Opt-in, default is on-device; sent with the user's own key to the user's own account; no provider SDK in the app, so the provider is not the developer's partner. |
+| On-device OCR, foundation model, notifications, Keychain, SwiftData | No | Never leaves the device. |
+| Analytics, crash reporting, ads, tracking, third-party SDKs | None present | Only `BYOKExtractor` uses URLSession. |
 
-- The app runs no Seedkeep server and sends nothing to the developer. The server-era code is removed by N3.
-- Garden records and photos stay in the user's iCloud (CloudKit) and on the device.
-- BYOK packet photos go from the device directly to the user's own Anthropic or OpenAI account, under that provider's terms. Seedkeep never receives them.
-- WeatherKit receives the home location's coordinates, derived from the ZIP code, from the device for forecasts.
+The conservative reading would disclose "Photos or Videos" (BYOK) and "Coarse
+Location" (WeatherKit), not linked to the user and not used for tracking. The
+owner chooses between the readings when filling in App Store Connect.
 
-Open checks:
+Resolved checks:
 
-1. **BYOK provider retention (blocker).** The provider may retain the photos under its own policy and the user's account settings. Apple's definition of "collect", as we read it (confirm the wording in App Store Connect's current App Privacy help before relying on it), covers transmitting data off the device in a way that lets the developer or third-party partners access it for longer than needed to service the request in real time. Decide whether the user's chosen provider falls under that definition. If it does, the answer becomes "collected": Photos or Videos and Other User Content, not linked to the user, not used for tracking, for App Functionality.
-2. **WeatherKit as Apple's own service (blocker).** Decide whether sending the home coordinates to WeatherKit counts as collection under Apple's definition, given that Apple provides the service. Record the reasoning in this file.
-3. **Earlier builds (blocker).** Test builds before October 2026 sent packet photos and extracted fields to the Seedkeep server, and that data remains until the server-retirement runbook (`~/git/seedkeep/.docs/ai/phases/2026-10-22-server-retirement-runbook.md`) completes. Confirm that "Data Not Collected" is accurate for the submitted build while the developer still holds that data, and that the privacy policy discloses it.
-4. **Deleted-garden guard acceptance (release blocker).** The approved [N2-E contract](plans/2026-10-22-n2e-deleted-garden-guard.md) is guard-only for 1.0; in-app “Delete Seedkeep data” is deferred until after 1.0. The privacy policy describes deletion through Apple's iCloud storage settings and removal of the Mac app's local folder. Verify the guard on iPhone, iPad and Mac using the separately approved throwaway-garden checks: a deleted garden is not recreated, and the local copy can be kept under a new garden ID or discarded. Check the policy and reviewer note against that behavior and the accepted limits before submission.
+1. **BYOK provider retention.** Not collected under the likely reading (table
+   above). The privacy policy discloses the BYOK path, provider retention and
+   how to stop it.
+2. **WeatherKit.** Not collected under the likely reading. The policy discloses
+   that coordinates go to Apple WeatherKit.
+3. **Earlier builds.** Legacy accounts were deleted on 2026-11-19. A protected
+   export is kept until 2027-11-19, and the old server's photo storage remains
+   until Fly teardown. That data came from server-era builds, not the submitted
+   build, and the privacy policy now discloses it.
+4. **Deleted-garden guard.** Per umbrella decision 2026-11-19 (ship first), the
+   N2-E guard is verified by automated tests only for 1.0.
+
+Privacy manifest: `Seedkeep/PrivacyInfo.xcprivacy` (added 2026-11-19) declares
+no tracking, no tracking domains, no collected data types, UserDefaults
+(CA92.1) and file timestamps (C617.1, for `ScanPhotoStaging`'s own staging
+folder). The CSV import's `fileSizeKey` is not on Apple's required-reason list.
+Since May 1, 2024, App Store Connect does not accept apps that use
+required-reason APIs without declaring them. Confirm the file is in the
+archived app bundle before upload (it is in Debug iOS and Mac builds).
 
 ## Export compliance (ASC → Encryption)
 
